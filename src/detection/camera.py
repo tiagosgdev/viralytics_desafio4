@@ -53,6 +53,7 @@ class CameraStream:
         detector:    BaseDetector,
         recommender: RecommendationEngine,
         recommendation_resolver: Optional[Callable[[List[str]], List[dict]]] = None,
+        body_analysis_resolver: Optional[Callable[[np.ndarray], tuple[dict | None, str | None]]] = None,
         source:      int | str = 0,
         width:       int = 1280,
         height:      int = 720,
@@ -60,6 +61,7 @@ class CameraStream:
         self.detector    = detector
         self.recommender = recommender
         self.recommendation_resolver = recommendation_resolver
+        self.body_analysis_resolver = body_analysis_resolver
         self.source      = source
         self.width       = width
         self.height      = height
@@ -116,6 +118,8 @@ class CameraStream:
                 except Exception:
                     pass
 
+                body_analysis, body_annotated_frame = self._resolve_body_analysis(last_frame)
+
                 await send(json.dumps({
                     "type": "results",
                     "detections": self._serialize_detections(final_detections),
@@ -123,6 +127,8 @@ class CameraStream:
                     "dominant_color":  dom_color,
                     "recommendations": recs,
                     "annotated_frame": final_b64,
+                    "body_analysis": body_analysis,
+                    "body_annotated_frame": body_annotated_frame,
                 }))
 
                 # Wait for user action
@@ -141,6 +147,8 @@ class CameraStream:
                             "dominant":        dominant_cats,
                             "recommendations": new_recs,
                             "dominant_color":  dom_color,
+                            "body_analysis": body_analysis,
+                            "body_annotated_frame": body_annotated_frame,
                         }))
                         inner_cmd = await self._wait_for_command(receive)
                         if inner_cmd == "retry":
@@ -211,8 +219,10 @@ class CameraStream:
                 continue
             last_frame = frame.copy()
 
-            result    = self.detector.detect(frame)
-            annotated = self._draw_capture_overlay(frame, result, int(remaining) + 1)
+            result = self.detector.detect(frame)
+            pose_preview = self._resolve_body_overlay_frame(frame)
+            preview_base = pose_preview if pose_preview is not None else frame
+            annotated = self._draw_capture_overlay(preview_base, result, int(remaining) + 1)
 
             # Accumulate
             for det in result.detections:
@@ -272,7 +282,10 @@ class CameraStream:
             await asyncio.sleep(0.01)
             return
 
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        preview_frame = self._resolve_body_overlay_frame(frame)
+        if preview_frame is None:
+            preview_frame = frame
+        _, buf = cv2.imencode(".jpg", preview_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         b64 = base64.b64encode(buf).decode("utf-8")
         await send(json.dumps({
             "type": "frame",
@@ -380,6 +393,29 @@ class CameraStream:
             except Exception as exc:
                 print(f"Warning: DB recommendation resolver failed: {exc}")
         return self.recommender.recommend(categories)
+
+    def _resolve_body_analysis(self, frame: Optional[np.ndarray]) -> tuple[dict | None, str | None]:
+        if frame is None or self.body_analysis_resolver is None:
+            return None, None
+        try:
+            return self.body_analysis_resolver(frame.copy())
+        except Exception as exc:
+            print(f"Warning: body analysis resolver failed: {exc}")
+            return None, None
+
+    def _resolve_body_overlay_frame(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if frame is None or self.body_analysis_resolver is None:
+            return None
+        try:
+            analysis, encoded_frame = self.body_analysis_resolver(frame.copy())
+            if not analysis or not analysis.get("landmarks_detected") or not encoded_frame:
+                return None
+            buffer = np.frombuffer(base64.b64decode(encoded_frame), dtype=np.uint8)
+            decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+            return decoded
+        except Exception as exc:
+            print(f"Warning: body overlay preview failed: {exc}")
+            return None
 
     def _draw_capture_overlay(
         self, frame: np.ndarray, result: DetectionResult, countdown: int

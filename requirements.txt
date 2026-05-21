@@ -5,6 +5,7 @@ torchvision>=0.21.0
 
 # Computer Vision
 opencv-python>=4.9.0.80
+mediapipe>=0.10.14
 Pillow>=10.3.0
 albumentations>=1.4.0
 
@@ -17,7 +18,9 @@ pydantic>=2.7.0
 python-jose[cryptography]>=3.3.0
 
 # Data
-numpy>=1.26.4
+# Keep NumPy on the 1.x line for compatibility with the current
+# TensorFlow / sentence-transformers dependency chain used by search.
+numpy>=1.26.4,<2
 pandas>=2.2.2
 scikit-learn>=1.4.2
 sentence-transformers>=3.4.1

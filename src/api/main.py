@@ -36,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.schemas import (
     AuthResponse,
+    BodyAnalysisResponse,
     ChatRequest,
     ChatResponse,
     ConversationRequest,
@@ -52,6 +53,7 @@ from src.api.search_service import UnifiedSearchService
 from src.detection.camera import CameraStream
 from src.detection.detector import BaseDetector, FashionDetector
 from src.detection.fashionnet_detector import FashionNetDetector
+from src.pose_analyzer import PoseAnalyzer
 from src.recommendations.engine import RecommendationEngine
 
 # ── App setup ──────────────────────────────────────────────────────────────
@@ -110,6 +112,7 @@ recommender: RecommendationEngine = None
 camera: CameraStream = None
 whisper_model = None
 search_service: UnifiedSearchService = None
+pose_analyzer: PoseAnalyzer | None = None
 detectors_by_persona: dict[str, BaseDetector] = {}
 cameras_by_persona: dict[str, CameraStream] = {}
 
@@ -273,7 +276,7 @@ def _preload_search_embeddings_sync() -> Optional[str]:
 @app.on_event("startup")
 async def startup():
     global detector, recommender, camera, whisper_model, search_service
-    global detectors_by_persona, cameras_by_persona
+    global detectors_by_persona, cameras_by_persona, pose_analyzer
 
     weights = WEIGHTS_PATH
     print(f"\n🚀  Loading model from: {weights}")
@@ -296,6 +299,11 @@ async def startup():
 
     recommender = RecommendationEngine(top_k=5)
     search_service = UnifiedSearchService(recommender)
+    pose_analyzer = PoseAnalyzer()
+    if pose_analyzer.is_available():
+        print(f"🧍  Pose analyzer ready ({pose_analyzer.model_path})")
+    else:
+        print("⚠️  Pose analyzer model not available; body analysis endpoints will be limited")
 
     preload_warning = await run_in_threadpool(_preload_search_embeddings_sync)
     if preload_warning:
@@ -308,6 +316,7 @@ async def startup():
             detector_instance,
             recommender,
             recommendation_resolver=_db_backed_recommendations_with_profile_sync,
+            body_analysis_resolver=_run_body_analysis if pose_analyzer.is_available() else None,
             source=0,
         )
         for key, detector_instance in detectors_by_persona.items()
@@ -388,6 +397,23 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health():
     return HealthResponse(status="ok", model_loaded=detector is not None)
+
+
+def _run_body_analysis(frame: np.ndarray) -> tuple[dict | None, str | None]:
+    """Run pose analysis and return structured JSON plus an optional annotated frame."""
+    if pose_analyzer is None:
+        return None, None
+
+    analysis = pose_analyzer.analyze(frame, draw_overlay=True, include_landmarks=True)
+    if analysis.landmarks_detected == 0:
+        return analysis.to_dict(include_landmarks=True), None
+
+    body_b64 = None
+    if analysis.annotated_image is not None:
+        ok, body_buf = cv2.imencode(".jpg", analysis.annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            body_b64 = base64.b64encode(body_buf).decode("utf-8")
+    return analysis.to_dict(include_landmarks=True), body_b64
 
 
 @app.get("/api/image-proxy")
@@ -564,6 +590,33 @@ async def _detect_image_impl(
     active_detector = _resolve_detector(persona)
     result = active_detector.detect(frame)
     cats = list({d.class_name for d in result.detections})
+    body_analysis: dict | None = None
+    body_annotated_frame: str | None = None
+
+    if pose_analyzer is not None and pose_analyzer.is_available():
+        try:
+            body_analysis, body_annotated_frame = await run_in_threadpool(
+                _run_body_analysis,
+                frame.copy(),
+            )
+        except Exception as exc:
+            print(f"⚠️  Body analysis failed: {exc}")
+            body_analysis = {
+                "measurements": {
+                    "shoulder_width": 0.0,
+                    "hip_width": 0.0,
+                    "waist_width": 0.0,
+                    "torso_length": 0.0,
+                    "leg_length": 0.0,
+                    "shoulder_hip_ratio": 0.0,
+                    "waist_hip_ratio": 0.0,
+                },
+                "body_shape": "unknown",
+                "landmarks_detected": 0,
+                "confidence": 0.0,
+                "warnings": [f"Body analysis failed: {exc}"],
+                "landmarks": [],
+            }
 
     # ── CHANGED: pass user_profile into the recommendation fetch ──────────
     recs = await run_in_threadpool(
@@ -604,6 +657,8 @@ async def _detect_image_impl(
         recommendations=recs,
         inference_ms=round(result.inference_ms, 1),
         annotated_frame=b64_frame,
+        body_analysis=body_analysis,
+        body_annotated_frame=body_annotated_frame,
         session_id=session.id,
         persona=persona,
     )
@@ -645,6 +700,43 @@ async def mobile_scan(
 
 
 # ── Conversation / chat endpoints ─────────────────────────────────────────────
+
+@app.post("/api/analyze/body", response_model=BodyAnalysisResponse)
+async def analyze_body(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded image and returns pose landmarks, normalized body
+    measurements, and a heuristic fashion body-shape classification.
+    """
+    if pose_analyzer is None or not pose_analyzer.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Pose analyzer is not available. Add a MediaPipe Pose Landmarker "
+                "model at models/weights/mediapipe/pose_landmarker_heavy.task "
+                "or set POSE_LANDMARKER_MODEL_PATH."
+            ),
+        )
+
+    contents = await file.read()
+    arr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+
+    analysis_dict, annotated_frame = await run_in_threadpool(_run_body_analysis, frame)
+    if analysis_dict is None:
+        raise HTTPException(status_code=500, detail="Body analysis returned no result")
+
+    return BodyAnalysisResponse(
+        measurements=analysis_dict["measurements"],
+        body_shape=analysis_dict["body_shape"],
+        landmarks_detected=analysis_dict["landmarks_detected"],
+        confidence=analysis_dict["confidence"],
+        warnings=analysis_dict.get("warnings", []),
+        landmarks=analysis_dict.get("landmarks", []),
+        annotated_frame=annotated_frame,
+    )
+
 
 def _get_detected_type(session_id: Optional[str], detected_categories: list[str]) -> Optional[str]:
     if detected_categories:

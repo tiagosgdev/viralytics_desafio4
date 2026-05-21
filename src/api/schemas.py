@@ -18,8 +18,20 @@ class DetectionResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
     inference_ms:    float
     annotated_frame: Optional[str] = None   # base64 JPEG
+    body_analysis:   Optional[Dict[str, Any]] = None
+    body_annotated_frame: Optional[str] = None
     session_id:      Optional[str] = None
     persona:         Optional[str] = None
+
+
+class BodyAnalysisResponse(BaseModel):
+    measurements: Dict[str, float]
+    body_shape: str
+    landmarks_detected: int
+    confidence: float
+    warnings: List[str] = Field(default_factory=list)
+    landmarks: List[Dict[str, Any]] = Field(default_factory=list)
+    annotated_frame: Optional[str] = None
 
 
 class SessionStartRequest(BaseModel):

@@ -114,6 +114,13 @@
         <div class="tags" id="tags"><span class="notag">Nothing detected yet</span></div>
       </div>
 
+      <div class="psec">
+        <div class="plbl">Body Analysis</div>
+        <div class="body-summary" id="body-summary">
+          <div class="ph">Skeleton overlay, measurements, and body shape will appear here after a scan.</div>
+        </div>
+      </div>
+
       <div class="recs-hdr">
         <div class="recs-headline">
           <div class="plbl">Store Recommendations</div>
@@ -492,6 +499,7 @@ const plbl = document.getElementById('plbl');
 const btnStart = document.getElementById('btn-start');
 const actions = document.getElementById('actions');
 const tagsEl = document.getElementById('tags');
+const bodySummaryEl = document.getElementById('body-summary');
 const recsEl = document.getElementById('recs');
 const flashEl = document.getElementById('flash');
 const frozenLbl = document.getElementById('frozen-label');
@@ -656,14 +664,18 @@ function handleCameraMessage(msg) {
     hideFrozenLabel();
     chatConversationState = null;
     currentActiveFilters = {};
-    if (msg.annotated_frame) {
+    if (msg.body_annotated_frame) {
+      feed.style.display = 'block';
+      feed.src = 'data:image/jpeg;base64,' + msg.body_annotated_frame;
+    } else if (msg.annotated_frame) {
       feed.style.display = 'block';
       feed.src = 'data:image/jpeg;base64,' + msg.annotated_frame;
     }
     setSt('live', 'Done');
     setSteps('results');
     renderTags(msg.detections || []);
-    renderRecs(msg.recommendations || [], { autoOpen: !hasShownInitialRecommendationsModal });
+    renderBodyAnalysis(msg.body_analysis || null);
+    renderRecs(msg.recommendations || [], { autoOpen: false });
     currentDetectedCategories = msg.dominant || (msg.detections || []).map((d) => d.class_name);
     currentRecommendations = msg.recommendations || [];
     initializeSearchSession(currentDetectedCategories, currentRecommendations);
@@ -726,6 +738,7 @@ function sendCmd(cmd) {
     hideFrozenLabel();
     actions.classList.remove('show');
     tagsEl.innerHTML = '<span class="notag">Scanning...</span>';
+    bodySummaryEl.innerHTML = '<div class="ph">Analysing pose and measurements...</div>';
     recsEl.innerHTML = '<div class="ph">Scanning your outfit...</div>';
     recsScrollLeftBtn.disabled = true;
     recsScrollRightBtn.disabled = true;
@@ -773,6 +786,39 @@ function renderTags(dets) {
   }).join('');
 
   animateStagger('#tags', '.tag');
+}
+
+function renderBodyAnalysis(analysis) {
+  if (!analysis || !analysis.landmarks_detected) {
+    bodySummaryEl.innerHTML = '<div class="ph">No reliable body landmarks detected. Try a full-body, front-facing scan with more space around you.</div>';
+    return;
+  }
+
+  const measurements = analysis.measurements || {};
+  const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+  const bodyShape = String(analysis.body_shape || 'unknown').replace(/_/g, ' ');
+  const confidence = Math.round((Number(analysis.confidence || 0)) * 100);
+  const landmarkCount = Number(analysis.landmarks_detected || 0);
+
+  const metricRow = (label, value) =>
+    '<div class="body-metric"><span>' + label + '</span><strong>' + Number(value || 0).toFixed(2) + '</strong></div>';
+
+  bodySummaryEl.innerHTML =
+    '<div class="body-chip-row">' +
+      '<div class="body-chip"><span>Shape: </span><strong>' + esc(bodyShape) + '</strong></div>' +
+      '<div class="body-chip"><span>Confidence: </span><strong>' + confidence + '%</strong></div>' +
+      '<div class="body-chip"><span>Landmarks: </span><strong>' + landmarkCount + '</strong></div>' +
+    '</div>' +
+    '<div class="body-metrics-grid">' +
+      metricRow('Shoulders: ', measurements.shoulder_width) +
+      metricRow('Hips: ', measurements.hip_width) +
+      metricRow('Waist: ', measurements.waist_width) +
+      metricRow('Torso: ', measurements.torso_length) +
+      metricRow('Legs: ', measurements.leg_length) +
+      metricRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
+      metricRow('W/H Ratio: ', measurements.waist_hip_ratio) +
+    '</div>' +
+    (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
 }
 
 function renderRecs(recs, options = {}) {
