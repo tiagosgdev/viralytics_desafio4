@@ -11,8 +11,9 @@ import cv2
 import numpy as np
 
 from .body_classifier import BodyShapeThresholds, classify_body_shape
+from .segmentation import BodySegmenter, estimate_mask_width
+from .smoothing import MeasurementSmoother
 from .utils import (
-    LANDMARK_COUNT,
     LandmarkPoint,
     PoseLandmark,
     average_confidence,
@@ -21,14 +22,13 @@ from .utils import (
     midpoint,
     safe_ratio,
 )
+from .validation import validate_pose
 from .visualization import draw_pose_overlay
 
 
 DEFAULT_MODEL_RELATIVE_PATH = Path("models") / "weights" / "mediapipe" / "pose_landmarker_heavy.task"
 DEFAULT_NUM_POSES = 4
 MIN_REQUIRED_KEYPOINTS = 8
-TORSO_TO_WAIST_RATIO = 0.52
-WAIST_WIDTH_REDUCTION = 0.16
 
 
 @dataclass
@@ -41,6 +41,8 @@ class PoseAnalysisResult:
     confidence: float
     landmarks: list[dict[str, float]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    pose_validation: dict[str, Any] = field(default_factory=dict)
+    body_mask: np.ndarray | None = None
     annotated_image: np.ndarray | None = None
 
     def to_dict(self, include_landmarks: bool = True) -> dict[str, Any]:
@@ -49,6 +51,7 @@ class PoseAnalysisResult:
             "body_shape": self.body_shape,
             "landmarks_detected": self.landmarks_detected,
             "confidence": self.confidence,
+            "pose_validation": self.pose_validation,
             "warnings": self.warnings,
         }
         if include_landmarks:
@@ -70,6 +73,8 @@ class PoseAnalyzer:
         presence_threshold: float = 0.50,
         num_poses: int = DEFAULT_NUM_POSES,
         output_segmentation_masks: bool = False,
+        enable_segmentation: bool = True,
+        smoothing_window: int = 5,
         body_shape_thresholds: BodyShapeThresholds | None = None,
     ) -> None:
         self.model_path = Path(model_path or self._default_model_path())
@@ -80,7 +85,10 @@ class PoseAnalyzer:
         self.presence_threshold = presence_threshold
         self.num_poses = num_poses
         self.output_segmentation_masks = output_segmentation_masks
+        self.enable_segmentation = enable_segmentation
         self.body_shape_thresholds = body_shape_thresholds or BodyShapeThresholds()
+        self._segmenter = BodySegmenter() if enable_segmentation else None
+        self._smoother = MeasurementSmoother(window_size=smoothing_window)
         self._landmarker = None
         self._mp = None
 
@@ -116,6 +124,7 @@ class PoseAnalyzer:
                 landmarks_detected=0,
                 confidence=0.0,
                 landmarks=[],
+                pose_validation={"valid": False, "score": 0.0, "reasons": ["no reliable pose detected"]},
                 warnings=["No reliable pose detected"],
                 annotated_image=image_bgr.copy() if draw_overlay else None,
             )
@@ -128,22 +137,42 @@ class PoseAnalyzer:
         if len(visible_indices) < MIN_REQUIRED_KEYPOINTS:
             warnings.append("Pose detected, but too few landmarks were reliable for robust measurements")
 
-        measurements, measurement_points, measurement_warnings = self._compute_measurements(landmarks)
+        body_mask = self._segment_body(image_bgr, warnings)
+        pose_validation = validate_pose(
+            landmarks,
+            image_bgr.shape,
+            body_mask,
+            visibility_threshold=self.visibility_threshold,
+        )
+        warnings.extend(pose_validation.reasons)
+
+        measurements, measurement_points, measurement_warnings = self._compute_measurements(
+            landmarks,
+            body_mask=body_mask,
+        )
         warnings.extend(measurement_warnings)
         pose_confidence = average_confidence([landmarks[idx] for idx in visible_indices])
         measurements_valid = self._measurements_are_valid(measurements, measurement_points)
 
-        if measurements_valid:
+        if measurements_valid and pose_validation.valid:
+            measurements = self._smoother.update(measurements)
             body_shape, shape_confidence = classify_body_shape(measurements, self.body_shape_thresholds)
             overall_confidence = round(
-                max(0.0, min(1.0, (pose_confidence * 0.65) + (shape_confidence * 0.35))),
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        (pose_confidence * 0.35)
+                        + (shape_confidence * 0.30)
+                        + (pose_validation.score * 0.35),
+                    ),
+                ),
                 3,
             )
         else:
             body_shape = "unknown"
-            shape_confidence = 0.0
-            warnings.append("Body-shape classification skipped because required landmarks were incomplete")
-            overall_confidence = round(max(0.0, min(0.35, pose_confidence * 0.25)), 3)
+            warnings.append("Body-shape classification skipped because pose quality or required landmarks were incomplete")
+            overall_confidence = round(max(0.0, min(0.35, pose_confidence * pose_validation.score * 0.35)), 3)
 
         annotated = None
         if draw_overlay:
@@ -152,6 +181,9 @@ class PoseAnalyzer:
                 landmarks,
                 measurement_points=measurement_points,
                 visible_landmarks=visible_indices,
+                body_mask=body_mask,
+                body_shape=body_shape,
+                confidence=overall_confidence,
             )
 
         landmark_payload = []
@@ -175,7 +207,9 @@ class PoseAnalyzer:
             landmarks_detected=len(visible_indices),
             confidence=overall_confidence,
             landmarks=landmark_payload,
+            pose_validation=pose_validation.to_dict(),
             warnings=warnings,
+            body_mask=body_mask,
             annotated_image=annotated,
         )
 
@@ -291,6 +325,7 @@ class PoseAnalyzer:
     def _compute_measurements(
         self,
         landmarks: list[LandmarkPoint],
+        body_mask: np.ndarray | None = None,
     ) -> tuple[dict[str, float], dict[str, LandmarkPoint], list[str]]:
         warnings: list[str] = []
 
@@ -298,56 +333,37 @@ class PoseAnalyzer:
         right_shoulder = self._require_landmark(landmarks, PoseLandmark.RIGHT_SHOULDER, warnings)
         left_hip = self._require_landmark(landmarks, PoseLandmark.LEFT_HIP, warnings)
         right_hip = self._require_landmark(landmarks, PoseLandmark.RIGHT_HIP, warnings)
-        left_ankle = self._best_available_ankle(landmarks, PoseLandmark.LEFT_ANKLE, PoseLandmark.LEFT_HEEL, warnings)
-        right_ankle = self._best_available_ankle(landmarks, PoseLandmark.RIGHT_ANKLE, PoseLandmark.RIGHT_HEEL, warnings)
 
-        if not all((left_shoulder, right_shoulder, left_hip, right_hip, left_ankle, right_ankle)):
+        if not all((left_shoulder, right_shoulder, left_hip, right_hip)):
             return self._empty_measurements(), {}, warnings
 
         shoulder_mid = midpoint(left_shoulder, right_shoulder)
         hip_mid = midpoint(left_hip, right_hip)
-        ankle_mid = midpoint(left_ankle, right_ankle)
-
-        shoulder_width = get_distance(left_shoulder, right_shoulder)
-        hip_width = get_distance(left_hip, right_hip)
         torso_length = get_distance(shoulder_mid, hip_mid)
-        leg_length = get_distance(hip_mid, ankle_mid)
 
         if torso_length <= 1e-6:
             warnings.append("Torso length collapsed to zero; returning empty measurements")
             return self._empty_measurements(), {}, warnings
 
-        left_waist = LandmarkPoint(
-            x=left_shoulder.x + (left_hip.x - left_shoulder.x) * TORSO_TO_WAIST_RATIO,
-            y=left_shoulder.y + (left_hip.y - left_shoulder.y) * TORSO_TO_WAIST_RATIO,
-            z=(left_shoulder.z + left_hip.z) / 2.0,
-            visibility=min(left_shoulder.visibility, left_hip.visibility),
-            presence=min(left_shoulder.presence, left_hip.presence),
+        landmark_shoulder_width = get_distance(left_shoulder, right_shoulder)
+        landmark_hip_width = get_distance(left_hip, right_hip)
+        shoulder_width = estimate_mask_width(
+            body_mask,
+            shoulder_mid.y,
+            shoulder_mid.x,
+            landmark_shoulder_width,
         )
-        right_waist = LandmarkPoint(
-            x=right_shoulder.x + (right_hip.x - right_shoulder.x) * TORSO_TO_WAIST_RATIO,
-            y=right_shoulder.y + (right_hip.y - right_shoulder.y) * TORSO_TO_WAIST_RATIO,
-            z=(right_shoulder.z + right_hip.z) / 2.0,
-            visibility=min(right_shoulder.visibility, right_hip.visibility),
-            presence=min(right_shoulder.presence, right_hip.presence),
+        hip_width = estimate_mask_width(
+            body_mask,
+            hip_mid.y,
+            hip_mid.x,
+            landmark_hip_width,
         )
-
-        raw_waist_width = get_distance(left_waist, right_waist)
-        waist_width = min(raw_waist_width, ((shoulder_width + hip_width) / 2.0) * (1.0 - WAIST_WIDTH_REDUCTION))
-        waist_mid = midpoint(left_waist, right_waist)
-        if raw_waist_width != waist_width:
-            half_delta = (raw_waist_width - waist_width) / 2.0
-            left_waist = LandmarkPoint(x=left_waist.x + half_delta, y=left_waist.y, z=left_waist.z, visibility=left_waist.visibility, presence=left_waist.presence)
-            right_waist = LandmarkPoint(x=right_waist.x - half_delta, y=right_waist.y, z=right_waist.z, visibility=right_waist.visibility, presence=right_waist.presence)
 
         measurements = {
             "shoulder_width": round(safe_ratio(shoulder_width, torso_length), 4),
             "hip_width": round(safe_ratio(hip_width, torso_length), 4),
-            "waist_width": round(safe_ratio(waist_width, torso_length), 4),
-            "torso_length": round(1.0, 4),
-            "leg_length": round(safe_ratio(leg_length, torso_length), 4),
             "shoulder_hip_ratio": round(safe_ratio(shoulder_width, hip_width, default=1.0), 4),
-            "waist_hip_ratio": round(safe_ratio(waist_width, hip_width, default=1.0), 4),
         }
 
         measurement_points = {
@@ -355,14 +371,19 @@ class PoseAnalyzer:
             "right_shoulder": right_shoulder,
             "left_hip": left_hip,
             "right_hip": right_hip,
-            "left_waist": left_waist,
-            "right_waist": right_waist,
-            "waist_mid": waist_mid,
             "shoulder_mid": shoulder_mid,
             "hip_mid": hip_mid,
-            "ankle_mid": ankle_mid,
         }
         return measurements, measurement_points, warnings
+
+    def _segment_body(self, image_bgr: np.ndarray, warnings: list[str]) -> np.ndarray | None:
+        if self._segmenter is None:
+            return None
+        try:
+            return self._segmenter.segment(image_bgr)
+        except Exception as exc:
+            warnings.append(f"Body segmentation failed: {exc}")
+            return None
 
     def _require_landmark(
         self,
@@ -422,11 +443,7 @@ class PoseAnalyzer:
         required_measurements = (
             "shoulder_width",
             "hip_width",
-            "waist_width",
-            "torso_length",
-            "leg_length",
             "shoulder_hip_ratio",
-            "waist_hip_ratio",
         )
         return all(float(measurements.get(key, 0.0)) > 0.0 for key in required_measurements)
 
@@ -435,9 +452,5 @@ class PoseAnalyzer:
         return {
             "shoulder_width": 0.0,
             "hip_width": 0.0,
-            "waist_width": 0.0,
-            "torso_length": 0.0,
-            "leg_length": 0.0,
             "shoulder_hip_ratio": 0.0,
-            "waist_hip_ratio": 0.0,
         }

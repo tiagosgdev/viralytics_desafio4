@@ -29,6 +29,7 @@ class BodyAnalysisResponse(BaseModel):
     body_shape: str
     landmarks_detected: int
     confidence: float
+    pose_validation: Dict[str, Any] = Field(default_factory=dict)
     warnings: List[str] = Field(default_factory=list)
     landmarks: List[Dict[str, Any]] = Field(default_factory=list)
     annotated_frame: Optional[str] = None

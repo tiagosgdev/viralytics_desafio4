@@ -7,7 +7,7 @@ from typing import Iterable
 import cv2
 import numpy as np
 
-from .utils import LandmarkPoint, PoseLandmark, point_xy
+from .utils import LandmarkPoint, point_xy
 
 
 POSE_CONNECTIONS: tuple[tuple[int, int], ...] = (
@@ -22,17 +22,25 @@ JOINT_COLOR = (57, 235, 193)
 BONE_COLOR = (255, 189, 89)
 MEASUREMENT_COLOR = (88, 166, 255)
 TEXT_COLOR = (245, 245, 245)
-WAIST_COLOR = (255, 122, 122)
-
 
 def draw_pose_overlay(
     frame: np.ndarray,
     landmarks: list[LandmarkPoint],
     measurement_points: dict[str, LandmarkPoint] | None = None,
     visible_landmarks: Iterable[int] | None = None,
+    body_mask: np.ndarray | None = None,
+    body_shape: str | None = None,
+    confidence: float | None = None,
 ) -> np.ndarray:
     """Draw the MediaPipe skeleton, key joints, and measurement labels."""
     output = frame.copy()
+    if body_mask is not None and body_mask.size:
+        color_layer = np.zeros_like(output)
+        color_layer[:, :] = (40, 180, 200)
+        mask_bool = body_mask > 0
+        blended = cv2.addWeighted(output, 0.78, color_layer, 0.22, 0)
+        output[mask_bool] = blended[mask_bool]
+
     visible = set(visible_landmarks or range(len(landmarks)))
 
     for start_idx, end_idx in POSE_CONNECTIONS:
@@ -56,6 +64,21 @@ def draw_pose_overlay(
     if measurement_points:
         _draw_measurement_guides(output, measurement_points)
 
+    if body_shape:
+        label = body_shape.replace("_", " ").title()
+        if confidence is not None:
+            label += f" {confidence:.0%}"
+        cv2.putText(
+            output,
+            label,
+            (18, 34),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            TEXT_COLOR,
+            2,
+            cv2.LINE_AA,
+        )
+
     return output
 
 
@@ -67,24 +90,15 @@ def _draw_measurement_guides(
     right_shoulder = measurement_points.get("right_shoulder")
     left_hip = measurement_points.get("left_hip")
     right_hip = measurement_points.get("right_hip")
-    left_waist = measurement_points.get("left_waist")
-    right_waist = measurement_points.get("right_waist")
-    shoulder_mid = measurement_points.get("shoulder_mid")
-    hip_mid = measurement_points.get("hip_mid")
-    ankle_mid = measurement_points.get("ankle_mid")
 
     _draw_labeled_segment(frame, left_shoulder, right_shoulder, "Shoulders", MEASUREMENT_COLOR)
     _draw_labeled_segment(frame, left_hip, right_hip, "Hips", MEASUREMENT_COLOR)
-    _draw_labeled_segment(frame, left_waist, right_waist, "Waist", WAIST_COLOR)
-    _draw_labeled_segment(frame, shoulder_mid, hip_mid, "Torso", (123, 241, 168))
-    _draw_labeled_segment(frame, hip_mid, ankle_mid, "Leg", (200, 164, 255))
 
     for name, point in (
         ("L Shoulder", left_shoulder),
         ("R Shoulder", right_shoulder),
         ("L Hip", left_hip),
         ("R Hip", right_hip),
-        ("Waist", measurement_points.get("waist_mid")),
     ):
         if point is None:
             continue

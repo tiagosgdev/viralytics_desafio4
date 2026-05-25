@@ -796,8 +796,10 @@ function renderBodyAnalysis(analysis) {
 
   const measurements = analysis.measurements || {};
   const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+  const poseValidation = analysis.pose_validation || {};
   const bodyShape = String(analysis.body_shape || 'unknown').replace(/_/g, ' ');
   const confidence = Math.round((Number(analysis.confidence || 0)) * 100);
+  const poseScore = Math.round((Number(poseValidation.score || 0)) * 100);
   const landmarkCount = Number(analysis.landmarks_detected || 0);
 
   const metricRow = (label, value) =>
@@ -808,15 +810,12 @@ function renderBodyAnalysis(analysis) {
       '<div class="body-chip"><span>Shape: </span><strong>' + esc(bodyShape) + '</strong></div>' +
       '<div class="body-chip"><span>Confidence: </span><strong>' + confidence + '%</strong></div>' +
       '<div class="body-chip"><span>Landmarks: </span><strong>' + landmarkCount + '</strong></div>' +
+      '<div class="body-chip"><span>Pose: </span><strong>' + poseScore + '%</strong></div>' +
     '</div>' +
     '<div class="body-metrics-grid">' +
       metricRow('Shoulders: ', measurements.shoulder_width) +
       metricRow('Hips: ', measurements.hip_width) +
-      metricRow('Waist: ', measurements.waist_width) +
-      metricRow('Torso: ', measurements.torso_length) +
-      metricRow('Legs: ', measurements.leg_length) +
       metricRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
-      metricRow('W/H Ratio: ', measurements.waist_hip_ratio) +
     '</div>' +
     (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
 }

@@ -49,9 +49,7 @@ html {
 
 body {
   margin: 0;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
+  min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), transparent 34%),
     linear-gradient(180deg, #f7f3eb 0%, #eee6d9 100%);
@@ -588,17 +586,20 @@ body[data-persona='cruella'] .vtab.active {
 }
 
 main {
-  flex: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24rem;
-  min-height: 0;
-  overflow: hidden;
+  align-items: start;
+  overflow: visible;
+}
+
+.cam,
+.chat-view,
+.panel {
+  position: relative;
 }
 
 .cam,
 .chat-view {
-  position: relative;
-  min-height: 0;
   overflow: hidden;
 }
 
@@ -606,6 +607,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: calc(100vh - 5.5rem);
   background:
     radial-gradient(circle at top, rgba(255, 255, 255, 0.95), rgba(244, 236, 221, 0.65) 55%, rgba(236, 228, 213, 0.95) 100%);
   border-right: 1px solid var(--border);
@@ -740,6 +742,7 @@ body[data-persona='cruella'] .idle {
 .chat-view {
   display: none;
   flex-direction: column;
+  min-height: calc(100vh - 5.5rem);
   background: rgba(255, 253, 248, 0.78);
   border-right: 1px solid var(--border);
   overflow: hidden;
@@ -947,10 +950,10 @@ body[data-persona='cruella'] .mic-btn {
 }
 
 .panel {
-  min-height: 0;
   display: flex;
   flex-direction: column;
   background: rgba(255, 253, 248, 0.7);
+  overflow: visible;
 }
 
 body[data-persona='cruella'] .panel {
@@ -1131,7 +1134,7 @@ body[data-persona='cruella'] .tag {
 
 .body-chip-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.6rem;
 }
 
@@ -2055,6 +2058,7 @@ body[data-persona='cruella'] .match-badge {
 
   .panel {
     min-height: 28rem;
+    overflow-y: visible;
   }
 }
 

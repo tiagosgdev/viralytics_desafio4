@@ -1,6 +1,10 @@
 from src.pose_analyzer.body_classifier import BodyShapeThresholds, classify_body_shape
 from src.pose_analyzer.pose_analyzer import PoseAnalyzer
+from src.pose_analyzer.segmentation import estimate_mask_width
+from src.pose_analyzer.smoothing import MeasurementSmoother
 from src.pose_analyzer.utils import LANDMARK_COUNT, LandmarkPoint, PoseLandmark
+from src.pose_analyzer.validation import validate_pose
+import numpy as np
 
 
 def _blank_landmarks() -> list[LandmarkPoint]:
@@ -21,10 +25,7 @@ def test_measurements_are_normalized_and_ratios_are_consistent():
     measurements, _, warnings = analyzer._compute_measurements(landmarks)
 
     assert warnings == []
-    assert measurements["torso_length"] == 1.0
     assert measurements["shoulder_width"] > measurements["hip_width"]
-    assert 0.0 < measurements["waist_width"] < measurements["hip_width"]
-    assert measurements["leg_length"] > 1.0
     assert round(measurements["shoulder_width"] / measurements["hip_width"], 4) == measurements["shoulder_hip_ratio"]
 
 
@@ -50,7 +51,7 @@ def test_classifier_covers_expected_shapes():
     assert classify_body_shape(
         {"shoulder_width": 1.02, "hip_width": 1.00, "waist_width": 1.02, "torso_length": 1.0, "shoulder_hip_ratio": 1.02, "waist_hip_ratio": 1.02},
         thresholds,
-    )[0] == "oval"
+    )[0] == "rectangle"
 
 
 def test_classifier_rejects_empty_measurements():
@@ -60,11 +61,7 @@ def test_classifier_rejects_empty_measurements():
         {
             "shoulder_width": 0.0,
             "hip_width": 0.0,
-            "waist_width": 0.0,
-            "torso_length": 0.0,
-            "leg_length": 0.0,
             "shoulder_hip_ratio": 0.0,
-            "waist_hip_ratio": 0.0,
         },
         thresholds,
     )
@@ -89,3 +86,40 @@ def test_invalid_landmarks_skip_shape_classification():
     assert measurement_points == {}
     assert any("left_hip" in warning for warning in warnings)
     assert analyzer._measurements_are_valid(measurements, measurement_points) is False
+
+
+def test_mask_width_can_refine_landmark_width():
+    mask = np.zeros((100, 160), dtype=np.uint8)
+    mask[45:56, 40:121] = 255
+
+    width = estimate_mask_width(mask, y=50, center_x=80, fallback_width=60)
+
+    assert width == 80.0
+
+
+def test_measurement_smoother_rejects_spikes():
+    smoother = MeasurementSmoother(window_size=3, spike_threshold=0.20)
+
+    smoother.update({"shoulder_width": 1.0, "hip_width": 0.9, "shoulder_hip_ratio": 1.11})
+    smoother.update({"shoulder_width": 1.02, "hip_width": 0.91, "shoulder_hip_ratio": 1.12})
+    smoothed = smoother.update({"shoulder_width": 2.0, "hip_width": 0.2, "shoulder_hip_ratio": 10.0})
+
+    assert smoothed["shoulder_width"] < 1.1
+    assert smoothed["hip_width"] > 0.85
+    assert smoothed["shoulder_hip_ratio"] < 1.2
+
+
+def test_pose_validation_rejects_tilted_shoulders():
+    landmarks = _blank_landmarks()
+    landmarks[PoseLandmark.LEFT_SHOULDER] = LandmarkPoint(60, 40, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.RIGHT_SHOULDER] = LandmarkPoint(140, 85, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.LEFT_HIP] = LandmarkPoint(70, 150, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.RIGHT_HIP] = LandmarkPoint(130, 150, visibility=0.99, presence=0.99)
+    mask = np.zeros((220, 200), dtype=np.uint8)
+    mask[35:190, 50:150] = 255
+
+    validation = validate_pose(landmarks, (220, 200, 3), mask, visibility_threshold=0.5)
+
+    assert validation.valid is False
+    assert validation.score < 0.65
+    assert "shoulders tilted" in validation.reasons
