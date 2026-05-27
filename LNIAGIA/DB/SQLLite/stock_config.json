@@ -1,0 +1,41 @@
+{
+    "sizes": ["XS", "S", "M", "L", "XL", "XXL"],
+    "size_multipliers": {
+        "XS": 0.4,
+        "S": 1.1,
+        "M": 1.5,
+        "L": 1.25,
+        "XL": 0.6,
+        "XXL": 0.15
+    },
+    "push_score": {
+        "weights": {
+            "w_stock": 0.3,
+            "w_age":   0.2,
+            "w_stag":  0.2,
+            "w_perf":  0.3
+        },
+        "refs": {
+            "STOCK_REF": 200,
+            "AGE_REF": 1080,
+            "VELOCITY_REF": 0.5
+        }
+    },
+    "seeder": {
+        "age_days_max": 1080,
+        "age_bucket_weights": [0.55, 0.30, 0.15],
+        "base_stock_lognormal": {"mu": 3.5, "sigma": 0.6},
+        "stock_clip": [2, 200],
+        "stock_count_clip": [0, 500],
+        "noise_lognormal_sigma": 0.25,
+        "fat_tail_overstock_rate": 0.08,
+        "fat_tail_overstock_mult_range": [2.0, 4.0],
+        "velocity_uniform_range": [0.05, 1.0],
+        "underperformer_rate": 0.15,
+        "underperformer_mult_range": [0.05, 0.3],
+        "total_sold_noise_range": [0.7, 1.3],
+        "total_sold_clip": [0, 5000],
+        "gap_days_exp_scale": 30.0,
+        "never_sold_rate": 0.05
+    }
+}
