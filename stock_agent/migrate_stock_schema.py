@@ -9,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = BASE_DIR / "clothing.db"
+REPO_ROOT = BASE_DIR.parent
+DEFAULT_DB_PATH = REPO_ROOT / "LNIAGIA" / "DB" / "SQLLite" / "clothing.db"
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

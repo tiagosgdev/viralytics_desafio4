@@ -11,7 +11,8 @@ import numpy as np
 from tqdm import tqdm
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = BASE_DIR / "clothing.db"
+REPO_ROOT = BASE_DIR.parent
+DEFAULT_DB_PATH = REPO_ROOT / "LNIAGIA" / "DB" / "SQLLite" / "clothing.db"
 DEFAULT_CONFIG_PATH = BASE_DIR / "stock_config.json"
 
 EVENT_SEED = "seed"

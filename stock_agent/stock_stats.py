@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = BASE_DIR / "clothing.db"
+REPO_ROOT = BASE_DIR.parent
+DEFAULT_DB_PATH = REPO_ROOT / "LNIAGIA" / "DB" / "SQLLite" / "clothing.db"
 DEFAULT_CONFIG_PATH = BASE_DIR / "stock_config.json"
 
 PIVOT_KEYS = ("color", "type", "fit", "size")

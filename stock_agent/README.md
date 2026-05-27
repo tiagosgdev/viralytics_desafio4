@@ -11,12 +11,12 @@ All paths below are relative to `viralytics_desafio3/` (the cloned repo root).
 
 | File | Role |
 |---|---|
-| `LNIAGIA/DB/SQLLite/migrate_stock_schema.py` | Adds `items.created_at`, creates `item_stock` + `stock_events` tables. Idempotent. |
-| `LNIAGIA/DB/SQLLite/seed_stock.py` | Populates the new tables with synthetic stock + sales history. Deterministic with `--seed`. |
-| `LNIAGIA/DB/SQLLite/stock_mutations.py` | `sell()` and `restock()` helpers + CLI. |
-| `LNIAGIA/DB/SQLLite/stock_stats.py` | Read-only stats API + push-score ranking + CLI smoke. |
-| `LNIAGIA/DB/SQLLite/stock_agent.py` | `StockAgent` class: candidate retrieval (tier-based attribute relaxation) + LLM-driven top-10 picker + interactive REPL. |
-| `LNIAGIA/DB/SQLLite/stock_config.json` | Push-score weights + reference constants. Edit here, not in code. |
+| `stock_agent/migrate_stock_schema.py` | Adds `items.created_at`, creates `item_stock` + `stock_events` tables. Idempotent. |
+| `stock_agent/seed_stock.py` | Populates the new tables with synthetic stock + sales history. Deterministic with `--seed`. |
+| `stock_agent/stock_mutations.py` | `sell()` and `restock()` helpers + CLI. |
+| `stock_agent/stock_stats.py` | Read-only stats API + push-score ranking + CLI smoke. |
+| `stock_agent/stock_agent.py` | `StockAgent` class: candidate retrieval (tier-based attribute relaxation) + LLM-driven top-10 picker + interactive REPL. |
+| `stock_agent/stock_config.json` | Push-score weights + reference constants. Edit here, not in code. |
 
 ---
 
@@ -46,13 +46,13 @@ Run the three scripts in order. Each is idempotent; safe to re-run.
 cd viralytics_desafio3
 
 # 1. Schema migration. Backs up clothing.db automatically.
-python3 LNIAGIA/DB/SQLLite/migrate_stock_schema.py
+python3 stock_agent/migrate_stock_schema.py
 
 # 2. Seed synthetic stock + sales. Refuses if data exists; use --force to wipe.
-python3 LNIAGIA/DB/SQLLite/seed_stock.py
+python3 stock_agent/seed_stock.py
 
 # 3. Smoke-test the stats API (also a sanity check that everything loaded).
-python3 LNIAGIA/DB/SQLLite/stock_stats.py
+python3 stock_agent/stock_stats.py
 ```
 
 Expected after step 1: backup file `clothing.db.bak-<timestamp>` appears next to `clothing.db`.
@@ -66,7 +66,7 @@ Expected after step 3: top-20 overstock list + top-10 performers + 5 self-checks
 ### 1. `migrate_stock_schema.py`
 
 ```
-python3 LNIAGIA/DB/SQLLite/migrate_stock_schema.py [--db PATH] [--no-backup]
+python3 stock_agent/migrate_stock_schema.py [--db PATH] [--no-backup]
 ```
 
 | Flag | Meaning |
@@ -86,7 +86,7 @@ Exit codes: `0` success, `1` DB missing, `2` SQL error.
 ### 2. `seed_stock.py`
 
 ```
-python3 LNIAGIA/DB/SQLLite/seed_stock.py [--db PATH] [--config PATH] [--seed N] [--force] [--no-events] [--no-checks]
+python3 stock_agent/seed_stock.py [--db PATH] [--config PATH] [--seed N] [--force] [--no-events] [--no-checks]
 ```
 
 | Flag | Meaning |
@@ -108,10 +108,10 @@ Two commands. Both transactional (atomic update + event log append).
 
 ```bash
 # Record a sale
-python3 LNIAGIA/DB/SQLLite/stock_mutations.py sell --item-id 1 --size M --qty 1
+python3 stock_agent/stock_mutations.py sell --item-id 1 --size M --qty 1
 
 # Add stock
-python3 LNIAGIA/DB/SQLLite/stock_mutations.py restock --item-id 1 --size M --qty 10
+python3 stock_agent/stock_mutations.py restock --item-id 1 --size M --qty 10
 ```
 
 Errors (exit 2):
@@ -164,7 +164,7 @@ stats.reload()
 
 Stand-alone smoke:
 ```
-python3 LNIAGIA/DB/SQLLite/stock_stats.py
+python3 stock_agent/stock_stats.py
 ```
 
 Prints top-20 overstock, top-10 performers, attribute pressure, runs 5 self-checks. Exit `0` on success, `2` on failed assertion.
@@ -192,7 +192,7 @@ top10   = agent.pick_top(forty, k=10)        # LLM picks
 
 REPL:
 ```
-python3 LNIAGIA/DB/SQLLite/stock_agent.py
+python3 stock_agent/stock_agent.py
 ```
 
 | Command | Action |
@@ -267,13 +267,13 @@ stock> pick 5
 
 Then in another terminal:
 ```bash
-python3 LNIAGIA/DB/SQLLite/stock_mutations.py sell --item-id 5425 --size M --qty 50
+python3 stock_agent/stock_mutations.py sell --item-id 5425 --size M --qty 50
 ```
 
 Back in REPL — agent caches the stats frame, so to see the effect:
 ```
 stock> exit
-$ python3 LNIAGIA/DB/SQLLite/stock_agent.py    # restart (or call .stats.reload() programmatically)
+$ python3 stock_agent/stock_agent.py    # restart (or call .stats.reload() programmatically)
 stock> query color=red size=M
 stock> candidates
 [item 5425's stock_count is now 50 lower]
@@ -379,10 +379,10 @@ sqlite3 "$DB" "SELECT
 
 | Goal | Command |
 |---|---|
-| Reseed with a new RNG state | `python3 LNIAGIA/DB/SQLLite/seed_stock.py --force --seed 123` |
+| Reseed with a new RNG state | `python3 stock_agent/seed_stock.py --force --seed 123` |
 | Restore pre-seed state | `cp clothing.db.bak-preseed-<ts> clothing.db` (find with `ls *.bak*`) |
 | Restore pre-migration state | `cp clothing.db.bak-<ts> clothing.db` (the original migration backup) |
-| Reset to empty stock without re-migrating | `python3 LNIAGIA/DB/SQLLite/seed_stock.py --force` (wipes + reseeds) |
+| Reset to empty stock without re-migrating | `python3 stock_agent/seed_stock.py --force` (wipes + reseeds) |
 
 Backups are NOT auto-pruned. Delete old `*.bak*` files manually when satisfied.
 
