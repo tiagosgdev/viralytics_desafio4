@@ -279,3 +279,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# Desafio 4 — StockAgent
+# =============================================================================
+# Per-run DB backups created by migrate_stock_schema.py + manual cp
+LNIAGIA/DB/SQLLite/*.bak-*
+LNIAGIA/DB/SQLLite/*.db.bak*
+# SQLite WAL sidecars (clothing.db kept tracked; sidecars are transient)
+LNIAGIA/DB/SQLLite/*.db-wal
+LNIAGIA/DB/SQLLite/*.db-shm
