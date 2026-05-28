@@ -177,7 +177,11 @@ Standalone agent surface on top of `stock_stats`. Three responsibilities:
 2. **Rate** each candidate by its push_score (private rating, not a vote — "vote" is reserved for Phase 2 inter-agent negotiation).
 3. **Pick top 10** via an Ollama LLM "stock manager" persona that weighs old stock, current real-world season, push_score, and runout risk.
 
+**Where input comes from:** in the full system the query dict is produced by the conversation module (LNIAGIA, teammate) which parses the customer's natural-language utterance into structured slots. StockAgent itself does NOT do NL parsing — it expects clean keys/values. The REPL exists for solo dev/demo without the conversation module wired up.
+
 Prereq: Ollama daemon up + `qwen2.5:7b-instruct-q3_K_M` pulled (see Prerequisites).
+
+**Latency:** `pick_top` takes ~60–100s on a local Apple Silicon laptop with the q3_K_M quantization. Fine for dev / pipeline wiring; in-store deployment will want a smaller model or remote inference.
 
 Programmatic:
 ```python
