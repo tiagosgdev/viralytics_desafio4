@@ -183,6 +183,8 @@ Prereq: Ollama daemon up + `qwen2.5:7b-instruct-q3_K_M` pulled (see Prerequisite
 
 **Latency:** `pick_top` takes ~60–100s on a local Apple Silicon laptop with the q3_K_M quantization. Fine for dev / pipeline wiring; in-store deployment will want a smaller model or remote inference.
 
+**Visual sanity:** see [`SANITY_PLOTS.md`](SANITY_PLOTS.md) for 10 distribution + push-score plots auto-generated from the seeded DB. Regenerate with `python3 stock_agent/sanity_plots.py`.
+
 Programmatic:
 ```python
 import sys; sys.path.insert(0, "LNIAGIA/DB/SQLLite")
