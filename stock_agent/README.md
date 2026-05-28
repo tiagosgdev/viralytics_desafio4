@@ -243,6 +243,49 @@ Pulled from `LNIAGIA/DB/models.py`. Unknown keys raise `ValueError`.
 
 **Voting axes stay narrower.** `get_attribute_pressure()` and `get_stock_stats(by=...)` still operate only over the 4 PIVOT_KEYS (`color, type, fit, size`) — the extended keys exist purely for the retrieval phase.
 
+#### Query schema (canonical + shorthand)
+
+Two accepted shapes:
+
+**Canonical** — multi-value include + exclude. Mirrors the shape the
+LNIAGIA conversation module's LLM query parser already produces:
+
+```python
+{
+    "include": {"color": ["red", "green"], "type": ["trousers"]},
+    "exclude": {"color": ["black"], "size": ["XS"]},
+    "price_min": 20.0,
+    "price_max": 80.0,
+}
+```
+
+- Both `include` and `exclude` are optional dicts; field values are lists of strings.
+- `include` values contribute 1 to `match_count` per key (any-of within a key).
+- `exclude` values are a hard filter — matching rows are dropped before scoring.
+- `price_min` / `price_max` stay at the top level (hard numeric filter).
+- At least one of `include` / `exclude` / `price_min` / `price_max` must be non-empty.
+
+**Shorthand** — flat dict, auto-wrapped into `{"include": ...}`. Used by the REPL when you don't pass `+/-` prefixes:
+
+```python
+{"color": "red", "type": "trousers"}                  # str values
+{"color": ["red", "green"], "type": "trousers"}       # mixed
+```
+
+Mixing both forms in one call (e.g. `{"include": {...}, "color": "red"}`) raises `ValueError`. Pick one.
+
+**REPL token syntax:**
+
+| Token | Meaning |
+|---|---|
+| `key=v` | include `key=v` |
+| `key=v1,v2` | include `key` with multiple values (OR) |
+| `+key=v` | explicit include (same as `key=v`) |
+| `-key=v` / `-key=v1,v2` | exclude values |
+| `price_min=20` / `price_max=80` | range (no prefix) |
+
+Same value in both `+key` and `-key` for the same key → error.
+
 #### Example sessions
 
 **A. Full 4-attribute query — should yield many `match_count=4` items**
@@ -275,6 +318,36 @@ stock> pick 10
 Notes:
 - `match_count` ranges 0–4 here (color/type/material/brand). `price_max=80` is a hard filter, not in `match_count`.
 - `Levi's` apostrophe + spaces in brand names: shell-quote — `query "brand=Levi's"`.
+
+**A3. Multi-value include + exclude (canonical)**
+
+```
+stock> query color=red,green type=trousers -size=XS -size=XXL price_max=80
+query set: {
+  "include": {"color": ["red", "green"], "type": ["trousers"]},
+  "exclude": {"size": ["XS", "XXL"]},
+  "price_max": "80"
+}
+stock> candidates
+40 candidates (sorted by match_count DESC, item_id ASC):
+  ( ... , M  ) match=2  ... color=red type=trousers ...
+  ( ... , L  ) match=2  ... color=green type=trousers ...
+  ...
+```
+
+Notes:
+- `color=red,green` — comma splits values; row matches if color is red OR green (any-of, 1 per key in `match_count`).
+- `-size=XS -size=XXL` — exclude tokens merge (could also be `-size=XS,XXL`).
+- `price_max=80` is a hard filter, never in `match_count`.
+
+**A4. Pure exclude (no include)**
+
+```
+stock> query -color=black -color=brown -size=XS price_max=100
+stock> candidates
+```
+
+Returns 40 in-stock items ≤ €100 that aren't black/brown and aren't XS. `match_count` is 0 for every row (no include axis specified) — pure relaxation case where tiebreaker `item_id ASC` orders the list.
 
 **B. Partial query — only color + type**
 

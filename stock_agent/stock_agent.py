@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sys
 from datetime import datetime
@@ -17,7 +18,18 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from stock_stats import StockStats, PIVOT_KEYS, QUERY_KEYS, RANGE_KEYS  # noqa: E402
 
-_ALLOWED_KEYS = set(QUERY_KEYS) | set(RANGE_KEYS)
+
+def _field_match(df: pd.DataFrame, key: str, values: list[str]) -> pd.Series:
+    """Boolean mask over df: True where df[key] matches any value in `values`.
+
+    age_group is special-cased to case-insensitive substring (the column
+    stores comma-separated lists like 'adult, young adult'). Every other
+    key uses exact equality (isin).
+    """
+    if key == "age_group":
+        pattern = "|".join(re.escape(v) for v in values)
+        return df["age_group"].str.contains(pattern, case=False, regex=True, na=False)
+    return df[key].isin(values)
 
 
 DEFAULT_OLLAMA_MODEL = (
@@ -106,78 +118,129 @@ class StockAgent:
     def get_candidates(
         self, query: dict, n: int = 40
     ) -> list[tuple[int, str]]:
-        """Tier-based attribute relaxation: items matching all equality
-        params first, then matches-except-1, etc., until `n` collected.
+        """Tier-based attribute relaxation w/ multi-value include + exclude.
 
-        query keys:
-          - Equality (QUERY_KEYS): color, type, fit, size, style, pattern,
-            material, gender, age_group, season, occasion, brand.
-          - Substring (special-cased): age_group — case-insensitive
-            substring against the stored comma-separated string.
-          - Numeric range (RANGE_KEYS): price_min, price_max — hard
-            filter, NOT part of match_count.
-          - Unknown keys raise ValueError.
+        Canonical query schema (matches the LLM query-parser output in
+        LNIAGIA/query_parsing/llm_query_parser.py):
+            {
+              "include": {field: [value, ...]},   # any-of, contributes 1 to match_count
+              "exclude": {field: [value, ...]},   # hard drop
+              "price_min": float,                  # hard filter
+              "price_max": float,                  # hard filter
+            }
+
+        Shorthand (back-compat): a flat dict with QUERY_KEYS + RANGE_KEYS
+        is auto-wrapped to {"include": {k: [v], ...}, ...}. Mixing
+        shorthand with explicit include/exclude raises ValueError.
+
+        Equality keys (QUERY_KEYS): color, type, fit, size, style, pattern,
+          material, gender, age_group, season, occasion, brand.
+        age_group uses case-insensitive substring match (the column stores
+        comma-separated values like 'adult, young adult').
 
         Filters always applied: active=1 AND stock_count>0.
-        Tiebreaker within a tier: item_id ASC (neutral, deterministic).
+        Tiebreaker within a match_count tier: item_id ASC.
         """
-        bad = [k for k in query if k not in _ALLOWED_KEYS]
-        if bad:
-            raise ValueError(
-                f"unknown query keys: {bad}; "
-                f"allowed equality: {QUERY_KEYS}; range: {RANGE_KEYS}"
-            )
-        if not query:
-            raise ValueError("query is empty; provide at least one key")
-
-        # Numeric coercion for range keys (clean error if bad input)
-        price_min = price_max = None
-        if "price_min" in query:
-            try:
-                price_min = float(query["price_min"])
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"price_min must be numeric, got {query['price_min']!r}"
-                )
-        if "price_max" in query:
-            try:
-                price_max = float(query["price_max"])
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"price_max must be numeric, got {query['price_max']!r}"
-                )
+        include, exclude, price_min, price_max = self._normalize_query(query)
 
         df = self.stats.df
         mask = (df["active"] == 1) & (df["stock_count"] > 0)
         df = df.loc[mask].copy()
 
-        # Hard range filter — applied BEFORE match_count (rows out of range
-        # are dropped entirely; NaN price excluded by comparison semantics).
         if price_min is not None:
             df = df.loc[df["price"] >= price_min]
         if price_max is not None:
             df = df.loc[df["price"] <= price_max]
 
+        # Apply exclude as hard filter BEFORE scoring
+        for k, vals in exclude.items():
+            df = df.loc[~_field_match(df, k, vals)]
+
         if df.empty:
             return []
 
-        # Equality / substring match_count over QUERY_KEYS only
+        # Include scoring → match_count (any-of within a key, 1 per key)
         match_count = pd.Series(0, index=df.index)
-        for k, v in query.items():
-            if k in RANGE_KEYS:
-                continue  # already applied as hard filter
-            if k == "age_group":
-                match_count = match_count + df["age_group"].str.contains(
-                    str(v), case=False, regex=False, na=False
-                ).astype(int)
-            else:
-                match_count = match_count + (df[k] == v).astype(int)
+        for k, vals in include.items():
+            match_count = match_count + _field_match(df, k, vals).astype(int)
         df["__match_count"] = match_count
 
         df = df.sort_values(
             ["__match_count", "item_id"], ascending=[False, True]
         ).head(n)
         return list(zip(df["item_id"].tolist(), df["size"].tolist()))
+
+    # ─── query normalization ──────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_query(
+        q: dict,
+    ) -> tuple[dict[str, list[str]], dict[str, list[str]], float | None, float | None]:
+        """Accept canonical {include,exclude,price_*} OR flat shorthand.
+        Returns validated (include, exclude, price_min, price_max).
+        """
+        if not isinstance(q, dict):
+            raise ValueError(f"query must be a dict, got {type(q).__name__}")
+
+        has_inc_exc = ("include" in q) or ("exclude" in q)
+        bare_keys = [
+            k for k in q
+            if k not in ("include", "exclude") and k not in RANGE_KEYS
+        ]
+        if has_inc_exc and bare_keys:
+            raise ValueError(
+                f"mix shorthand and canonical: bare keys {bare_keys} "
+                f"alongside include/exclude. Pick one form."
+            )
+
+        if has_inc_exc:
+            include = dict(q.get("include") or {})
+            exclude = dict(q.get("exclude") or {})
+        else:
+            include = {k: q[k] for k in bare_keys}
+            exclude = {}
+
+        # Validate keys + list-wrap str values
+        for d, label in ((include, "include"), (exclude, "exclude")):
+            for k, v in list(d.items()):
+                if k not in QUERY_KEYS:
+                    raise ValueError(
+                        f"unknown key {k!r} in {label}; allowed: {QUERY_KEYS}"
+                    )
+                if isinstance(v, str):
+                    d[k] = [v]
+                elif isinstance(v, (list, tuple)):
+                    d[k] = [str(x) for x in v]
+                else:
+                    raise ValueError(
+                        f"{label}[{k!r}] must be str or list, got {type(v).__name__}"
+                    )
+                if not d[k]:
+                    raise ValueError(f"{label}[{k!r}] is empty list")
+
+        # Range keys
+        price_min = price_max = None
+        if "price_min" in q:
+            try:
+                price_min = float(q["price_min"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"price_min must be numeric, got {q['price_min']!r}"
+                )
+        if "price_max" in q:
+            try:
+                price_max = float(q["price_max"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"price_max must be numeric, got {q['price_max']!r}"
+                )
+
+        if not include and not exclude and price_min is None and price_max is None:
+            raise ValueError(
+                "query is empty; provide include / exclude / price_min / price_max"
+            )
+
+        return include, exclude, price_min, price_max
 
     # ─── 2. Rate (NOT a vote — phase 2 reserves "vote") ─────────────────
 
@@ -360,21 +423,87 @@ Commands:
   exit / quit           leave REPL"""
 
 
-def _parse_query(tokens: list[str]) -> dict[str, str]:
-    out: dict[str, str] = {}
+def _parse_query(tokens: list[str]) -> dict:
+    """Parse REPL tokens into a canonical query dict.
+
+    Token forms:
+      key=v             -> include[key] = [v]
+      key=v1,v2         -> include[key] = [v1, v2]
+      +key=v[,v2]       -> explicit include (same as key=v)
+      -key=v[,v2]       -> exclude[key] = [v, ...]
+      price_min=20      -> top-level price_min (passed through)
+      price_max=80      -> top-level price_max (passed through)
+
+    Multiple tokens for the same key merge values. +key and -key may
+    coexist (different sets), but the same value in both raises.
+    """
+    include: dict[str, list[str]] = {}
+    exclude: dict[str, list[str]] = {}
+    extras: dict = {}
+
     for tok in tokens:
         if "=" not in tok:
             raise ValueError(f"bad token {tok!r}; expected k=v")
-        k, v = tok.split("=", 1)
-        out[k.strip()] = v.strip()
+        lhs, rhs = tok.split("=", 1)
+        lhs = lhs.strip()
+        rhs = rhs.strip()
+        if not lhs or not rhs:
+            raise ValueError(f"empty key or value in {tok!r}")
+
+        # Prefix detection
+        if lhs.startswith("+"):
+            target, key = include, lhs[1:].strip()
+        elif lhs.startswith("-"):
+            target, key = exclude, lhs[1:].strip()
+        elif lhs in RANGE_KEYS:
+            extras[lhs] = rhs
+            continue
+        else:
+            target, key = include, lhs
+
+        if not key:
+            raise ValueError(f"missing key after prefix in {tok!r}")
+
+        values = [v.strip() for v in rhs.split(",") if v.strip()]
+        if not values:
+            raise ValueError(f"no values for {tok!r}")
+        target.setdefault(key, [])
+        for v in values:
+            if v not in target[key]:
+                target[key].append(v)
+
+    # Catch contradictions: same value in include AND exclude for the same key
+    for k, inc_vals in include.items():
+        if k in exclude:
+            clash = set(inc_vals) & set(exclude[k])
+            if clash:
+                raise ValueError(
+                    f"value(s) {sorted(clash)} appear in BOTH +{k} and -{k}"
+                )
+
+    out: dict = {}
+    if include:
+        out["include"] = include
+    if exclude:
+        out["exclude"] = exclude
+    out.update(extras)
     return out
 
 
 def _print_candidates(agent: StockAgent, cands: list[tuple[int, str]], query: dict) -> None:
+    # Recompute per-row match_count for the display (canonical query: count
+    # include axes where any listed value matches the row).
+    include = query.get("include") or {}
     print(f"\n{len(cands)} candidates (sorted by match_count DESC, item_id ASC):")
     for iid, sz in cands[:20]:
         row = agent.stats.get_row(iid, sz)
-        mc = sum(1 for k, v in query.items() if row[k] == v)
+        mc = 0
+        for k, vals in include.items():
+            if k == "age_group":
+                if any(str(v).lower() in str(row[k]).lower() for v in vals):
+                    mc += 1
+            elif row[k] in vals:
+                mc += 1
         print(
             f"  ({iid:>5}, {sz:<3}) match={mc}  "
             f"stock={int(row['stock_count']):>3} sold={int(row['total_sold']):>4} "
