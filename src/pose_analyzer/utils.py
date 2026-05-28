@@ -1,4 +1,4 @@
-"""Shared geometry helpers and MediaPipe landmark constants."""
+"""Shared geometry helpers for pose analysis."""
 
 from __future__ import annotations
 
@@ -49,13 +49,11 @@ class PoseLandmark(IntEnum):
 
 
 LANDMARK_COUNT = 33
-DEFAULT_VISIBILITY_THRESHOLD = 0.50
-DEFAULT_PRESENCE_THRESHOLD = 0.50
 
 
 @dataclass(frozen=True)
 class LandmarkPoint:
-    """2D landmark projected into image coordinates."""
+    """2D pose landmark projected into image coordinates."""
 
     x: float
     y: float
@@ -63,9 +61,11 @@ class LandmarkPoint:
     visibility: float = 1.0
     presence: float = 1.0
 
-    @property
-    def xy(self) -> tuple[float, float]:
-        return (self.x, self.y)
+
+def point_xy(point: LandmarkPoint | Sequence[float]) -> tuple[float, float]:
+    if isinstance(point, LandmarkPoint):
+        return point.x, point.y
+    return float(point[0]), float(point[1])
 
 
 def get_distance(p1: LandmarkPoint | Sequence[float], p2: LandmarkPoint | Sequence[float]) -> float:
@@ -75,33 +75,18 @@ def get_distance(p1: LandmarkPoint | Sequence[float], p2: LandmarkPoint | Sequen
     return math.hypot(x2 - x1, y2 - y1)
 
 
-def point_xy(point: LandmarkPoint | Sequence[float]) -> tuple[float, float]:
-    """Return the 2D coordinates for a point-like value."""
-    if isinstance(point, LandmarkPoint):
-        return point.x, point.y
-    return float(point[0]), float(point[1])
-
-
-def midpoint(
-    p1: LandmarkPoint | Sequence[float],
-    p2: LandmarkPoint | Sequence[float],
-) -> LandmarkPoint:
-    """Compute the midpoint between two landmarks."""
-    x1, y1 = point_xy(p1)
-    x2, y2 = point_xy(p2)
-    if isinstance(p1, LandmarkPoint) and isinstance(p2, LandmarkPoint):
-        return LandmarkPoint(
-            x=(x1 + x2) / 2.0,
-            y=(y1 + y2) / 2.0,
-            z=(p1.z + p2.z) / 2.0,
-            visibility=min(p1.visibility, p2.visibility),
-            presence=min(p1.presence, p2.presence),
-        )
-    return LandmarkPoint(x=(x1 + x2) / 2.0, y=(y1 + y2) / 2.0)
+def midpoint(p1: LandmarkPoint, p2: LandmarkPoint) -> LandmarkPoint:
+    """Return the midpoint between two landmarks."""
+    return LandmarkPoint(
+        x=(p1.x + p2.x) / 2.0,
+        y=(p1.y + p2.y) / 2.0,
+        z=(p1.z + p2.z) / 2.0,
+        visibility=min(p1.visibility, p2.visibility),
+        presence=min(p1.presence, p2.presence),
+    )
 
 
 def safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> float:
-    """Divide with a zero guard."""
     if abs(denominator) < 1e-8:
         return default
     return numerator / denominator
@@ -109,24 +94,15 @@ def safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> fl
 
 def landmark_is_reliable(
     landmark: LandmarkPoint | None,
-    visibility_threshold: float = DEFAULT_VISIBILITY_THRESHOLD,
-    presence_threshold: float = DEFAULT_PRESENCE_THRESHOLD,
+    *,
+    visibility_threshold: float,
+    presence_threshold: float,
 ) -> bool:
-    """Check if a landmark is present and visible enough for measurement use."""
     if landmark is None:
         return False
-    return (
-        landmark.visibility >= visibility_threshold
-        and landmark.presence >= presence_threshold
-    )
+    return landmark.visibility >= visibility_threshold and landmark.presence >= presence_threshold
 
 
 def average_confidence(landmarks: Iterable[LandmarkPoint]) -> float:
-    """Aggregate visibility/presence into a single confidence estimate."""
-    values = [
-        min(landmark.visibility, landmark.presence)
-        for landmark in landmarks
-    ]
-    if not values:
-        return 0.0
-    return float(np.mean(values))
+    values = [min(point.visibility, point.presence) for point in landmarks]
+    return float(np.mean(values)) if values else 0.0

@@ -301,9 +301,9 @@ async def startup():
     search_service = UnifiedSearchService(recommender)
     pose_analyzer = PoseAnalyzer()
     if pose_analyzer.is_available():
-        print(f"🧍  Pose analyzer ready ({pose_analyzer.model_path})")
+        print(f"Pose analyzer ready ({pose_analyzer.model_path})")
     else:
-        print("⚠️  Pose analyzer model not available; body analysis endpoints will be limited")
+        print("Pose analyzer unavailable; body silhouette analysis will be skipped")
 
     preload_warning = await run_in_threadpool(_preload_search_embeddings_sync)
     if preload_warning:
@@ -400,20 +400,17 @@ async def health():
 
 
 def _run_body_analysis(frame: np.ndarray) -> tuple[dict | None, str | None]:
-    """Run pose analysis and return structured JSON plus an optional annotated frame."""
+    """Run pose/silhouette analysis and return JSON plus optional JPEG overlay."""
     if pose_analyzer is None:
         return None, None
 
     analysis = pose_analyzer.analyze(frame, draw_overlay=True, include_landmarks=True)
-    if analysis.landmarks_detected == 0:
-        return analysis.to_dict(include_landmarks=True), None
-
-    body_b64 = None
+    annotated_b64 = None
     if analysis.annotated_image is not None:
-        ok, body_buf = cv2.imencode(".jpg", analysis.annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok, buf = cv2.imencode(".jpg", analysis.annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if ok:
-            body_b64 = base64.b64encode(body_buf).decode("utf-8")
-    return analysis.to_dict(include_landmarks=True), body_b64
+            annotated_b64 = base64.b64encode(buf).decode("utf-8")
+    return analysis.to_dict(include_landmarks=True), annotated_b64
 
 
 @app.get("/api/image-proxy")
@@ -595,22 +592,16 @@ async def _detect_image_impl(
 
     if pose_analyzer is not None and pose_analyzer.is_available():
         try:
-            body_analysis, body_annotated_frame = await run_in_threadpool(
-                _run_body_analysis,
-                frame.copy(),
-            )
+            body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy())
         except Exception as exc:
-            print(f"⚠️  Body analysis failed: {exc}")
+            print(f"Body analysis failed: {exc}")
             body_analysis = {
-                "measurements": {
-                    "shoulder_width": 0.0,
-                    "hip_width": 0.0,
-                    "shoulder_hip_ratio": 0.0,
-                },
                 "body_shape": "unknown",
-                "landmarks_detected": 0,
+                "measurements": {"shoulder_width": 0.0, "hip_width": 0.0, "shoulder_hip_ratio": 0.0},
                 "confidence": 0.0,
-                "pose_validation": {"valid": False, "score": 0.0, "reasons": [f"Body analysis failed: {exc}"]},
+                "pose_validation": {"valid": False, "score": 0.0, "reasons": [str(exc)]},
+                "landmarks_detected": 0,
+                "silhouette": {"valid": False, "widths": {}, "scanlines": []},
                 "warnings": [f"Body analysis failed: {exc}"],
                 "landmarks": [],
             }
@@ -730,6 +721,7 @@ async def analyze_body(file: UploadFile = File(...)):
         landmarks_detected=analysis_dict["landmarks_detected"],
         confidence=analysis_dict["confidence"],
         pose_validation=analysis_dict.get("pose_validation", {}),
+        silhouette=analysis_dict.get("silhouette", {}),
         warnings=analysis_dict.get("warnings", []),
         landmarks=analysis_dict.get("landmarks", []),
         annotated_frame=annotated_frame,

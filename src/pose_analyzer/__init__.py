@@ -1,4 +1,4 @@
-"""Body pose analysis utilities for fashion-oriented measurement extraction."""
+"""Pose and silhouette analysis for fashion body-shape estimates."""
 
 from .pose_analyzer import PoseAnalysisResult, PoseAnalyzer
 

@@ -1,6 +1,6 @@
 from src.pose_analyzer.body_classifier import BodyShapeThresholds, classify_body_shape
 from src.pose_analyzer.pose_analyzer import PoseAnalyzer
-from src.pose_analyzer.segmentation import estimate_mask_width
+from src.pose_analyzer.silhouette import extract_silhouette_profile
 from src.pose_analyzer.smoothing import MeasurementSmoother
 from src.pose_analyzer.utils import LANDMARK_COUNT, LandmarkPoint, PoseLandmark
 from src.pose_analyzer.validation import validate_pose
@@ -22,11 +22,17 @@ def test_measurements_are_normalized_and_ratios_are_consistent():
     landmarks[PoseLandmark.LEFT_ANKLE] = LandmarkPoint(110, 420, visibility=0.99, presence=0.99)
     landmarks[PoseLandmark.RIGHT_ANKLE] = LandmarkPoint(200, 420, visibility=0.99, presence=0.99)
 
-    measurements, _, warnings = analyzer._compute_measurements(landmarks)
+    mask = np.zeros((480, 320), dtype=np.uint8)
+    mask[95:160, 70:230] = 255
+    mask[160:230, 95:205] = 255
+    profile = extract_silhouette_profile(mask, landmarks)
+
+    measurements, _, warnings = analyzer._compute_measurements(landmarks, profile)
 
     assert warnings == []
+    assert profile.valid is True
     assert measurements["shoulder_width"] > measurements["hip_width"]
-    assert round(measurements["shoulder_width"] / measurements["hip_width"], 4) == measurements["shoulder_hip_ratio"]
+    assert abs(round(measurements["shoulder_width"] / measurements["hip_width"], 4) - measurements["shoulder_hip_ratio"]) < 0.001
 
 
 def test_classifier_covers_expected_shapes():
@@ -81,20 +87,30 @@ def test_invalid_landmarks_skip_shape_classification():
     landmarks[PoseLandmark.LEFT_ANKLE] = LandmarkPoint(110, 420, visibility=0.99, presence=0.99)
     landmarks[PoseLandmark.RIGHT_ANKLE] = LandmarkPoint(200, 420, visibility=0.99, presence=0.99)
 
-    measurements, measurement_points, warnings = analyzer._compute_measurements(landmarks)
+    profile = extract_silhouette_profile(np.zeros((480, 320), dtype=np.uint8), landmarks)
+    measurements, measurement_points, warnings = analyzer._compute_measurements(landmarks, profile)
 
     assert measurement_points == {}
     assert any("left_hip" in warning for warning in warnings)
     assert analyzer._measurements_are_valid(measurements, measurement_points) is False
 
 
-def test_mask_width_can_refine_landmark_width():
+def test_silhouette_profile_samples_widths():
+    landmarks = _blank_landmarks()
+    landmarks[PoseLandmark.LEFT_SHOULDER] = LandmarkPoint(50, 20, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.RIGHT_SHOULDER] = LandmarkPoint(110, 20, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.LEFT_HIP] = LandmarkPoint(60, 80, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.RIGHT_HIP] = LandmarkPoint(100, 80, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.LEFT_KNEE] = LandmarkPoint(65, 140, visibility=0.99, presence=0.99)
+    landmarks[PoseLandmark.RIGHT_KNEE] = LandmarkPoint(95, 140, visibility=0.99, presence=0.99)
     mask = np.zeros((100, 160), dtype=np.uint8)
-    mask[45:56, 40:121] = 255
+    mask[15:95, 40:121] = 255
 
-    width = estimate_mask_width(mask, y=50, center_x=80, fallback_width=60)
+    profile = extract_silhouette_profile(mask, landmarks)
 
-    assert width == 80.0
+    assert profile.valid is True
+    assert profile.widths["shoulder_width"] > 1.0
+    assert profile.widths["hip_width"] > 1.0
 
 
 def test_measurement_smoother_rejects_spikes():

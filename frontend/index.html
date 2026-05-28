@@ -797,6 +797,7 @@ function renderBodyAnalysis(analysis) {
   const measurements = analysis.measurements || {};
   const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
   const poseValidation = analysis.pose_validation || {};
+  const silhouetteWidths = (analysis.silhouette && analysis.silhouette.widths) || {};
   const bodyShape = String(analysis.body_shape || 'unknown').replace(/_/g, ' ');
   const confidence = Math.round((Number(analysis.confidence || 0)) * 100);
   const poseScore = Math.round((Number(poseValidation.score || 0)) * 100);
@@ -815,7 +816,10 @@ function renderBodyAnalysis(analysis) {
     '<div class="body-metrics-grid">' +
       metricRow('Shoulders: ', measurements.shoulder_width) +
       metricRow('Hips: ', measurements.hip_width) +
+      metricRow('Waist: ', measurements.waist_width) +
       metricRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
+      metricRow('Sil Chest: ', silhouetteWidths.chest_width) +
+      metricRow('Sil Thigh: ', silhouetteWidths.thigh_width) +
     '</div>' +
     (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
 }

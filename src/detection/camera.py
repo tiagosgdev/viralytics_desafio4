@@ -42,6 +42,9 @@ CAPTURE_SECONDS = 5      # how long to scan the user
 FRAME_INTERVAL  = 0.08   # ~12 fps — feels live, light on CPU
 
 
+BODY_OVERLAY_INTERVAL = 1.5  # seconds between expensive body-analysis preview refreshes
+
+
 class CameraStream:
     """
     Manages a camera capture loop with a controlled UX state machine.
@@ -67,6 +70,8 @@ class CameraStream:
         self.height      = height
         self._cap: Optional[cv2.VideoCapture] = None
         self._is_warm = False
+        self._last_body_overlay_time: float = 0.0
+        self._cached_body_overlay: Optional[np.ndarray] = None
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -406,16 +411,23 @@ class CameraStream:
     def _resolve_body_overlay_frame(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
         if frame is None or self.body_analysis_resolver is None:
             return None
+        now = time.perf_counter()
+        if now - self._last_body_overlay_time < BODY_OVERLAY_INTERVAL:
+            return self._cached_body_overlay
         try:
             analysis, encoded_frame = self.body_analysis_resolver(frame.copy())
             if not analysis or not analysis.get("landmarks_detected") or not encoded_frame:
-                return None
+                self._last_body_overlay_time = now
+                return self._cached_body_overlay
             buffer = np.frombuffer(base64.b64decode(encoded_frame), dtype=np.uint8)
             decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+            self._cached_body_overlay = decoded
+            self._last_body_overlay_time = now
             return decoded
         except Exception as exc:
             print(f"Warning: body overlay preview failed: {exc}")
-            return None
+            self._last_body_overlay_time = now
+            return self._cached_body_overlay
 
     def _draw_capture_overlay(
         self, frame: np.ndarray, result: DetectionResult, countdown: int

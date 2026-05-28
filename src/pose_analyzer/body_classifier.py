@@ -1,4 +1,4 @@
-"""Heuristic fashion body-shape classification."""
+"""Small rule-based body-shape classifier."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from .utils import safe_ratio
 
 @dataclass(frozen=True)
 class BodyShapeThresholds:
-    """Configurable cutoffs for coarse fashion silhouette classification."""
+    """Configurable body-shape thresholds."""
 
     balanced_delta: float = 0.10
     pronounced_delta: float = 0.18
@@ -21,22 +21,12 @@ def classify_body_shape(
     measurements: Dict[str, float],
     thresholds: BodyShapeThresholds | None = None,
 ) -> Tuple[str, float]:
-    """
-    Classify fashion body shape from normalized proportions.
-
-    Heuristic summary:
-    - `rectangle`: shoulders and hips are balanced.
-    - `hourglass`: shoulders and hips are balanced, waist clearly narrower.
-    - `inverted_triangle`: shoulders are materially wider than hips.
-    - `triangle`: hips are materially wider than shoulders.
-    """
+    """Classify rectangle, triangle, inverted triangle, or hourglass."""
     thresholds = thresholds or BodyShapeThresholds()
+    shoulder = float(measurements.get("shoulder_width", 0.0))
+    hip = float(measurements.get("hip_width", 0.0))
+    waist = float(measurements.get("waist_width", 0.0))
 
-    shoulder = measurements.get("shoulder_width", 0.0)
-    hip = measurements.get("hip_width", 0.0)
-    waist = measurements.get("waist_width", 0.0)
-
-    # Classification is only meaningful when the core measurements exist.
     if min(shoulder, hip) <= 0.0:
         return "unknown", 0.0
 
@@ -53,8 +43,8 @@ def classify_body_shape(
         )
         if waist > 0.0 and waist_hip_ratio <= thresholds.hourglass_waist_max:
             confidence = 0.72 + (thresholds.hourglass_waist_max - waist_hip_ratio)
-            return "hourglass", round(min(confidence, 0.99), 3)
-        return "rectangle", round(min(0.95, 0.72 + (thresholds.balanced_delta - balance_delta)), 3)
+            return "hourglass", round(min(confidence, 0.98), 3)
+        return "rectangle", round(min(0.95, 0.72 + thresholds.balanced_delta - balance_delta), 3)
 
     if shoulder_hip_ratio >= 1.0 + thresholds.pronounced_delta:
         confidence = 0.70 + (shoulder_hip_ratio - (1.0 + thresholds.pronounced_delta))

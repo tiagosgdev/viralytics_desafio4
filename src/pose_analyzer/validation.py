@@ -1,4 +1,4 @@
-"""Pose quality checks for measurement stability."""
+"""Pose validation checks for stable body measurements."""
 
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ MIN_TORSO_LENGTH_PX = 24.0
 
 @dataclass
 class PoseValidationResult:
-    """Pose validation summary returned with analysis results."""
-
     valid: bool
     score: float
     reasons: list[str] = field(default_factory=list)
@@ -39,7 +37,7 @@ def validate_pose(
     body_mask: np.ndarray | None,
     visibility_threshold: float,
 ) -> PoseValidationResult:
-    """Score whether the frame is suitable for body measurements."""
+    """Return a simple pose validity score for measurement use."""
     height, width = image_shape[:2]
     reasons: list[str] = []
     penalties: list[float] = []
@@ -51,9 +49,7 @@ def validate_pose(
 
     shoulder_width = get_distance(ls, rs)
     hip_width = get_distance(lh, rh)
-    shoulder_mid_y = (ls.y + rs.y) / 2.0
-    hip_mid_y = (lh.y + rh.y) / 2.0
-    torso_length = abs(hip_mid_y - shoulder_mid_y)
+    torso_length = abs(((lh.y + rh.y) / 2.0) - ((ls.y + rs.y) / 2.0))
 
     if torso_length < MIN_TORSO_LENGTH_PX:
         reasons.append("torso too small")
@@ -69,8 +65,7 @@ def validate_pose(
         reasons.append("hips tilted")
         penalties.append(min(0.40, hip_tilt + 0.05))
 
-    core_landmarks = (ls, rs, lh, rh)
-    average_visibility = float(np.mean([min(p.visibility, p.presence) for p in core_landmarks]))
+    average_visibility = float(np.mean([min(p.visibility, p.presence) for p in (ls, rs, lh, rh)]))
     if average_visibility < MIN_AVERAGE_VISIBILITY:
         reasons.append("low landmark visibility")
         penalties.append(MIN_AVERAGE_VISIBILITY - average_visibility)
@@ -83,7 +78,7 @@ def validate_pose(
 
     margin_x = width * FRAME_MARGIN_RATIO
     margin_y = height * FRAME_MARGIN_RATIO
-    for point in core_landmarks:
+    for point in (ls, rs, lh, rh):
         if point.x <= margin_x or point.x >= width - margin_x or point.y <= margin_y or point.y >= height - margin_y:
             reasons.append("body near frame edge")
             penalties.append(0.2)

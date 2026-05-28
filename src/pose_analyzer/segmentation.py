@@ -1,4 +1,4 @@
-"""Lightweight body segmentation helpers."""
+"""Lightweight human segmentation using MediaPipe Selfie Segmentation."""
 
 from __future__ import annotations
 
@@ -11,14 +11,13 @@ MORPH_KERNEL_SIZE = 5
 
 
 class BodySegmenter:
-    """Small wrapper around MediaPipe Selfie Segmentation."""
+    """Generate a cleaned binary body mask."""
 
     def __init__(self, model_selection: int = 1) -> None:
         self.model_selection = model_selection
         self._segmenter = None
 
     def segment(self, image_bgr: np.ndarray) -> np.ndarray:
-        """Return a cleaned binary body mask with values 0 or 255."""
         segmenter = self._get_segmenter()
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         result = segmenter.process(rgb)
@@ -30,7 +29,7 @@ class BodySegmenter:
         kernel = np.ones((MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE), dtype=np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        return mask
+        return keep_largest_component(mask)
 
     def _get_segmenter(self):
         if self._segmenter is not None:
@@ -43,62 +42,30 @@ class BodySegmenter:
         return self._segmenter
 
 
-def estimate_mask_width(
-    body_mask: np.ndarray | None,
-    y: float,
-    center_x: float,
-    fallback_width: float,
-    *,
-    band: int = 8,
-    max_width_multiplier: float = 1.8,
-) -> float:
-    """
-    Estimate horizontal body width from the segmentation mask near a scanline.
-
-    The search is constrained around the landmark center to avoid grabbing
-    background fragments or another person.
-    """
-    if body_mask is None or body_mask.size == 0 or fallback_width <= 0:
-        return fallback_width
-
-    height, width = body_mask.shape[:2]
-    y_i = int(round(y))
-    if y_i < 0 or y_i >= height:
-        return fallback_width
-
-    y1 = max(0, y_i - band)
-    y2 = min(height, y_i + band + 1)
-    half_window = max(int(fallback_width * max_width_multiplier), 12)
-    x1 = max(0, int(round(center_x - half_window)))
-    x2 = min(width, int(round(center_x + half_window + 1)))
-    if x2 <= x1:
-        return fallback_width
-
-    band_mask = body_mask[y1:y2, x1:x2]
-    active_columns = np.where(np.any(band_mask > 0, axis=0))[0]
-    if active_columns.size < 2:
-        return fallback_width
-
-    mask_width = float(active_columns[-1] - active_columns[0])
-    lower_bound = fallback_width * 0.55
-    upper_bound = fallback_width * max_width_multiplier
-    if mask_width < lower_bound or mask_width > upper_bound:
-        return fallback_width
-    return mask_width
+def keep_largest_component(mask: np.ndarray) -> np.ndarray:
+    """Keep only the largest foreground component in a binary mask."""
+    if mask is None or mask.size == 0:
+        return mask
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), 8)
+    if num_labels <= 1:
+        return mask
+    largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    return (labels == largest_label).astype(np.uint8) * 255
 
 
 def overlay_body_mask(
     image_bgr: np.ndarray,
     body_mask: np.ndarray | None,
+    *,
     color: tuple[int, int, int] = (40, 180, 200),
     alpha: float = 0.22,
 ) -> np.ndarray:
-    """Blend a segmentation mask over an image for debugging/visualization."""
+    """Blend a body mask over an image for debugging/visualization."""
     if body_mask is None or body_mask.size == 0:
         return image_bgr.copy()
     output = image_bgr.copy()
     color_layer = np.zeros_like(output)
     color_layer[:, :] = color
-    mask_bool = body_mask > 0
-    output[mask_bool] = cv2.addWeighted(output, 1.0 - alpha, color_layer, alpha, 0)[mask_bool]
+    blended = cv2.addWeighted(output, 1.0 - alpha, color_layer, alpha, 0)
+    output[body_mask > 0] = blended[body_mask > 0]
     return output
