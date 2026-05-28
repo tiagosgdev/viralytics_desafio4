@@ -248,7 +248,9 @@ Pulled from `LNIAGIA/DB/models.py`. Unknown keys raise `ValueError`.
 Two accepted shapes:
 
 **Canonical** — multi-value include + exclude. Mirrors the shape the
-LNIAGIA conversation module's LLM query parser already produces:
+LNIAGIA conversation module's LLM query parser already produces.
+
+Minimal example:
 
 ```python
 {
@@ -258,6 +260,50 @@ LNIAGIA conversation module's LLM query parser already produces:
     "price_max": 80.0,
 }
 ```
+
+**Full reference — every legal field in one object** (you don't need to set them all; this just lists everything that's accepted):
+
+```python
+{
+    "include": {
+        "color":     ["red", "green"],          # equality, any-of
+        "type":      ["trousers"],              # equality
+        "fit":       ["slim fit", "regular"],   # equality
+        "size":      ["M", "L"],                # equality (XS/S/M/L/XL/XXL)
+        "style":     ["casual"],                # equality
+        "pattern":   ["plain"],                 # equality
+        "material":  ["denim", "cotton"],       # equality
+        "gender":    ["unisex"],                # equality (male/female/unisex)
+        "age_group": ["adult"],                 # SUBSTRING (case-insensitive)
+        "season":    ["summer"],                # equality
+        "occasion":  ["everyday"],              # equality
+        "brand":     ["Levi's"],                # equality (free-text)
+    },
+    "exclude": {
+        "color":     ["black"],
+        "type":      ["shorts"],
+        "fit":       ["fitted"],
+        "size":      ["XS", "XXL"],
+        "style":     ["formal"],
+        "pattern":   ["floral"],
+        "material":  ["leather"],
+        "gender":    ["male"],
+        "age_group": ["baby"],                  # SUBSTRING
+        "season":    ["winter"],
+        "occasion":  ["sport"],
+        "brand":     ["Shein"],
+    },
+    "price_min": 20.0,                          # float, EUR (hard filter)
+    "price_max": 80.0,                          # float, EUR (hard filter)
+}
+```
+
+Field-by-field semantics:
+- `include[k]` rows must satisfy "row[k] matches any value in list" — contributes 1 to `match_count` per key, never more (any-of, not sum).
+- `exclude[k]` rows whose `row[k]` matches any listed value are dropped before scoring.
+- `age_group` is substring-matched in BOTH include and exclude because the column stores comma-separated strings like `"adult, young adult"`.
+- `price_min` / `price_max` are hard numeric filters applied BEFORE scoring; rows with NaN price are excluded by the comparison.
+- Rules: each include/exclude list must be non-empty. At least one of `include` / `exclude` / `price_min` / `price_max` must be non-empty (else `ValueError`).
 
 - Both `include` and `exclude` are optional dicts; field values are lists of strings.
 - `include` values contribute 1 to `match_count` per key (any-of within a key).
