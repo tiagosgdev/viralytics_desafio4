@@ -16,12 +16,27 @@ DEFAULT_CONFIG_PATH = BASE_DIR / "stock_config.json"
 
 PIVOT_KEYS = ("color", "type", "fit", "size")
 
+# Customer-facing query keys for retrieval. Superset of PIVOT_KEYS; the
+# extras narrow the 40-candidate retrieval but don't affect voting /
+# attribute_pressure (those stay on PIVOT_KEYS = the 4-agent axes).
+QUERY_KEYS = (
+    "color", "type", "fit", "size",
+    "style", "pattern", "material",
+    "gender", "age_group", "season",
+    "occasion", "brand",
+)
+
+# Numeric range keys (hard filter, not part of match_count).
+RANGE_KEYS = ("price_min", "price_max")
+
 # NOTE: julianday('now') is UTC. Seeder writes UTC ISO timestamps; keep them
 # UTC-aligned end-to-end or age_days drifts by the local tz offset.
 _SCORED_QUERY = """
 SELECT
   i.id AS item_id, s.size,
   i.color, i.type, i.fit, i.season,
+  i.style, i.pattern, i.material,
+  i.gender, i.age_group, i.occasion, i.brand, i.price,
   s.stock_count, s.total_sold, s.last_sold_at, s.active,
   (julianday('now') - julianday(i.created_at)) AS age_days,
   CASE WHEN s.last_sold_at IS NULL
@@ -65,6 +80,9 @@ class StockStats:
             df = pd.read_sql_query(_SCORED_QUERY, conn)
         finally:
             conn.close()
+        # items.price is TEXT in the DB (e.g. "381.0"); coerce for numeric
+        # range filters in get_candidates.
+        df["price"] = pd.to_numeric(df["price"], errors="coerce")
         return self._score(df)
 
     def _score(self, df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:

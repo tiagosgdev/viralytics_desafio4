@@ -197,7 +197,7 @@ python3 stock_agent/stock_agent.py
 
 | Command | Action |
 |---|---|
-| `query color=red type=trousers size=M` | Set the structured query (any subset of color/type/fit/size). |
+| `query color=red type=trousers size=M` | Set the structured query (any subset of the keys below). |
 | `candidates [n]` | Fetch + show the 40 (or `n`) candidates with `match_count`. |
 | `rate` | Show push_score for each cached candidate. |
 | `pick [k]` | Have the LLM pick top-`k` (default 10) from cached candidates. |
@@ -207,9 +207,11 @@ python3 stock_agent/stock_agent.py
 
 If Ollama is unreachable, `pick` raises `RuntimeError` with the cause; REPL keeps running so you can retry once the daemon is up.
 
-#### Allowed query values
+#### Allowed query keys
 
-Pulled from `LNIAGIA/DB/models.py`. Anything else just won't match any rows (silent — `match_count` stays low).
+Pulled from `LNIAGIA/DB/models.py`. Unknown keys raise `ValueError`.
+
+**Equality keys** (each contributes to `match_count`; tier-based relaxation drops them one at a time):
 
 | Key | Allowed values |
 |---|---|
@@ -217,6 +219,23 @@ Pulled from `LNIAGIA/DB/models.py`. Anything else just won't match any rows (sil
 | `type` | `short_sleeve_top, long_sleeve_top, long_sleeve_outwear, vest, shorts, trousers, skirt, short_sleeve_dress, long_sleeve_dress, vest_dress, sling_dress` (underscores required) |
 | `fit` | `slim fit, regular, relaxed, oversized, tailored, loose, fitted, athletic, baggy, cropped` (spaces in `slim fit` need shell quoting) |
 | `size` | `XS, S, M, L, XL, XXL` (uppercase) |
+| `style` | `casual, formal, smart casual, sporty, bohemian, minimalist, streetwear, vintage, elegant, preppy` |
+| `pattern` | `plain, striped, checkered, plaid, floral, polka dot, geometric, abstract, animal print, camouflage, tie-dye, graphic, embroidered` |
+| `material` | `cotton, polyester, linen, silk, wool, denim, leather, suede, velvet, satin, chiffon, fleece, cashmere, nylon, rayon, spandex, organic cotton` |
+| `gender` | `male, female, unisex` |
+| `season` | `spring, summer, autumn, winter, all-season` |
+| `occasion` | `everyday, work, party, wedding, beach, sport, date night, travel, lounge, formal event` |
+| `brand` | Free-text. ~80 brands across budget/mid/premium/luxury/ultra_luxury tiers (see `BRAND_TIERS` in `models.py`). Examples: `Zara, H&M, Uniqlo, Levi's, Ralph Lauren, Gucci`. |
+| `age_group` | **Substring match (case-insensitive).** Stored as comma-separated string like `"adult, young adult"`. Query `age_group=adult` matches both `"adult"` and `"adult, young adult"`. Valid tokens: `baby, child, teenager, young adult, adult, senior`. |
+
+**Range keys** (hard filter — do NOT contribute to `match_count`; rows out of range are dropped before scoring):
+
+| Key | Type | Effect |
+|---|---|---|
+| `price_min` | float (EUR) | drop rows where `price < price_min` |
+| `price_max` | float (EUR) | drop rows where `price > price_max` |
+
+**Voting axes stay narrower.** `get_attribute_pressure()` and `get_stock_stats(by=...)` still operate only over the 4 PIVOT_KEYS (`color, type, fit, size`) — the extended keys exist purely for the retrieval phase.
 
 #### Example sessions
 
@@ -234,6 +253,22 @@ stock> pick 10
 ```
 
 Note: shell escaping for the space — `slim\ fit` or quote the whole token: `query "fit=slim fit"`.
+
+**A2. Extended query — narrow with material + brand + price cap**
+
+```
+stock> query color=red type=trousers material=denim brand=Levi's price_max=80
+stock> candidates
+40 candidates (sorted by match_count DESC, item_id ASC):
+  ( 4321, M  ) match=4  stock= 18 sold= 110 ... color=red type=trousers material=denim brand=Levi's
+  ...
+stock> pick 10
+[~90s] Top 10: ...
+```
+
+Notes:
+- `match_count` ranges 0–4 here (color/type/material/brand). `price_max=80` is a hard filter, not in `match_count`.
+- `Levi's` apostrophe + spaces in brand names: shell-quote — `query "brand=Levi's"`.
 
 **B. Partial query — only color + type**
 
@@ -426,3 +461,4 @@ EOF
 - Qdrant integration — kept untouched on purpose
 - pytest suite (smoke `__main__` + REPL is the only test layer for now)
 - Notebook with sanity plots (`stock_agent_plan.md` §5 step 8) — deferred to Demo Day prep
+- Type-specific narrow fields as query keys (`neckline`, `collar`, `sleeve_style`, `hem_style`, `closure`, `hood`, `insulation`, `waterproof`, `waist`, `rise`, `length`, `leg_style`, `dress_style`, pocket variants) — only valid per item type, so left out of the retrieval API. Customers can drill via dialogue (LLM picker has them in the candidate context if relevant)

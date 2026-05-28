@@ -15,7 +15,9 @@ import ollama
 # Sibling import without an __init__.py — same pattern stock_stats.py uses.
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
-from stock_stats import StockStats, PIVOT_KEYS  # noqa: E402
+from stock_stats import StockStats, PIVOT_KEYS, QUERY_KEYS, RANGE_KEYS  # noqa: E402
+
+_ALLOWED_KEYS = set(QUERY_KEYS) | set(RANGE_KEYS)
 
 
 DEFAULT_OLLAMA_MODEL = (
@@ -60,6 +62,9 @@ Weigh these store-side priorities:
   (risk running out before customer arrives).
 - `push_score` is a precomputed combined signal (higher = stronger
   candidate to push). Treat as ONE input among the above, not the only one.
+- Each candidate also carries `style`, `pattern`, `material`, `gender`,
+  `age_group`, `occasion`, `brand`, `price`. Use them to break ties or
+  to spot items that suit the customer's likely intent.
 
 Reply with a JSON object using EXACTLY this schema. No prose, no markdown,
 no extra fields:
@@ -99,28 +104,74 @@ class StockAgent:
     # ─── 1. Retrieve 40 candidates ──────────────────────────────────────
 
     def get_candidates(
-        self, query: dict[str, str], n: int = 40
+        self, query: dict, n: int = 40
     ) -> list[tuple[int, str]]:
-        """Tier-based attribute relaxation: items matching all params first,
-        then matches-except-1, then matches-except-2, etc., until `n` collected.
+        """Tier-based attribute relaxation: items matching all equality
+        params first, then matches-except-1, etc., until `n` collected.
 
-        query keys: any subset of color/type/fit/size. Unknown keys raise.
-        Filters: active=1 AND stock_count>0.
+        query keys:
+          - Equality (QUERY_KEYS): color, type, fit, size, style, pattern,
+            material, gender, age_group, season, occasion, brand.
+          - Substring (special-cased): age_group — case-insensitive
+            substring against the stored comma-separated string.
+          - Numeric range (RANGE_KEYS): price_min, price_max — hard
+            filter, NOT part of match_count.
+          - Unknown keys raise ValueError.
+
+        Filters always applied: active=1 AND stock_count>0.
         Tiebreaker within a tier: item_id ASC (neutral, deterministic).
         """
-        bad = [k for k in query if k not in PIVOT_KEYS]
+        bad = [k for k in query if k not in _ALLOWED_KEYS]
         if bad:
-            raise ValueError(f"unknown query keys: {bad}; allowed: {PIVOT_KEYS}")
+            raise ValueError(
+                f"unknown query keys: {bad}; "
+                f"allowed equality: {QUERY_KEYS}; range: {RANGE_KEYS}"
+            )
         if not query:
-            raise ValueError("query must contain at least one of color/type/fit/size")
+            raise ValueError("query is empty; provide at least one key")
+
+        # Numeric coercion for range keys (clean error if bad input)
+        price_min = price_max = None
+        if "price_min" in query:
+            try:
+                price_min = float(query["price_min"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"price_min must be numeric, got {query['price_min']!r}"
+                )
+        if "price_max" in query:
+            try:
+                price_max = float(query["price_max"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"price_max must be numeric, got {query['price_max']!r}"
+                )
 
         df = self.stats.df
         mask = (df["active"] == 1) & (df["stock_count"] > 0)
         df = df.loc[mask].copy()
 
+        # Hard range filter — applied BEFORE match_count (rows out of range
+        # are dropped entirely; NaN price excluded by comparison semantics).
+        if price_min is not None:
+            df = df.loc[df["price"] >= price_min]
+        if price_max is not None:
+            df = df.loc[df["price"] <= price_max]
+
+        if df.empty:
+            return []
+
+        # Equality / substring match_count over QUERY_KEYS only
         match_count = pd.Series(0, index=df.index)
         for k, v in query.items():
-            match_count = match_count + (df[k] == v).astype(int)
+            if k in RANGE_KEYS:
+                continue  # already applied as hard filter
+            if k == "age_group":
+                match_count = match_count + df["age_group"].str.contains(
+                    str(v), case=False, regex=False, na=False
+                ).astype(int)
+            else:
+                match_count = match_count + (df[k] == v).astype(int)
         df["__match_count"] = match_count
 
         df = df.sort_values(
@@ -265,6 +316,11 @@ class StockAgent:
                 row = self.stats.get_row(iid, sz)
             except KeyError:
                 continue
+            price = row.get("price")
+            try:
+                price_val = round(float(price), 2)
+            except (TypeError, ValueError):
+                price_val = None
             rows.append({
                 "item_id": int(iid),
                 "size": sz,
@@ -272,6 +328,14 @@ class StockAgent:
                 "type": row["type"],
                 "fit": row["fit"],
                 "season": row["season"],
+                "style": row["style"],
+                "pattern": row["pattern"],
+                "material": row["material"],
+                "gender": row["gender"],
+                "age_group": row["age_group"],
+                "occasion": row["occasion"],
+                "brand": row["brand"],
+                "price": price_val,
                 "stock_count": int(row["stock_count"]),
                 "total_sold": int(row["total_sold"]),
                 "age_days": round(float(row["age_days"]), 1),
