@@ -159,6 +159,10 @@ class StockAgent:
         if df.empty:
             return []
 
+        # Defensive copy — earlier .loc[...] chains may return a view of
+        # self.stats.df; the upcoming column assignment must not leak.
+        df = df.copy()
+
         # Include scoring → match_count (any-of within a key, 1 per key)
         match_count = pd.Series(0, index=df.index)
         for k, vals in include.items():
@@ -181,6 +185,21 @@ class StockAgent:
         """
         if not isinstance(q, dict):
             raise ValueError(f"query must be a dict, got {type(q).__name__}")
+
+        # First: reject typo'd top-level keys (anything not canonical AND
+        # not a valid shorthand key). Catches `price_mn` etc. before the
+        # mix-vs-canonical heuristic produces a misleading error.
+        _CANONICAL_TOP = {"include", "exclude", *RANGE_KEYS}
+        bad_top = [
+            k for k in q
+            if k not in _CANONICAL_TOP and k not in QUERY_KEYS
+        ]
+        if bad_top:
+            raise ValueError(
+                f"unknown top-level key(s): {bad_top}; "
+                f"allowed canonical: {sorted(_CANONICAL_TOP)}; "
+                f"allowed shorthand: {sorted(QUERY_KEYS)}"
+            )
 
         has_inc_exc = ("include" in q) or ("exclude" in q)
         bare_keys = [
@@ -378,6 +397,10 @@ class StockAgent:
             try:
                 row = self.stats.get_row(iid, sz)
             except KeyError:
+                print(
+                    f"warn: candidate ({iid},{sz}) missing from stats; skipping",
+                    file=sys.stderr,
+                )
                 continue
             price = row.get("price")
             try:
@@ -414,13 +437,26 @@ class StockAgent:
 
 _HELP = """\
 Commands:
-  query k=v [k=v ...]   set the structured query (keys: color, type, fit, size)
-  candidates [n]        fetch + show top-n (default 40) candidates with match_count
-  rate                  show push_score for each cached candidate
-  pick [k]              LLM picks top-k (default 10) from cached candidates
-  state                 print current query + cached count
-  help                  this help
-  exit / quit           leave REPL"""
+  query TOKEN [TOKEN ...]   set the structured query (tokens below)
+  candidates [n]            fetch + show top-n (default 40) candidates with match_count
+  rate                      show push_score for each cached candidate
+  pick [k]                  LLM picks top-k (default 10) from cached candidates
+  state                     print current query + cached count
+  reload                    re-read DB into StockStats (after external sell/restock)
+  help                      this help
+  exit / quit               leave REPL
+
+Query tokens:
+  key=v                     include key=v
+  key=v1,v2                 include key with multiple values (any-of)
+  +key=v[,v2]               explicit include (same as bare key=v)
+  -key=v[,v2]               exclude values (hard filter)
+  price_min=N / price_max=N numeric range (no +/- prefix)
+
+Equality keys: color, type, fit, size, style, pattern, material,
+               gender, age_group, season, occasion, brand.
+age_group uses case-insensitive substring (column stores "adult, young adult" etc.).
+See README §5 for the full canonical schema + value enums."""
 
 
 def _parse_query(tokens: list[str]) -> dict:
@@ -450,19 +486,26 @@ def _parse_query(tokens: list[str]) -> dict:
         if not lhs or not rhs:
             raise ValueError(f"empty key or value in {tok!r}")
 
-        # Prefix detection
+        # Range keys handled first — no +/- prefix allowed
+        if lhs in RANGE_KEYS:
+            extras[lhs] = rhs
+            continue
+        if lhs.startswith(("+-", "-+")):
+            raise ValueError(f"double prefix in {tok!r}")
         if lhs.startswith("+"):
             target, key = include, lhs[1:].strip()
         elif lhs.startswith("-"):
             target, key = exclude, lhs[1:].strip()
-        elif lhs in RANGE_KEYS:
-            extras[lhs] = rhs
-            continue
         else:
             target, key = include, lhs
 
         if not key:
             raise ValueError(f"missing key after prefix in {tok!r}")
+        if key in RANGE_KEYS:
+            raise ValueError(
+                f"range key {key!r} does not take a +/- prefix; "
+                f"use bare {key}=N"
+            )
 
         values = [v.strip() for v in rhs.split(",") if v.strip()]
         if not values:
@@ -570,6 +613,10 @@ def repl(agent: StockAgent) -> None:
                 print(_HELP)
             elif cmd == "state":
                 print(f"query={query}  cached_candidates={len(cands)}")
+            elif cmd == "reload":
+                agent.stats.reload()
+                cands = []
+                print("stats reloaded; cached candidates cleared")
             elif cmd == "query":
                 query = _parse_query(args)
                 print(f"query set: {query}")
