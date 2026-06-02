@@ -19,6 +19,26 @@ sys.path.insert(0, str(BASE_DIR))
 from stock_stats import StockStats, PIVOT_KEYS, QUERY_KEYS, RANGE_KEYS  # noqa: E402
 
 
+_PICK_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer"},
+                    "size": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["item_id", "size", "confidence"],
+            },
+        }
+    },
+    "required": ["picks"],
+}
+
+
 def _field_match(df: pd.DataFrame, key: str, values: list[str]) -> pd.Series:
     """Boolean mask over df: True where df[key] matches any value in `values`.
 
@@ -81,11 +101,18 @@ Weigh these store-side priorities:
 Reply with a JSON object using EXACTLY this schema. No prose, no markdown,
 no extra fields:
 
-{{"picks": [{{"item_id": <int>, "size": "<S>"}}, ...]}}
+{{"picks": [{{"item_id": <int>, "size": "<S>", "confidence": <float 0..1>}}, ...]}}
 
 Constraints:
-- Exactly {k} entries in `picks`, in priority order.
-- Each entry has ONLY `item_id` (int) and `size` (string).
+- Exactly {k} entries in `picks`, in priority order (highest confidence first).
+- Each entry is a FLAT object with ONLY three keys: `item_id` (int),
+  `size` (string), `confidence` (float). Do NOT nest under "item",
+  "data", or any other wrapper key. Do NOT include color/type/stock/etc.
+- `confidence` ∈ [0, 1] is YOUR self-assessed certainty that THIS is the
+  right pick given all the store priorities above PLUS the precomputed
+  `push_score` visible in each candidate row. 1.0 = sure, 0.0 = wild guess.
+  High push_score + good season match + healthy stock → high confidence.
+  Don't just copy the push_score; integrate it with the other signals.
 - Every (item_id, size) MUST be one of the candidates I sent you.
 - Do not invent items, do not include any other fields, do not wrap in
   markdown fences."""
@@ -112,6 +139,10 @@ class StockAgent:
     ) -> None:
         self.stats = stats or StockStats()
         self.model = model
+        # LLM knobs — loaded from the same stock_config.json the stats use
+        with open(self.stats.config_path) as fp:
+            _cfg = json.load(fp)
+        self.llm_temperature = float(_cfg.get("llm", {}).get("temperature", 0.5))
 
     # ─── 1. Retrieve 40 candidates ──────────────────────────────────────
 
@@ -279,8 +310,17 @@ class StockAgent:
         k: int = 10,
         *,
         verbose: bool = False,
-    ) -> list[tuple[int, str]]:
-        """LLM stock-manager picks top-k items from `candidates`.
+    ) -> list[dict]:
+        """LLM stock-manager picks top-k with per-item confidence.
+
+        Returns:
+            list of dicts: {"item_id": int, "size": str, "confidence": float}
+            confidence ∈ [0, 1] is the LLM's self-assessed certainty
+            (already factoring in push_score, which it sees in the
+            candidate context).
+
+        Non-deterministic: temperature from stock_config.json
+        (default 0.5) → picks vary across calls.
 
         Raises RuntimeError if Ollama is unreachable or returns invalid output.
         """
@@ -313,8 +353,8 @@ class StockAgent:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                options={"temperature": 0},
-                format="json",  # Ollama strict JSON mode
+                options={"temperature": self.llm_temperature},
+                format=_PICK_JSON_SCHEMA,  # Ollama JSON Schema enforcement
             )
         except Exception as exc:
             raise RuntimeError(
@@ -362,12 +402,19 @@ class StockAgent:
                 f"LLM JSON has no picks list. Got: {parsed!r}"
             )
 
-        # Validate, dedupe, restrict to candidate_set, cap at k
+        # Validate, dedupe, restrict to candidate_set, cap at k.
+        # Each pick is a dict with item_id + size + confidence.
         seen: set[tuple[int, str]] = set()
-        picks: list[tuple[int, str]] = []
+        picks: list[dict] = []
         for entry in picks_raw:
             if not isinstance(entry, dict):
                 continue
+            # Unwrap if the LLM nested the actual pick under a single key
+            # (qwen2.5:7b sometimes wraps each entry as {"item": {...}}).
+            if "item_id" not in entry and len(entry) == 1:
+                inner = next(iter(entry.values()))
+                if isinstance(inner, dict) and "item_id" in inner:
+                    entry = inner
             iid = entry.get("item_id")
             sz = entry.get("size")
             if not isinstance(iid, int) or not isinstance(sz, str):
@@ -375,8 +422,18 @@ class StockAgent:
             key = (iid, sz)
             if key in seen or key not in candidate_set:
                 continue
+            # Self-reported confidence: clamp + default if missing/invalid
+            raw_conf = entry.get("confidence", 0.5)
+            try:
+                conf = max(0.0, min(1.0, float(raw_conf)))
+            except (TypeError, ValueError):
+                conf = 0.5
             seen.add(key)
-            picks.append(key)
+            picks.append({
+                "item_id": iid,
+                "size": sz,
+                "confidence": round(conf, 4),
+            })
             if len(picks) == k:
                 break
 
@@ -568,13 +625,14 @@ def _print_rate(agent: StockAgent, cands: list[tuple[int, str]]) -> None:
 
 
 def _print_pick(agent: StockAgent, cands: list[tuple[int, str]], k: int) -> None:
-    print(f"\nLLM picking top {k} (model={agent.model})...")
+    print(f"\nLLM picking top {k} (model={agent.model}, temp={agent.llm_temperature})...")
     picks = agent.pick_top(cands, k=k)
     print(f"\nTop {k}:")
-    for rank, (iid, sz) in enumerate(picks, 1):
+    for rank, pick in enumerate(picks, 1):
+        iid, sz, conf = pick["item_id"], pick["size"], pick["confidence"]
         row = agent.stats.get_row(iid, sz)
         print(
-            f"  {rank:>2}. ({iid:>5}, {sz:<3})  "
+            f"  {rank:>2}. ({iid:>5}, {sz:<3})  conf={conf:.4f}  "
             f"push={row['push_score']:.3f}  stock={int(row['stock_count']):>3}  "
             f"sold={int(row['total_sold']):>4}  age={row['age_days']:>6.1f}d  "
             f"season={row['season']:<10} color={row['color']:<10} type={row['type']}"

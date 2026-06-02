@@ -193,8 +193,21 @@ from stock_agent import StockAgent
 agent = StockAgent()
 forty   = agent.get_candidates({"color": "red", "size": "M"}, n=40)
 ratings = agent.rate(forty)                  # {(item_id, size): push_score}
-top10   = agent.pick_top(forty, k=10)        # LLM picks
+top10   = agent.pick_top(forty, k=10)        # LLM picks with confidence
+# top10 = [
+#   {"item_id": 5425, "size": "M", "confidence": 0.7234},
+#   {"item_id": 1503, "size": "L", "confidence": 0.6810},
+#   ...
+# ]
 ```
+
+#### `pick_top` confidence + non-determinism
+
+- Returns `list[dict]` with `item_id`, `size`, `confidence ∈ [0, 1]`.
+- Confidence is **LLM self-reported per item** — the LLM sees `push_score` in the candidate context table and is instructed to factor it in alongside season match, stock health, age, etc. No code-level blending.
+- Output enforced by an Ollama JSON Schema (`format=<schema>`) so the model can't drift into nested wrappers.
+- **Non-deterministic** — `temperature=0.5` (from `stock_config.json:llm.temperature`). Consecutive `pick_top` calls produce slightly different orderings + confidence values, even on the same candidate set.
+- For Phase-2 inter-agent negotiation, `confidence` maps to the agent's "certainty" axis (the C in {certainty, importance, final}).
 
 REPL:
 ```

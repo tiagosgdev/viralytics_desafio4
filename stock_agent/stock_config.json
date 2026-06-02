@@ -21,6 +21,9 @@
             "VELOCITY_REF": 0.5
         }
     },
+    "llm": {
+        "temperature": 0.5
+    },
     "seeder": {
         "age_days_max": 1080,
         "age_bucket_weights": [0.55, 0.30, 0.15],
