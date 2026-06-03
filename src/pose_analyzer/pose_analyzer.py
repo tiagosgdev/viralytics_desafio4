@@ -21,7 +21,7 @@ from .visualization import draw_pose_overlay
 
 DEFAULT_MODEL_RELATIVE_PATH = Path("models") / "weights" / "mediapipe" / "pose_landmarker_heavy.task"
 DEFAULT_NUM_POSES = 4
-MIN_REQUIRED_KEYPOINTS = 8
+MIN_REQUIRED_KEYPOINTS = 5
 
 
 @dataclass
@@ -94,7 +94,7 @@ class PoseAnalyzer:
             return False
         return True
 
-    def analyze(self, image_bgr: np.ndarray, *, draw_overlay: bool = True, include_landmarks: bool = True) -> PoseAnalysisResult:
+    def analyze(self, image_bgr: np.ndarray, *, draw_overlay: bool = True, include_landmarks: bool = True, user_height_cm: float | None = None, gender: str = "") -> PoseAnalysisResult:
         """Run pose detection, segmentation, validation, silhouette sampling, and classification."""
         if image_bgr is None or image_bgr.size == 0:
             raise ValueError("Input image is empty")
@@ -117,14 +117,16 @@ class PoseAnalyzer:
         pose_validation = validate_pose(landmarks, image_bgr.shape, body_mask, self.visibility_threshold)
         warnings.extend(pose_validation.reasons)
 
-        measurements, measurement_points, measurement_warnings = self._compute_measurements(landmarks, silhouette_profile)
+        measurements, measurement_points, measurement_warnings, torso_length_px = self._compute_measurements(landmarks, silhouette_profile)
         warnings.extend(measurement_warnings)
         pose_confidence = average_confidence([landmarks[idx] for idx in visible_indices])
 
         if self._measurements_are_valid(measurements, measurement_points) and pose_validation.valid:
             measurements = self._smoother.update(measurements)
-            body_shape, shape_confidence = classify_body_shape(measurements, self.body_shape_thresholds)
+            body_shape, shape_confidence = classify_body_shape(measurements, self.body_shape_thresholds, gender=gender)
             confidence = round(max(0.0, min(1.0, pose_confidence * 0.30 + pose_validation.score * 0.35 + shape_confidence * 0.35)), 3)
+            if user_height_cm and user_height_cm > 0 and torso_length_px > 0:
+                measurements.update(self._scale_to_cm(measurements, landmarks, torso_length_px, user_height_cm))
         else:
             body_shape = "unknown"
             confidence = round(max(0.0, min(0.35, pose_confidence * pose_validation.score * 0.35)), 3)
@@ -281,21 +283,21 @@ class PoseAnalyzer:
             warnings.append(f"Body segmentation failed: {exc}")
             return None
 
-    def _compute_measurements(self, landmarks: list[LandmarkPoint], silhouette_profile: SilhouetteProfile) -> tuple[dict[str, float], dict[str, LandmarkPoint], list[str]]:
+    def _compute_measurements(self, landmarks: list[LandmarkPoint], silhouette_profile: SilhouetteProfile) -> tuple[dict[str, float], dict[str, LandmarkPoint], list[str], float]:
         warnings: list[str] = []
         ls = self._required_landmark(landmarks, PoseLandmark.LEFT_SHOULDER, warnings)
         rs = self._required_landmark(landmarks, PoseLandmark.RIGHT_SHOULDER, warnings)
         lh = self._required_landmark(landmarks, PoseLandmark.LEFT_HIP, warnings)
         rh = self._required_landmark(landmarks, PoseLandmark.RIGHT_HIP, warnings)
         if not all((ls, rs, lh, rh)):
-            return self._empty_measurements(), {}, warnings
+            return self._empty_measurements(), {}, warnings, 0.0
 
         shoulder_mid = midpoint(ls, rs)
         hip_mid = midpoint(lh, rh)
         torso_length = get_distance(shoulder_mid, hip_mid)
         if torso_length <= 1e-6:
             warnings.append("Torso length collapsed to zero; returning empty measurements")
-            return self._empty_measurements(), {}, warnings
+            return self._empty_measurements(), {}, warnings, 0.0
 
         landmark_shoulder = safe_ratio(get_distance(ls, rs), torso_length)
         landmark_hip = safe_ratio(get_distance(lh, rh), torso_length)
@@ -313,7 +315,33 @@ class PoseAnalyzer:
             measurements["waist_width"] = round(waist, 4)
             measurements["waist_hip_ratio"] = round(safe_ratio(waist, hip, default=1.0), 4)
 
-        return measurements, {"left_shoulder": ls, "right_shoulder": rs, "left_hip": lh, "right_hip": rh}, warnings
+        return measurements, {"left_shoulder": ls, "right_shoulder": rs, "left_hip": lh, "right_hip": rh}, warnings, torso_length
+
+    def _scale_to_cm(self, measurements: dict[str, float], landmarks: list[LandmarkPoint], torso_length_px: float, user_height_cm: float) -> dict[str, float]:
+        """Convert normalised ratio measurements to cm using the user's declared height."""
+        nose = landmarks[int(PoseLandmark.NOSE)]
+        l_heel = landmarks[int(PoseLandmark.LEFT_HEEL)]
+        r_heel = landmarks[int(PoseLandmark.RIGHT_HEEL)]
+        scale: float | None = None
+        heel_ok = (
+            landmark_is_reliable(l_heel, visibility_threshold=self.visibility_threshold, presence_threshold=self.presence_threshold) or
+            landmark_is_reliable(r_heel, visibility_threshold=self.visibility_threshold, presence_threshold=self.presence_threshold)
+        )
+        nose_ok = landmark_is_reliable(nose, visibility_threshold=self.visibility_threshold, presence_threshold=self.presence_threshold)
+        if nose_ok and heel_ok:
+            heels = [p for p in (l_heel, r_heel) if landmark_is_reliable(p, visibility_threshold=self.visibility_threshold, presence_threshold=self.presence_threshold)]
+            feet_y = sum(p.y for p in heels) / len(heels)
+            nose_to_heel_px = feet_y - nose.y
+            if nose_to_heel_px > 10:
+                scale = (user_height_cm * 0.88) / nose_to_heel_px
+        if scale is None:
+            scale = (user_height_cm * 0.32) / torso_length_px
+        torso_cm = torso_length_px * scale
+        result: dict[str, float] = {"torso_length_cm": round(torso_cm, 1)}
+        for key in ("shoulder_width", "hip_width", "waist_width"):
+            if key in measurements:
+                result[key.replace("_width", "_width_cm")] = round(measurements[key] * torso_cm, 1)
+        return result
 
     def _required_landmark(self, landmarks: list[LandmarkPoint], idx: PoseLandmark, warnings: list[str]) -> LandmarkPoint | None:
         point = landmarks[int(idx)]

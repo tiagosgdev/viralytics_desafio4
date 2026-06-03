@@ -27,7 +27,9 @@ import asyncio
 import base64
 import json
 import os
+import threading
 import time
+from collections import deque
 from typing import Callable, Dict, List, Optional
 
 import cv2
@@ -38,11 +40,10 @@ from src.recommendations.engine import RecommendationEngine
 
 
 # ── Constants ──────────────────────────────────────────────────────────────
-CAPTURE_SECONDS = 5      # how long to scan the user
-FRAME_INTERVAL  = 0.08   # ~12 fps — feels live, light on CPU
+CAPTURE_SECONDS = 5         # how long to scan the user
+FRAME_INTERVAL  = 1 / 30    # 30 fps target (~33 ms per frame)
 
-
-BODY_OVERLAY_INTERVAL = 1.5  # seconds between expensive body-analysis preview refreshes
+BODY_OVERLAY_INTERVAL = 0.2  # seconds between body-analysis refreshes (drives person_in_frame)
 
 
 class CameraStream:
@@ -68,10 +69,22 @@ class CameraStream:
         self.source      = source
         self.width       = width
         self.height      = height
+
         self._cap: Optional[cv2.VideoCapture] = None
         self._is_warm = False
+
+        # Background camera reader — always holds the latest frame, never blocks async.
+        self._frame_deque: deque = deque(maxlen=1)
+        self._reader_thread: Optional[threading.Thread] = None
+        self._reader_stop = threading.Event()
+
+        # Body analysis cache — refreshed in background, never blocks the frame loop.
         self._last_body_overlay_time: float = 0.0
-        self._cached_body_overlay: Optional[np.ndarray] = None
+        self._cached_body_analysis: Optional[dict] = None
+        self._body_analysis_pending: Optional[asyncio.Task] = None
+
+        self._user_height_cm: Optional[float] = None
+        self._user_gender: str = ""
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -85,14 +98,18 @@ class CameraStream:
         """
         self._open()
         try:
-            await send(json.dumps({"type": "ready", "message": "camera_ready"}))
+            await send(json.dumps({"type": "ready", "message": "camera_ready", "pose_available": self.body_analysis_resolver is not None}))
             started = False
             while True:
                 if not started:
                     while True:
+                        t_frame = time.perf_counter()
                         await self._send_preview_frame(send)
-                        cmd = await self._wait_for_command(receive, timeout=FRAME_INTERVAL)
+                        remaining_wait = max(0.001, FRAME_INTERVAL - (time.perf_counter() - t_frame))
+                        cmd, cmd_data = await self._wait_for_command(receive, timeout=remaining_wait)
                         if cmd == "start":
+                            self._user_height_cm = self._parse_height(cmd_data)
+                            self._user_gender = self._parse_gender(cmd_data)
                             started = True
                             break
                         if cmd == "disconnect":
@@ -137,9 +154,11 @@ class CameraStream:
                 }))
 
                 # Wait for user action
-                cmd = await self._wait_for_command(receive)
+                cmd, cmd_data = await self._wait_for_command(receive)
 
                 if cmd == "retry":
+                    self._user_height_cm = self._parse_height(cmd_data) or self._user_height_cm
+                    self._user_gender = self._parse_gender(cmd_data) or self._user_gender
                     continue                  # restart full capture cycle
 
                 elif cmd == "more_recs":
@@ -155,7 +174,7 @@ class CameraStream:
                             "body_analysis": body_analysis,
                             "body_annotated_frame": body_annotated_frame,
                         }))
-                        inner_cmd = await self._wait_for_command(receive)
+                        inner_cmd, _ = await self._wait_for_command(receive)
                         if inner_cmd == "retry":
                             break           # break inner → restart capture
                         elif inner_cmd == "more_recs":
@@ -215,19 +234,21 @@ class CameraStream:
         last_frame: Optional[np.ndarray] = None
 
         while True:
-            elapsed   = time.perf_counter() - t_start
+            t_frame   = time.perf_counter()
+            elapsed   = t_frame - t_start
             remaining = max(0.0, CAPTURE_SECONDS - elapsed)
 
             frame = self._read_frame()
             if frame is None:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
             last_frame = frame.copy()
 
             result = self.detector.detect(frame)
-            pose_preview = self._resolve_body_overlay_frame(frame)
-            preview_base = pose_preview if pose_preview is not None else frame
-            annotated = self._draw_capture_overlay(preview_base, result, int(remaining) + 1)
+            # Kick off body analysis refresh (non-blocking) for person-in-frame detection.
+            await self._refresh_body_analysis_if_stale(frame)
+
+            annotated = self._draw_capture_overlay(frame, result, int(remaining) + 1)
 
             # Accumulate
             for det in result.detections:
@@ -250,7 +271,9 @@ class CameraStream:
             if is_last:
                 break
 
-            await asyncio.sleep(FRAME_INTERVAL)
+            # Sleep only the time left in this frame budget so we hit the fps target.
+            frame_cost = time.perf_counter() - t_frame
+            await asyncio.sleep(max(0.0, FRAME_INTERVAL - frame_cost))
 
         return (
             {
@@ -281,23 +304,33 @@ class CameraStream:
         await asyncio.sleep(0.5)
 
     async def _send_preview_frame(self, send):
-        """Stream a raw preview frame while the app is waiting for the user to start scanning."""
+        """Stream a live preview frame — always uses the freshest camera frame, never frozen."""
         frame = self._read_frame()
         if frame is None:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
             return
 
-        preview_frame = self._resolve_body_overlay_frame(frame)
-        if preview_frame is None:
-            preview_frame = frame
-        _, buf = cv2.imencode(".jpg", preview_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        # Trigger background body analysis refresh (returns immediately).
+        await self._refresh_body_analysis_if_stale(frame)
+
+        # Always encode and send the live camera frame, not the stale analyzed overlay.
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         b64 = base64.b64encode(buf).decode("utf-8")
+
+        analysis = self._cached_body_analysis or {}
+        silhouette_widths = (analysis.get("silhouette") or {}).get("widths") or {}
+        person_in_frame = bool(
+            silhouette_widths.get("shoulder_width", 0.0) > 0.0
+            and silhouette_widths.get("hip_width", 0.0) > 0.0
+        )
         await send(json.dumps({
             "type": "frame",
             "phase": "preview",
             "frame": b64,
             "countdown": 0,
             "flash": False,
+            "person_in_frame": person_in_frame,
+            "pose_confidence": round(float(analysis.get("confidence", 0.0)), 3),
         }))
 
     def _build_final_results_frame(
@@ -366,21 +399,21 @@ class CameraStream:
             for det in detections
         ]
 
-    async def _wait_for_command(self, receive, timeout: Optional[float] = 120) -> str:
-        """Wait for a client command and return its cmd value."""
+    async def _wait_for_command(self, receive, timeout: Optional[float] = 120) -> tuple[str, dict]:
+        """Wait for a client command and return (cmd, full_data)."""
         try:
             if timeout is None:
                 msg = await receive()
             else:
                 msg = await asyncio.wait_for(receive(), timeout=timeout)
             if msg is None:
-                return "disconnect"
+                return "disconnect", {}
             data = json.loads(msg) if isinstance(msg, str) else msg
-            return data.get("cmd", "disconnect")
+            return data.get("cmd", "disconnect"), data
         except asyncio.TimeoutError:
-            return "timeout"
+            return "timeout", {}
         except Exception:
-            return "disconnect"
+            return "disconnect", {}
 
     def _dominant_categories(self, accumulated: Dict[str, float]) -> List[str]:
         """Top 5 categories by average confidence."""
@@ -403,31 +436,59 @@ class CameraStream:
         if frame is None or self.body_analysis_resolver is None:
             return None, None
         try:
-            return self.body_analysis_resolver(frame.copy())
+            return self.body_analysis_resolver(frame.copy(), self._user_height_cm, self._user_gender)
         except Exception as exc:
             print(f"Warning: body analysis resolver failed: {exc}")
             return None, None
 
-    def _resolve_body_overlay_frame(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
-        if frame is None or self.body_analysis_resolver is None:
-            return None
+    async def _refresh_body_analysis_if_stale(self, frame: np.ndarray) -> None:
+        """Fire body analysis in a background thread if the cache is stale.
+
+        Returns immediately. Callers use self._cached_body_analysis which is
+        updated when the background task completes.
+        """
+        if self.body_analysis_resolver is None:
+            return
         now = time.perf_counter()
         if now - self._last_body_overlay_time < BODY_OVERLAY_INTERVAL:
-            return self._cached_body_overlay
+            return
+        if self._body_analysis_pending is not None and not self._body_analysis_pending.done():
+            return  # previous refresh still running
+
+        self._last_body_overlay_time = now  # claim the slot before yielding
+        frame_copy = frame.copy()
+        resolver = self.body_analysis_resolver
+        height_cm = self._user_height_cm
+        gender = self._user_gender
+
+        async def _task() -> None:
+            try:
+                loop = asyncio.get_event_loop()
+                analysis, _ = await loop.run_in_executor(
+                    None, resolver, frame_copy, height_cm, gender
+                )
+                self._cached_body_analysis = analysis
+            except Exception as exc:
+                print(f"Warning: body analysis refresh failed: {exc}")
+            finally:
+                self._body_analysis_pending = None
+
+        self._body_analysis_pending = asyncio.create_task(_task())
+
+    @staticmethod
+    def _parse_height(data: dict) -> Optional[float]:
+        """Extract a valid height value (100–250 cm) from a command payload."""
         try:
-            analysis, encoded_frame = self.body_analysis_resolver(frame.copy())
-            if not analysis or not analysis.get("landmarks_detected") or not encoded_frame:
-                self._last_body_overlay_time = now
-                return self._cached_body_overlay
-            buffer = np.frombuffer(base64.b64decode(encoded_frame), dtype=np.uint8)
-            decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-            self._cached_body_overlay = decoded
-            self._last_body_overlay_time = now
-            return decoded
-        except Exception as exc:
-            print(f"Warning: body overlay preview failed: {exc}")
-            self._last_body_overlay_time = now
-            return self._cached_body_overlay
+            h = float(data.get("user_height_cm") or 0)
+            return h if 100.0 <= h <= 250.0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_gender(data: dict) -> str:
+        """Extract a gender string (male/female) from a command payload."""
+        raw = str(data.get("user_gender") or "").strip().lower()
+        return raw if raw in ("male", "female") else ""
 
     def _draw_capture_overlay(
         self, frame: np.ndarray, result: DetectionResult, countdown: int
@@ -451,6 +512,21 @@ class CameraStream:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (232, 255, 71), 2, cv2.LINE_AA)
         return out
 
+    # ── Camera reader thread ───────────────────────────────────────────────
+
+    def _reader_loop(self) -> None:
+        """Background thread: continuously reads frames into the deque."""
+        while not self._reader_stop.is_set():
+            cap = self._cap
+            if cap is None or not cap.isOpened():
+                time.sleep(0.005)
+                continue
+            ret, frame = cap.read()
+            if ret:
+                self._frame_deque.append(frame)
+            else:
+                time.sleep(0.001)
+
     def _open(self):
         if self._cap is not None and self._cap.isOpened():
             return
@@ -463,19 +539,31 @@ class CameraStream:
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self._cap.set(cv2.CAP_PROP_FPS, 30)
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self._cap.isOpened():
             self._cap.release()
             self._cap = None
             raise RuntimeError(f"Cannot open camera source: {self.source}")
 
+        # Start the background reader thread.
+        self._frame_deque.clear()
+        self._reader_stop.clear()
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True, name="cam-reader")
+        self._reader_thread.start()
+
     def _close(self):
+        self._reader_stop.set()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=2.0)
+            self._reader_thread = None
         if self._cap:
             self._cap.release()
             self._cap = None
             self._is_warm = False
+        self._frame_deque.clear()
 
     def _read_frame(self) -> Optional[np.ndarray]:
-        if self._cap is None:
-            return None
-        ret, frame = self._cap.read()
-        return frame if ret else None
+        """Return the latest camera frame without blocking."""
+        if self._frame_deque:
+            return self._frame_deque[-1].copy()
+        return None

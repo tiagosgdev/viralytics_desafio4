@@ -61,10 +61,22 @@
       <img id="feed" alt="Camera feed">
       <div id="flash"></div>
       <div id="frozen-label"><i class="fas fa-camera"></i> OUTFIT CAPTURED</div>
+      <div class="person-guide" id="person-guide" hidden>
+        <svg viewBox="0 0 80 210" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="40" cy="16" rx="12" ry="14"/>
+          <line x1="40" y1="30" x2="40" y2="40"/>
+          <path d="M 14 54 C 14 40 66 40 66 54"/>
+          <path d="M 14 54 L 16 104 L 64 104 L 66 54"/>
+          <path d="M 14 54 L 4 86 L 8 106"/>
+          <path d="M 66 54 L 76 86 L 72 106"/>
+          <path d="M 28 104 L 24 158 L 22 196"/>
+          <path d="M 52 104 L 56 158 L 58 196"/>
+        </svg>
+      </div>
       <div class="idle" id="idle">
         <div class="idle-icon"><i class="fas fa-shirt"></i></div>
         <div class="idle-title">READY TO SCAN</div>
-        <div class="idle-sub">Press "Start Scan" to detect your outfit</div>
+        <div class="idle-sub">Stand in front of the camera to begin</div>
       </div>
     </div>
 
@@ -95,8 +107,25 @@
       <div class="psec">
         <div class="plbl">Scan Controls</div>
         <div class="steps"><div class="step" id="s1"></div><div class="step" id="s2"></div><div class="step" id="s3"></div></div>
-        <div class="phase-lbl" id="plbl">Press start to begin</div>
-        <button id="btn-start" onclick="startScan()"><i class="fas fa-play"></i> Start Scan</button>
+        <div class="phase-lbl" id="plbl">Stand in frame to begin</div>
+        <button id="btn-start" hidden onclick="startScan()"><i class="fas fa-play"></i> Start Scan</button>
+        <div class="scan-auto-hint" id="scan-auto-hint">
+          <span class="hint-icon"><i class="fas fa-person-walking"></i></span>
+          <span id="scan-hint-text">Stand in front of the camera</span>
+        </div>
+        <div class="conf-row">
+          <label for="height-input">YOUR HEIGHT</label>
+          <input type="number" id="height-input" min="100" max="250" placeholder="e.g. 175">
+          <span class="conf-val">cm</span>
+        </div>
+        <div class="conf-row">
+          <label for="gender-select">GENDER</label>
+          <select id="gender-select" style="flex:1;background:var(--surface-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:0.8rem;">
+            <option value="">—</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </div>
         <div class="actions" id="actions">
           <button class="abtn abtn-retry" onclick="sendCmd('retry')"><i class="fas fa-rotate-right"></i> Retry Scan</button>
           <button class="abtn abtn-more" onclick="sendCmd('more_recs')"><i class="fas fa-sparkles"></i> More Suggestions</button>
@@ -468,6 +497,10 @@ const NAME_TO_HEX = {
 
 let ws = null;
 let selectedPersona = null;
+let userHeightCm = null;
+let autoScanFrames = 0;
+let autoScanTimeout = null;
+const AUTO_SCAN_FRAMES_REQUIRED = 8;
 let frozen = false;
 let currentSessionId = null;
 let currentDetectedCategories = [];
@@ -499,6 +532,9 @@ const plbl = document.getElementById('plbl');
 const btnStart = document.getElementById('btn-start');
 const actions = document.getElementById('actions');
 const tagsEl = document.getElementById('tags');
+const personGuide = document.getElementById('person-guide');
+const scanAutoHint = document.getElementById('scan-auto-hint');
+const scanHintText = document.getElementById('scan-hint-text');
 const bodySummaryEl = document.getElementById('body-summary');
 const recsEl = document.getElementById('recs');
 const flashEl = document.getElementById('flash');
@@ -565,9 +601,19 @@ function connectCamera() {
         setSt('idle', 'Camera ready');
       }
       if (pendingStart) {
-        ws.send(JSON.stringify({ cmd: 'start' }));
+        ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
         pendingStart = false;
         beginCaptureUi();
+      } else if (msg.pose_available === false) {
+        btnStart.hidden = false;
+        personGuide.hidden = true;
+        scanAutoHint.style.display = 'none';
+        setSt('idle', 'Camera ready');
+      } else {
+        btnStart.hidden = true;
+        scanAutoHint.style.display = '';
+        personGuide.hidden = false;
+        setSt('idle', 'Stand in frame to begin');
       }
       return;
     }
@@ -621,10 +667,26 @@ function disconnectCamera() {
   setSt('idle', 'Camera paused');
 }
 
+function triggerAutoScan() {
+  autoScanTimeout = null;
+  if (!cameraReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (actions.classList.contains('show')) return;
+  const heightVal = parseInt(document.getElementById('height-input').value, 10);
+  userHeightCm = (heightVal >= 100 && heightVal <= 250) ? heightVal : null;
+  ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
+  beginCaptureUi();
+}
+
 function beginCaptureUi() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   feed.style.display = 'block';
   idle.classList.add('hidden');
   cam.classList.add('active');
+  cam.classList.remove('person-detected', 'person-ready');
+  personGuide.hidden = true;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
+  autoScanFrames = 0;
   btnStart.disabled = true;
   actions.classList.remove('show');
   setSteps('capturing');
@@ -639,6 +701,38 @@ function handleCameraMessage(msg) {
         feed.src = 'data:image/jpeg;base64,' + msg.frame;
         idle.classList.add('hidden');
         cam.classList.remove('active');
+
+        if (msg.person_in_frame) {
+          autoScanFrames++;
+          cam.classList.add('person-detected');
+          cam.classList.remove('person-ready');
+          scanAutoHint.classList.add('person-detected');
+          scanAutoHint.classList.remove('person-ready');
+          const remaining = AUTO_SCAN_FRAMES_REQUIRED - autoScanFrames;
+          if (remaining <= 0 && !autoScanTimeout) {
+            cam.classList.remove('person-detected');
+            cam.classList.add('person-ready');
+            scanAutoHint.classList.remove('person-detected');
+            scanAutoHint.classList.add('person-ready');
+            scanHintText.textContent = 'Starting scan...';
+            autoScanFrames = 0;
+            // 500ms delay gives the analysis one full refresh cycle (200ms) to confirm
+            // the person is still in frame before committing to the scan.
+            autoScanTimeout = setTimeout(triggerAutoScan, 500);
+          } else if (remaining > 0) {
+            scanHintText.textContent = 'Hold still… (' + remaining + ')';
+          }
+        } else {
+          // Reset immediately — any single false frame cancels the countdown entirely.
+          if (autoScanTimeout) {
+            clearTimeout(autoScanTimeout);
+            autoScanTimeout = null;
+          }
+          autoScanFrames = 0;
+          cam.classList.remove('person-detected', 'person-ready');
+          scanAutoHint.classList.remove('person-detected', 'person-ready');
+          scanHintText.textContent = 'Stand in front of the camera';
+        }
       }
       return;
     }
@@ -708,7 +802,7 @@ function startScan() {
     return;
   }
   if (cameraReady && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ cmd: 'start' }));
+    ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
     pendingStart = false;
     beginCaptureUi();
   } else {
@@ -722,7 +816,7 @@ function sendCmd(cmd) {
     return;
   }
 
-  ws.send(JSON.stringify({ cmd }));
+  ws.send(JSON.stringify({ cmd, user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
 
   if (cmd === 'retry') {
     frozen = false;
@@ -803,7 +897,14 @@ function renderBodyAnalysis(analysis) {
   const poseScore = Math.round((Number(poseValidation.score || 0)) * 100);
   const landmarkCount = Number(analysis.landmarks_detected || 0);
 
-  const metricRow = (label, value) =>
+  const hasCm = measurements.shoulder_width_cm != null;
+  const metricRow = (label, raw, cm) => {
+    const display = (hasCm && cm != null && Number(cm) > 0)
+      ? Number(cm).toFixed(1) + ' cm'
+      : Number(raw || 0).toFixed(2);
+    return '<div class="body-metric"><span>' + label + '</span><strong>' + display + '</strong></div>';
+  };
+  const ratioRow = (label, value) =>
     '<div class="body-metric"><span>' + label + '</span><strong>' + Number(value || 0).toFixed(2) + '</strong></div>';
 
   bodySummaryEl.innerHTML =
@@ -814,13 +915,14 @@ function renderBodyAnalysis(analysis) {
       '<div class="body-chip"><span>Pose: </span><strong>' + poseScore + '%</strong></div>' +
     '</div>' +
     '<div class="body-metrics-grid">' +
-      metricRow('Shoulders: ', measurements.shoulder_width) +
-      metricRow('Hips: ', measurements.hip_width) +
-      metricRow('Waist: ', measurements.waist_width) +
-      metricRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
-      metricRow('Sil Chest: ', silhouetteWidths.chest_width) +
-      metricRow('Sil Thigh: ', silhouetteWidths.thigh_width) +
+      metricRow('Shoulders: ', measurements.shoulder_width, measurements.shoulder_width_cm) +
+      metricRow('Hips: ', measurements.hip_width, measurements.hip_width_cm) +
+      metricRow('Waist: ', measurements.waist_width, measurements.waist_width_cm) +
+      ratioRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
+      ratioRow('Sil Chest: ', silhouetteWidths.chest_width) +
+      ratioRow('Sil Thigh: ', silhouetteWidths.thigh_width) +
     '</div>' +
+    (hasCm && measurements.torso_length_cm ? '<div class="body-chip-row" style="margin-top:6px"><div class="body-chip"><span>Torso: </span><strong>' + Number(measurements.torso_length_cm).toFixed(1) + ' cm</strong></div></div>' : '') +
     (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
 }
 
@@ -1259,18 +1361,23 @@ function setSt(state, text) {
 }
 
 function resetIdle() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   frozen = false;
   pendingStart = false;
+  autoScanFrames = 0;
   hideFrozenLabel();
   feed.style.display = 'block';
   idle.classList.add('hidden');
-  cam.classList.remove('active');
+  cam.classList.remove('active', 'person-detected', 'person-ready');
+  personGuide.hidden = false;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
   btnStart.disabled = false;
   actions.classList.remove('show');
   s1.className = 'step';
   s2.className = 'step';
   s3.className = 'step';
-  plbl.textContent = 'Press start to begin';
+  plbl.textContent = 'Stand in frame to begin';
   setSt('idle', 'Ready');
 }
 
@@ -1803,7 +1910,13 @@ function returnToPersonaSelection() {
 }
 
 function resetPersonaState() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   disconnectCamera();
+  autoScanFrames = 0;
+  cam.classList.remove('person-detected', 'person-ready');
+  personGuide.hidden = true;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
   currentSessionId = null;
   currentDetectedCategories = [];
   currentRecommendations = [];

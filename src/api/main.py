@@ -399,12 +399,12 @@ async def health():
     return HealthResponse(status="ok", model_loaded=detector is not None)
 
 
-def _run_body_analysis(frame: np.ndarray) -> tuple[dict | None, str | None]:
+def _run_body_analysis(frame: np.ndarray, user_height_cm: float | None = None, gender: str = "") -> tuple[dict | None, str | None]:
     """Run pose/silhouette analysis and return JSON plus optional JPEG overlay."""
     if pose_analyzer is None:
         return None, None
 
-    analysis = pose_analyzer.analyze(frame, draw_overlay=True, include_landmarks=True)
+    analysis = pose_analyzer.analyze(frame, draw_overlay=True, include_landmarks=True, user_height_cm=user_height_cm, gender=gender)
     annotated_b64 = None
     if analysis.annotated_image is not None:
         ok, buf = cv2.imencode(".jpg", analysis.annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
