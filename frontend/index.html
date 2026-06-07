@@ -153,6 +153,7 @@
       <div class="recs-hdr">
         <div class="recs-headline">
           <div class="plbl">Store Recommendations</div>
+          <div id="agent-status" class="agent-status" hidden></div>
           <div class="recs-actions">
             <button class="recs-scroll-btn" id="recs-scroll-left" type="button" onclick="scrollRecommendations(-1)" disabled aria-label="Scroll recommendations left">
               <i class="fas fa-chevron-left"></i>
@@ -516,6 +517,9 @@ let recommendationDetailIndex = 0;
 let hasChatIntroLoaded = false;
 let introRequestInFlight = false;
 let introRequestToken = 0;
+let agentRoundGeneration = 0;
+let currentDetectedBodyType = '';
+let currentDetectedClothingType = '';
 
 const feed = document.getElementById('feed');
 const landingScreen = document.getElementById('landing-screen');
@@ -775,6 +779,10 @@ function handleCameraMessage(msg) {
     initializeSearchSession(currentDetectedCategories, currentRecommendations);
     actions.classList.add('show');
     plbl.textContent = 'Choose an action below';
+    // Trigger multi-agent round asynchronously (non-blocking)
+    currentDetectedClothingType = (msg.detections || [])[0]?.class_name || '';
+    currentDetectedBodyType = msg.body_analysis?.body_shape || '';
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -794,6 +802,11 @@ function startScan() {
   currentActiveFilters = {};
   hasShownInitialRecommendationsModal = false;
   recommendationDetailIndex = 0;
+  agentRoundGeneration++; // invalidate any in-flight agent round
+  currentDetectedBodyType = '';
+  currentDetectedClothingType = '';
+  const agentEl = document.getElementById('agent-status');
+  if (agentEl) agentEl.hidden = true;
   toggleRecommendationsModal(false);
   hideFrozenLabel();
   pendingStart = true;
@@ -924,6 +937,85 @@ function renderBodyAnalysis(analysis) {
     '</div>' +
     (hasCm && measurements.torso_length_cm ? '<div class="body-chip-row" style="margin-top:6px"><div class="body-chip"><span>Torso: </span><strong>' + Number(measurements.torso_length_cm).toFixed(1) + ' cm</strong></div></div>' : '') +
     (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
+}
+
+function formatAgentRec(item) {
+  const typeName = (item.type || '').replace(/_/g, ' ');
+  const brandName = item.brand || '';
+  const scores = item.agent_scores || {};
+  return {
+    id:       String(item.item_id || ''),
+    name:     [brandName, typeName].filter(Boolean).join(' ').trim() || `Item ${item.item_id}`,
+    category: item.type || '',
+    price:    item.price != null ? `EUR ${Number(item.price).toFixed(2)}` : 'N/A',
+    image_url: null,
+    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}`,
+    score:    Math.round((1 - (item.rank - 1) / 10) * 100) / 100,
+    brand:    item.brand || null,
+    metadata: Object.fromEntries(
+      ['color','style','pattern','material','fit','season','occasion','gender','age_group','size']
+        .filter(k => item[k] != null)
+        .map(k => [k, item[k]])
+    ),
+  };
+}
+
+async function triggerAgentRecommendations(detectedType, detectedBodyType) {
+  const myGen = ++agentRoundGeneration;
+  const agentEl = document.getElementById('agent-status');
+
+  if (agentEl) {
+    agentEl.hidden = false;
+    agentEl.className = 'agent-status loading';
+    agentEl.textContent = '⏳ Agents computing…';
+  }
+
+  const genderEl = document.getElementById('gender-select');
+  const payload = {
+    detected_type:      detectedType      || '',
+    detected_body_type: detectedBodyType  || '',
+    detected_color:     '',
+    user_gender:        genderEl ? (genderEl.value || '') : '',
+  };
+
+  try {
+    const resp = await fetch('/api/recommend', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+
+    if (myGen !== agentRoundGeneration) return; // stale round
+
+    if (resp.status === 503 || resp.status === 504) {
+      // MA not available — silently hide
+      if (agentEl) agentEl.hidden = true;
+      return;
+    }
+
+    if (!resp.ok) {
+      if (agentEl) { agentEl.className = 'agent-status error'; agentEl.textContent = '⚠ Agent round failed'; }
+      return;
+    }
+
+    const data = await resp.json();
+    if (myGen !== agentRoundGeneration) return; // stale round
+
+    const agentRecs = (data.recommendations || []).map(formatAgentRec);
+    if (agentRecs.length) {
+      renderRecs(agentRecs, { autoOpen: false });
+      currentRecommendations = agentRecs;
+    }
+
+    if (agentEl) {
+      agentEl.className = 'agent-status done';
+      agentEl.textContent = '✓ Agent recommendations';
+    }
+  } catch (err) {
+    if (myGen !== agentRoundGeneration) return;
+    console.warn('Agent round error:', err);
+    if (agentEl) { agentEl.className = 'agent-status error'; agentEl.textContent = '⚠ Agent unavailable'; }
+  }
 }
 
 function renderRecs(recs, options = {}) {

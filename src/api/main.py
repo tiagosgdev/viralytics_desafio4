@@ -43,6 +43,8 @@ from src.api.schemas import (
     DetectionResponse,
     HealthResponse,
     LoginRequest,
+    RecommendRequest,
+    RecommendResponse,
     RegisterRequest,
     SessionResponse,
     SessionStartRequest,
@@ -115,6 +117,10 @@ search_service: UnifiedSearchService = None
 pose_analyzer: PoseAnalyzer | None = None
 detectors_by_persona: dict[str, BaseDetector] = {}
 cameras_by_persona: dict[str, CameraStream] = {}
+
+# Multi-agent recommendation system (lazy: None until first /api/recommend call
+# or until XMPP broker is reachable at startup)
+rec_system = None
 
 
 def _find_ffmpeg_exe() -> Optional[str]:
@@ -350,14 +356,33 @@ async def startup():
             print(f"⚠️  Whisper not available: {e}")
 
     asyncio.create_task(_load_whisper())
+
+    # ── Multi-agent recommendation system ─────────────────────────────────
+    async def _start_rec_system():
+        global rec_system
+        try:
+            from multi_agent.run import RecommendationSystem
+            rec_system = RecommendationSystem()
+            await rec_system.start()
+            print("🤖  Multi-agent recommendation system online")
+        except Exception as exc:
+            print(f"⚠️  Multi-agent system unavailable (XMPP broker not running?): {exc}")
+            rec_system = None
+
+    asyncio.create_task(_start_rec_system())
     print("✅  API ready\n")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global cameras_by_persona
+    global cameras_by_persona, rec_system
     for camera_instance in cameras_by_persona.values():
         camera_instance.shutdown()
+    if rec_system is not None:
+        try:
+            await rec_system.stop()
+        except Exception as exc:
+            print(f"⚠️  Error stopping multi-agent system: {exc}")
 
 
 # ── Static / proxy routes ───────────────────────────────────────────────────
@@ -510,8 +535,6 @@ def _db_backed_recommendations_with_profile_sync(
     detected_categories: list[str],
     user_profile: Optional[dict] = None,
 ) -> list[dict]:
-    print(f"DEBUG user_profile received: {user_profile}")  # ← add this
-
     try:
         from LNIAGIA.search_app import search_detected_items
     except Exception as exc:
@@ -562,10 +585,34 @@ def _db_backed_recommendations_with_profile_sync(
 
 # ── Core detection implementation ─────────────────────────────────────────────
 
+async def _run_multiagent_round(
+    detected_color: str,
+    detected_type: str,
+    detected_body_type: str,
+    user_gender: str,
+) -> list[dict] | None:
+    """Fire a multi-agent round and return results, or None on any failure."""
+    if rec_system is None or not rec_system.is_ready:
+        return None
+    try:
+        return await asyncio.wait_for(
+            rec_system.recommend(
+                detected_color     = detected_color,
+                detected_type      = detected_type,
+                detected_body_type = detected_body_type,
+                user_gender        = user_gender,
+            ),
+            timeout=120,
+        )
+    except Exception as exc:
+        print(f"⚠️  Multi-agent round failed: {exc}")
+        return None
+
+
 async def _detect_image_impl(
     file: UploadFile,
     persona: str = "cruella",
-    user_profile: Optional[dict] = None,       # ← NEW
+    user_profile: Optional[dict] = None,
 ) -> DetectionResponse:
     """
     Shared implementation for image/mobile scan uploads.
@@ -586,7 +633,10 @@ async def _detect_image_impl(
 
     active_detector = _resolve_detector(persona)
     result = active_detector.detect(frame)
-    cats = list({d.class_name for d in result.detections})
+    cats = list({
+        d.class_name for d in result.detections
+        if not d.class_name.startswith("class_")
+    })
     body_analysis: dict | None = None
     body_annotated_frame: str | None = None
 
@@ -606,23 +656,17 @@ async def _detect_image_impl(
                 "landmarks": [],
             }
 
-    # ── CHANGED: pass user_profile into the recommendation fetch ──────────
     recs = await run_in_threadpool(
-        _db_backed_recommendations_with_profile_sync,
-        cats,
-        user_profile,   # ← was just cats before
+        _db_backed_recommendations_with_profile_sync, cats, user_profile
     )
-    
     if not isinstance(recs, list):
         recs = []
 
-    # Pass user_profile into create_session so it enriches base_filters
-    # and is persisted on the session for follow-up chat turns.
     session = search_service.create_session(
         cats,
         recs,
         persona=persona,
-        user_profile=user_profile,          # ← NEW
+        user_profile=user_profile,
     )
 
     # Encode annotated frame
@@ -1057,6 +1101,51 @@ def _hash_password(password: str) -> str:
 
 def _verify_password(password: str, hashed: str) -> bool:
     return _hash_password(password) == hashed
+
+
+# ── Multi-agent recommendation endpoint ───────────────────────────────────────
+
+@app.post("/api/recommend", response_model=RecommendResponse)
+async def recommend(payload: RecommendRequest):
+    """
+    Run a sealed-bid multi-agent recommendation round and return the top-10 items.
+
+    Inputs (all optional — omit any that are not yet detected):
+      detected_color, detected_type, detected_body_type  — from vision scan
+      user_answer    — free-text reply to the intent question
+      user_gender    — "male" | "female" | ""
+      user_height_cm — for size guidance (passed through, not used in ranking)
+
+    Returns a ranked list of up to 10 clothing items with per-agent scores and
+    weights so the frontend can explain *why* each item was recommended.
+
+    Requires the XMPP broker to be running: `docker compose up -d xmpp`
+    """
+    if rec_system is None or not rec_system.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Multi-agent recommendation system is not available. "
+                "Start the XMPP broker with: docker compose up -d xmpp"
+            ),
+        )
+
+    try:
+        results = await rec_system.recommend(
+            detected_color     = payload.detected_color,
+            detected_type      = payload.detected_type,
+            detected_body_type = payload.detected_body_type,
+            user_answer        = payload.user_answer,
+            user_gender        = payload.user_gender,
+            user_height_cm     = payload.user_height_cm,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Recommendation round timed out.",
+        )
+
+    return RecommendResponse(recommendations=results)
 
 
 # ── WebSocket camera endpoint ─────────────────────────────────────────────────

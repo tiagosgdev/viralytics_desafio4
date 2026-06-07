@@ -112,3 +112,19 @@ class AuthResponse(BaseModel):
     message: Optional[str] = None
     user_id: Optional[str] = None
     token: Optional[str] = None
+
+
+# ── Multi-agent recommendation ────────────────────────────────────────────────
+
+class RecommendRequest(BaseModel):
+    detected_color:     str = ""
+    detected_type:      str = ""
+    detected_body_type: str = ""
+    user_answer:        str = ""
+    user_gender:        str = ""
+    user_height_cm:     Optional[float] = None
+
+
+class RecommendResponse(BaseModel):
+    recommendations: List[Dict[str, Any]]
+    round_id: Optional[str] = None

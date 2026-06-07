@@ -9,7 +9,8 @@ param(
     [string]$RouterModel = "",
     [switch]$SkipOllama,
     [switch]$SkipVectorCheck,
-    [switch]$AutoPullModel
+    [switch]$AutoPullModel,
+    [switch]$SkipXmpp
 )
 
 $argsList = @(
@@ -45,6 +46,10 @@ if ($SkipVectorCheck) {
 
 if ($AutoPullModel) {
     $argsList += "--auto-pull-model"
+}
+
+if ($SkipXmpp) {
+    $argsList += "--skip-xmpp"
 }
 
 python @argsList
