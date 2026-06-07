@@ -344,6 +344,20 @@ DRESS_STYLE_DESCRIPTIONS = {
     "sheath": "sheath dress (tailored, column silhouette, fitted)",
 }
 
+# ═══ BODY TYPE DESCRIPTIONS ═══
+# Body shape a garment is designed to flatter. Keys MUST match
+# DB.models.BODY_TYPE exactly (used for filtering and validation).
+BODY_TYPE_DESCRIPTIONS = {
+    "hourglass": "hourglass shape (balanced bust and hips, defined waist, curvy)",
+    "pear": "pear shape (hips wider than shoulders, triangle bottom-heavy)",
+    "triangle": "triangle shape (narrow shoulders, wider hips, bottom-heavy)",
+    "rectangle": "rectangle shape (straight, balanced shoulders and hips, little waist definition)",
+    "inverted_triangle": "inverted triangle shape (broad shoulders, narrow hips, top-heavy, athletic V-shape)",
+    "apple": "apple shape (fuller midsection, weight around waist, round)",
+    "trapezoid": "trapezoid shape (broad shoulders tapering to narrower waist, fit athletic male build)",
+    "oval": "oval shape (fuller midsection, rounded torso, broader middle)",
+}
+
 
 # ══════════════════════════════════════════════════════════════
 # CONVENIENCE: single dict mapping field name → its lookup table
@@ -361,6 +375,7 @@ ALL_MAPPINGS = {
     "occasion": OCCASION_DESCRIPTIONS,
     "gender": GENDER_DESCRIPTIONS,
     "age_group": AGE_GROUP_DESCRIPTIONS,
+    "body_type": BODY_TYPE_DESCRIPTIONS,
     # Type-specific fields
     "neckline": NECKLINE_DESCRIPTIONS,
     "collar": COLLAR_DESCRIPTIONS,

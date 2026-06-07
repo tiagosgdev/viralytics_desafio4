@@ -14,6 +14,7 @@ try:
         get_random_brand_for_type,
         generate_price_for_item,
         generate_age_groups,
+        generate_body_types,
         get_valid_genders_for_type,
         filter_by_age_appropriateness,
         get_weighted_season_for_type,
@@ -34,6 +35,7 @@ except ModuleNotFoundError:
         get_random_brand_for_type,
         generate_price_for_item,
         generate_age_groups,
+        generate_body_types,
         get_valid_genders_for_type,
         filter_by_age_appropriateness,
         get_weighted_season_for_type,
@@ -150,6 +152,11 @@ def generate_item():
         else:
             # All other fields: random choice
             item[field] = random.choice(EXTRA_FIELD_VALUES[field])
+
+    # ═══ STEP 14: Body type(s) the garment flatters ═══
+    # Constraint #7: depends on gender pool + cut (fit/dress_style/leg/waist).
+    # Computed last so it can read the type-specific fields set above.
+    item["body_type"] = generate_body_types(item)
 
     return item
 

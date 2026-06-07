@@ -36,6 +36,29 @@ GENDER = (
     "male", "female", "unisex"
 )
 
+# ═══ BODY TYPE ═══
+# Body shape(s) a garment is designed to flatter. Values are gender-specific.
+FEMALE_BODY_TYPES = (
+    "hourglass", "pear", "triangle", "rectangle", "inverted_triangle", "apple"
+)
+
+MALE_BODY_TYPES = (
+    "trapezoid", "rectangle", "inverted_triangle", "triangle", "oval"
+)
+
+# Shapes common to both pools — used for unisex items so the value stays neutral.
+UNISEX_BODY_TYPES = tuple(bt for bt in FEMALE_BODY_TYPES if bt in MALE_BODY_TYPES)
+# -> ("triangle", "rectangle", "inverted_triangle")
+
+BODY_TYPES_BY_GENDER = {
+    "female": FEMALE_BODY_TYPES,
+    "male": MALE_BODY_TYPES,
+    "unisex": UNISEX_BODY_TYPES,
+}
+
+# Full set of body-type values (union, no duplicates) — useful for validation.
+BODY_TYPE = tuple(dict.fromkeys(FEMALE_BODY_TYPES + MALE_BODY_TYPES))
+
 AGE_GROUP = (
     "baby", "child", "teenager", "young adult", "adult", "senior"
 )
@@ -347,12 +370,88 @@ OCCASION_TYPE_CONSTRAINTS = {
 }
 
 
+# ═══ 7. BODY-TYPE FLATTERING LOGIC ═══
+# Which body shapes a garment flatters, inferred from its cut.
+# Each garment attribute (fit, dress_style, leg_style, waist_style) contributes
+# affinity points to the body types it flatters. The best-scoring shapes within
+# the item's gender pool are chosen. The names below span both gender pools;
+# they are intersected with the gender-appropriate pool at selection time, so a
+# shape that doesn't exist for the item's gender is simply ignored.
+
+# How the overall fit of a garment flatters different builds.
+FIT_BODYTYPE_AFFINITY = {
+    "slim fit":  ("hourglass", "trapezoid", "rectangle", "inverted_triangle"),
+    "slim":      ("hourglass", "trapezoid", "rectangle", "inverted_triangle"),
+    "fitted":    ("hourglass", "trapezoid", "inverted_triangle", "rectangle"),
+    "tailored":  ("hourglass", "trapezoid", "rectangle", "inverted_triangle", "pear", "triangle"),
+    "athletic":  ("trapezoid", "inverted_triangle", "hourglass"),
+    "regular":   ("rectangle", "trapezoid", "triangle", "oval", "pear", "hourglass"),
+    "relaxed":   ("rectangle", "apple", "oval", "triangle", "pear"),
+    "loose":     ("apple", "oval", "triangle", "rectangle", "pear"),
+    "oversized": ("rectangle", "apple", "oval", "triangle"),
+    "baggy":     ("rectangle", "apple", "oval", "triangle"),
+    "cropped":   ("hourglass", "rectangle", "inverted_triangle", "trapezoid"),
+}
+
+# Dress silhouettes and the shapes they balance.
+DRESS_STYLE_BODYTYPE_AFFINITY = {
+    "a-line":        ("pear", "apple", "inverted_triangle", "hourglass", "rectangle"),
+    "fit and flare": ("pear", "apple", "hourglass", "rectangle", "triangle"),
+    "empire":        ("apple", "pear", "rectangle", "inverted_triangle"),
+    "bodycon":       ("hourglass", "rectangle"),
+    "sheath":        ("hourglass", "rectangle", "trapezoid"),
+    "shift":         ("rectangle", "apple", "oval", "inverted_triangle"),
+    "wrap":          ("hourglass", "pear", "apple", "triangle", "rectangle"),
+    "maxi":          ("pear", "apple", "rectangle", "hourglass", "triangle"),
+    "midi":          ("rectangle", "hourglass", "pear"),
+    "mini":          ("hourglass", "rectangle", "inverted_triangle", "trapezoid"),
+    "shirt dress":   ("rectangle", "apple", "oval", "triangle"),
+    "slip dress":    ("hourglass", "rectangle", "inverted_triangle"),
+}
+
+# Trouser/short leg cuts and the builds they balance (esp. hips vs. shoulders).
+LEG_STYLE_BODYTYPE_AFFINITY = {
+    "skinny":   ("hourglass", "trapezoid", "rectangle", "inverted_triangle"),
+    "slim":     ("hourglass", "trapezoid", "rectangle", "inverted_triangle"),
+    "straight": ("rectangle", "trapezoid", "triangle", "oval", "hourglass", "pear"),
+    "bootcut":  ("pear", "triangle", "inverted_triangle", "hourglass"),
+    "wide leg": ("pear", "triangle", "inverted_triangle", "apple", "rectangle"),
+    "flared":   ("pear", "triangle", "inverted_triangle", "hourglass"),
+    "tapered":  ("trapezoid", "rectangle", "inverted_triangle", "oval", "triangle"),
+    "jogger":   ("rectangle", "oval", "triangle", "trapezoid"),
+    "cargo":    ("rectangle", "triangle", "oval", "pear"),
+}
+
+# Waistline treatments and the shapes they define/forgive.
+WAIST_STYLE_BODYTYPE_AFFINITY = {
+    "high-waisted": ("hourglass", "pear", "apple", "rectangle", "triangle"),
+    "mid-rise":     ("rectangle", "hourglass", "trapezoid", "pear"),
+    "low-rise":     ("hourglass", "trapezoid", "inverted_triangle", "rectangle"),
+    "elastic":      ("apple", "oval", "triangle", "rectangle", "pear"),
+    "drawstring":   ("apple", "oval", "triangle", "rectangle"),
+    "belted":       ("hourglass", "rectangle", "apple", "pear"),
+    "paper bag":    ("rectangle", "apple", "pear"),
+    # "regular" intentionally omitted — carries no strong flattering signal.
+}
+
+# Maps an item field to the affinity table that scores it.
+BODYTYPE_AFFINITY_SOURCES = {
+    "fit": FIT_BODYTYPE_AFFINITY,
+    "dress_style": DRESS_STYLE_BODYTYPE_AFFINITY,
+    "leg_style": LEG_STYLE_BODYTYPE_AFFINITY,
+    "waist_style": WAIST_STYLE_BODYTYPE_AFFINITY,
+}
+
+# How many shapes a garment flatters (weighted; capped at the gender-pool size).
+BODYTYPE_COUNT_WEIGHTS = {1: 0.20, 2: 0.40, 3: 0.30, 4: 0.10}
+
+
 # ═══ FIELD DEFINITIONS ═══
 
 # All global field names (including dynamic ones)
 GLOBAL_FIELDS = (
     "type", "color", "style", "pattern", "material", "fit",
-    "gender", "age_group", "season", "occasion", "brand", "price",
+    "gender", "body_type", "age_group", "season", "occasion", "brand", "price",
 )
 
 # Static global fields (have predefined value options)
@@ -953,6 +1052,67 @@ def get_valid_genders_for_type(item_type):
     return GENDER_CONSTRAINTS_BY_TYPE.get(item_type, GENDER)
 
 
+def generate_body_types(item, rng=random):
+    """
+    Picks the body shape(s) a garment is designed to flatter, based on its cut.
+
+    Constraint #7: Body-Type Flattering Logic
+    - Values are gender-specific: female pool, male pool, or — for unisex items —
+      only the shapes shared by both pools, so the value stays neutral.
+    - Garment attributes (fit, dress_style, leg_style, waist_style) add affinity
+      points to the body types they flatter; the best-scoring shapes win, with a
+      base score so every shape in the pool stays possible.
+    - Returns 1-4 shapes (weighted, capped at pool size), ordered best-fit first
+      so the primary shape leads — mirroring how age_group lists its primary first.
+
+    Args:
+        item (dict): Item with at least 'gender'; optionally fit / dress_style /
+            leg_style / waist_style for smarter, cut-aware assignment.
+        rng (random.Random): RNG to use. Pass a seeded instance (e.g.
+            random.Random(item_id)) for reproducible, store-consistent output.
+
+    Returns:
+        str: Comma-separated body types (e.g. "pear, apple, hourglass"),
+             or "" if the gender has no body-type pool.
+    """
+    gender = item.get("gender", "unisex")
+    pool = BODY_TYPES_BY_GENDER.get(gender, UNISEX_BODY_TYPES)
+    if not pool:
+        return ""
+
+    # Base score keeps every pool member eligible even with no garment signal.
+    scores = {bt: 1.0 for bt in pool}
+
+    # Add affinity points from each garment attribute that carries a signal.
+    for field, table in BODYTYPE_AFFINITY_SOURCES.items():
+        value = item.get(field)
+        if not value:
+            continue
+        for body_type in table.get(value, ()):  # value -> flattered shapes
+            if body_type in scores:
+                scores[body_type] += 2.0
+
+    # Decide how many shapes to assign (never more than the pool holds).
+    counts = [c for c in BODYTYPE_COUNT_WEIGHTS if c <= len(pool)]
+    weights = [BODYTYPE_COUNT_WEIGHTS[c] for c in counts]
+    num = rng.choices(counts, weights=weights, k=1)[0]
+
+    # Weighted sampling without replacement — higher-scoring shapes favored.
+    candidates = list(scores.keys())
+    candidate_weights = [scores[bt] for bt in candidates]
+    chosen = []
+    for _ in range(num):
+        pick = rng.choices(candidates, weights=candidate_weights, k=1)[0]
+        idx = candidates.index(pick)
+        candidates.pop(idx)
+        candidate_weights.pop(idx)
+        chosen.append(pick)
+
+    # Order best-fit first (primary shape leads), like age_group.
+    chosen.sort(key=lambda bt: scores[bt], reverse=True)
+    return ", ".join(chosen)
+
+
 def filter_by_age_appropriateness(field_name, value, age_groups_str):
     """
     Checks if a value is appropriate for the given age groups.
@@ -1150,7 +1310,7 @@ def get_valid_insulation_for_season(season):
 FILTERABLE_FIELDS = [
     # ─── Global fields (every item has these) ───
     "type", "color", "style", "pattern", "material", "fit",
-    "gender", "age_group", "season", "occasion",
+    "gender", "age_group", "season", "occasion", "body_type",
     # ─── Type-specific (most user-facing; skips technical ones
     "neckline", "collar", "sleeve_style", "hem_style",
     "closure", "hood", "insulation", "waterproof", "outwear_pockets",
