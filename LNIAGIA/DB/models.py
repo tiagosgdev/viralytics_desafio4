@@ -1310,7 +1310,7 @@ def get_valid_insulation_for_season(season):
 FILTERABLE_FIELDS = [
     # ─── Global fields (every item has these) ───
     "type", "color", "style", "pattern", "material", "fit",
-    "gender", "age_group", "season", "occasion",
+    "gender", "age_group", "season", "occasion", "body_type",
     # ─── Type-specific (most user-facing; skips technical ones
     "neckline", "collar", "sleeve_style", "hem_style",
     "closure", "hood", "insulation", "waterproof", "outwear_pockets",
