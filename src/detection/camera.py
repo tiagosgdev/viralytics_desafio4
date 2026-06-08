@@ -105,20 +105,22 @@ class CameraStream:
                 }
                 dominant_cats = self._dominant_categories(filtered)
                 recs = self._resolve_recommendations(dominant_cats, user_profile=user_profile)
-                final_detections, final_b64 = self._build_final_results_frame(last_frame, filtered)
+                final_detections, final_b64, dom_color = self._build_final_results_frame(last_frame, filtered)
+
+                # Print the aggregated dominant color once for this session results
+                try:
+                    if dom_color:
+                        print(f"[DETECT-AVG] color={dom_color.get('rgb')} name='{dom_color.get('name')}'")
+                    else:
+                        print("[DETECT-AVG] color=<none>")
+                except Exception:
+                    pass
 
                 await send(json.dumps({
                     "type": "results",
-                    "detections": [
-                        {
-                            "class_id": det.class_id,
-                            "class_name": det.class_name,
-                            "confidence": round(det.confidence, 3),
-                            "bbox": det.bbox,
-                        }
-                        for det in final_detections
-                    ],
+                    "detections": self._serialize_detections(final_detections),
                     "dominant":        dominant_cats,
+                    "dominant_color":  dom_color,
                     "recommendations": recs,
                     "annotated_frame": final_b64,
                 }))
@@ -135,12 +137,10 @@ class CameraStream:
                         new_recs = self._resolve_recommendations(dominant_cats, user_profile=user_profile)
                         await send(json.dumps({
                             "type": "results",
-                            "detections": [
-                                {"class_name": cat, "confidence": round(conf, 3)}
-                                for cat, conf in filtered.items()
-                            ],
+                            "detections": self._serialize_detections(final_detections),
                             "dominant":        dominant_cats,
                             "recommendations": new_recs,
+                            "dominant_color":  dom_color,
                         }))
                         inner_cmd = await self._wait_for_command(receive)
                         if inner_cmd == "retry":
@@ -286,9 +286,9 @@ class CameraStream:
         self,
         frame: Optional[np.ndarray],
         filtered: Dict[str, float],
-    ) -> tuple[List[Detection], Optional[str]]:
+    ) -> tuple[List[Detection], Optional[str], Optional[dict]]:
         if frame is None:
-            return [], None
+            return [], None, None
 
         result = self.detector.detect(frame)
         kept = [
@@ -296,7 +296,7 @@ class CameraStream:
             if det.class_name in filtered and det.confidence >= self.detector.conf_thres
         ]
         if not kept:
-            return [], None
+            return [], None, None
 
         annotated = self.detector.draw(
             frame,
@@ -308,9 +308,45 @@ class CameraStream:
             ),
         )
         _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        return kept, base64.b64encode(buf).decode("utf-8")
+
+        # Compute an aggregated dominant color across kept detections.
+        # Average the RGB tuples; choose the most common non-empty color_name if available.
+        dom_color = None
+        try:
+            rgbs = [getattr(d, 'color', None) for d in kept if getattr(d, 'color', None)]
+            names = [getattr(d, 'color_name', '') for d in kept if getattr(d, 'color_name', '')]
+            if rgbs:
+                n = len(rgbs)
+                avg_r = round(sum([int(c[0]) for c in rgbs]) / n)
+                avg_g = round(sum([int(c[1]) for c in rgbs]) / n)
+                avg_b = round(sum([int(c[2]) for c in rgbs]) / n)
+                # majority color name
+                cname = ''
+                if names:
+                    from collections import Counter
+                    cnt = Counter(names)
+                    # pick the most common name
+                    cname = cnt.most_common(1)[0][0]
+                dom_color = { 'rgb': [avg_r, avg_g, avg_b], 'name': str(cname) if cname else '' }
+        except Exception:
+            dom_color = None
+
+        return kept, base64.b64encode(buf).decode("utf-8"), dom_color
 
     # ── Helpers ────────────────────────────────────────────────────────────
+
+    def _serialize_detections(self, detections: List[Detection]) -> List[dict]:
+        return [
+            {
+                "class_id": det.class_id,
+                "class_name": det.class_name,
+                "confidence": round(det.confidence, 3),
+                "bbox": det.bbox,
+                "color": list(det.color) if getattr(det, "color", None) else None,
+                "color_name": getattr(det, "color_name", ""),
+            }
+            for det in detections
+        ]
 
     async def _wait_for_command(self, receive, timeout: Optional[float] = 120) -> str:
         """Wait for a client command and return its cmd value."""

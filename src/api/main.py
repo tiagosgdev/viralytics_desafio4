@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import cv2
@@ -113,7 +114,7 @@ detectors_by_persona: dict[str, BaseDetector] = {}
 cameras_by_persona: dict[str, CameraStream] = {}
 
 
-def _find_ffmpeg_exe() -> str | None:
+def _find_ffmpeg_exe() -> Optional[str]:
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
@@ -132,7 +133,7 @@ def _find_ffmpeg_exe() -> str | None:
     return None
 
 
-def _find_fashionnet_weights() -> str | None:
+def _find_fashionnet_weights() -> Optional[str]:
     env = os.getenv("FASHIONNET_WEIGHTS")
     if env:
         full = PROJECT_ROOT / "models" / "weights" / env / "best.pt"
@@ -172,7 +173,7 @@ def _resolve_assistant_mode(payload: ConversationRequest) -> str:
 
 # ── User-profile helpers ───────────────────────────────────────────────────
 
-def _get_user_profile_from_db(user_id: int) -> dict | None:
+def _get_user_profile_from_db(user_id: int) -> Optional[dict]:
     """
     Fetch a user's preference profile from the SQLite DB.
     Returns None if the user doesn't exist or the DB is unreachable.
@@ -200,7 +201,7 @@ def _get_user_profile_from_db(user_id: int) -> dict | None:
     if row is None:
         return None
 
-    def _split(value: str | None) -> list[str]:
+    def _split(value: Optional[str]) -> list[str]:
         if not value:
             return []
         return [v.strip() for v in value.split(",") if v.strip()]
@@ -216,7 +217,7 @@ def _get_user_profile_from_db(user_id: int) -> dict | None:
     }
 
 
-def _get_user_profile(user_id: int | None) -> dict | None:
+def _get_user_profile(user_id: Optional[int]) -> Optional[dict]:
     """
     Resolve a user_id (already extracted + validated by JWT) to a DB profile.
     Returns None for guests or users with no profile row.
@@ -243,7 +244,7 @@ def _get_user_profile(user_id: int | None) -> dict | None:
 #     return _format_conversation_results(ranked_results)
 
 
-def _preload_search_embeddings_sync() -> str | None:
+def _preload_search_embeddings_sync() -> Optional[str]:
     global search_service
 
     if search_service is None:
@@ -355,7 +356,7 @@ async def shutdown():
 _GOOGLE_IMAGE_HOSTS = {"drive.google.com", "drive.usercontent.google.com"}
 
 
-def _extract_google_drive_file_id(raw_url: str) -> str | None:
+def _extract_google_drive_file_id(raw_url: str) -> Optional[str]:
     parsed = urlparse(raw_url)
     host = parsed.netloc.lower()
     if host not in _GOOGLE_IMAGE_HOSTS:
@@ -428,7 +429,7 @@ async def image_proxy(url: str):
 @app.post("/api/session/start", response_model=SessionResponse)
 async def start_session(
     payload: SessionStartRequest,
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     persona = normalize_persona(payload.persona)
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
@@ -484,7 +485,7 @@ async def warmup_chat():
 
 def _db_backed_recommendations_with_profile_sync(
     detected_categories: list[str],
-    user_profile: dict | None = None,
+    user_profile: Optional[dict] = None,
 ) -> list[dict]:
     print(f"DEBUG user_profile received: {user_profile}")  # ← add this
 
@@ -541,7 +542,7 @@ def _db_backed_recommendations_with_profile_sync(
 async def _detect_image_impl(
     file: UploadFile,
     persona: str = "cruella",
-    user_profile: dict | None = None,       # ← NEW
+    user_profile: Optional[dict] = None,       # ← NEW
 ) -> DetectionResponse:
     """
     Shared implementation for image/mobile scan uploads.
@@ -595,6 +596,8 @@ async def _detect_image_impl(
                 "class_name": d.class_name,
                 "confidence": round(d.confidence, 3),
                 "bbox":       d.bbox,
+                "color":      d.color,            # RGB tuple
+                "color_name": d.color_name,
             }
             for d in result.detections
         ],
@@ -610,7 +613,7 @@ async def _detect_image_impl(
 async def detect_image(
     persona: str = "cruella",
     file: UploadFile = File(...),
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     """
     Accepts an uploaded image, runs detection, returns detections + recommendations.
@@ -629,7 +632,7 @@ async def detect_image(
 async def mobile_scan(
     persona: str = "cruella",
     file: UploadFile = File(...),
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     """
     Mobile-friendly alias for image scan uploads from native clients.
@@ -643,7 +646,7 @@ async def mobile_scan(
 
 # ── Conversation / chat endpoints ─────────────────────────────────────────────
 
-def _get_detected_type(session_id: str | None, detected_categories: list[str]) -> str | None:
+def _get_detected_type(session_id: Optional[str], detected_categories: list[str]) -> Optional[str]:
     if detected_categories:
         return detected_categories[0]
     if session_id:

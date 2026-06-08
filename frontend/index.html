@@ -420,6 +420,45 @@ const EMOJI = {
   sling_dress: '<i class="fas fa-dress"></i>'
 };
 
+// Convert an RGB array/tuple ([R,G,B]) to a hex color string for CSS.
+function rgbToHex(rgb) {
+  if (!rgb || !Array.isArray(rgb) || rgb.length < 3) return '#888';
+  const r = Number(rgb[0]);
+  const g = Number(rgb[1]);
+  const b = Number(rgb[2]);
+  if ([r, g, b].some((v) => Number.isNaN(v))) return '#888';
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+// Common color name -> hex map used for recommendation swatches.
+const NAME_TO_HEX = {
+  black: '#000000',
+  white: '#ffffff',
+  gray: '#808080',
+  light_gray: '#c8c8c8',
+  red: '#dc143c',
+  maroon: '#800000',
+  pink: '#ff69b4',
+  orange: '#ffa500',
+  yellow: '#ffd700',
+  beige: '#f5f5dc',
+  brown: '#964b00',
+  olive: '#808000',
+  green: '#228b22',
+  teal: '#008080',
+  cyan: '#00ffff',
+  blue: '#1e90ff',
+  navy: '#000080',
+  purple: '#800080',
+  lavender: '#e6e6fa',
+  mauve: '#e0b0ff',
+  mint: '#98ff98',
+  coral: '#ff7f50',
+  gold: '#d4af37',
+  burgundy: '#800020',
+  cream: '#fffdd0'
+};
+
 let ws = null;
 let selectedPersona = null;
 let frozen = false;
@@ -713,10 +752,24 @@ function renderTags(dets) {
   });
 
   tagsEl.innerHTML = Object.values(seen).map((d) => {
-    const col = COLORS[d.class_name] || '#888';
+    // Prefer the detected color (d.color is expected as [R,G,B] or an RGB tuple). Fallback to category palette.
+    const detectedHex = d.color ? rgbToHex(d.color) : null;
+    const paletteHex = COLORS[d.class_name] || '#888';
+    const swatch = detectedHex || paletteHex;
     const lbl = d.class_name.replace(/_/g, ' ');
     const conf = Math.round(d.confidence * 100);
-    return '<div class="tag"><div class="tdot" style="background:' + col + '"></div><span>' + lbl + '</span><span class="tconf">' + conf + '%</span></div>';
+    const colorName = d.color_name ? String(d.color_name) : '';
+    const rgbText = d.color && Array.isArray(d.color) ? ('RGB(' + [d.color[0], d.color[1], d.color[2]].join(',') + ')') : '';
+    // Title includes friendly name and technical RGB for accessibility / hover
+    const titleParts = [];
+    if (colorName) titleParts.push(colorName);
+    if (rgbText) titleParts.push(rgbText);
+    const titleAttr = titleParts.length ? (' title="' + escAttr(titleParts.join(' — ')) + '"') : '';
+    return '<div class="tag"' + titleAttr + '>' +
+      '<div class="tdot" style="background:' + swatch + '"></div>' +
+      '<span class="tlabel">' + lbl + '<small class="color-name">' + (colorName ? esc(colorName) : '') + '</small></span>' +
+      '<span class="tconf">' + conf + '%</span>' +
+    '</div>';
   }).join('');
 
   animateStagger('#tags', '.tag');
@@ -857,6 +910,30 @@ function openRecommendationDetail(index, openModal = false) {
     '<h3>' + esc(rec.name) + '</h3>' +
     '<div class="rec-detail-category">' + esc((rec.category || 'item').replace(/_/g, ' ')) + '</div>' +
     '<div class="rec-detail-price">' + esc(rec.price) + '</div>' +
+    // Color palette block (if available)
+    (function(){
+      let hex = '';
+      let cname = '';
+      let rgbText = '';
+      if (rec && rec.color) {
+        try { hex = rgbToHex(rec.color); rgbText = 'RGB(' + [rec.color[0],rec.color[1],rec.color[2]].join(',') + ')'; } catch(e){}
+      }
+      if (!hex && rec && rec.metadata && rec.metadata.color) {
+        const nm = String(rec.metadata.color).toLowerCase();
+        hex = NAME_TO_HEX[nm] || '';
+      }
+      if (rec && rec.color_name) cname = String(rec.color_name);
+      if (!cname && rec && rec.metadata && rec.metadata.color) cname = String(rec.metadata.color);
+      if (hex || cname) {
+        return '<div class="rec-color-palette"' + (cname?(' title="'+escAttr(cname + (rgbText?(' — '+rgbText):''))+'"'):'') + '>' +
+          (hex?('<div class="rec-color-swatch" style="background:'+hex+'" aria-hidden="true"></div>'):'') +
+          '<div class="rec-color-meta">' +
+            (cname?('<div class="rec-color-name">'+esc(cname)+'</div>'):'') +
+            (rgbText?('<div class="rec-color-rgb">'+esc(rgbText)+'</div>'):'') +
+          '</div></div>';
+      }
+      return '';
+    })() +
     '</div></div>' +
     (overviewRows ? '<div class="rec-detail-section"><div class="rec-detail-label">Store details</div><div class="rec-detail-grid">' + overviewRows + '</div></div>' : '') +
     '<div class="rec-detail-section"><div class="rec-detail-label">Why it fits</div><p>' + esc(rec.reason || 'Recommended from your search context.') + '</p></div>' +
@@ -1202,12 +1279,26 @@ function buildRecommendationThumb(rec, baseClass) {
   const imageUrl = toRenderableImageUrl(rawImageUrl);
   const classes = imageUrl ? (baseClass + ' thumb-media has-image') : (baseClass + ' thumb-media');
 
+  // Determine swatch: prefer rec.color (RGB array), then metadata.color (name), then empty
+  let swatchHex = '';
+  if (rec && rec.color) {
+    try {
+      swatchHex = rgbToHex(rec.color);
+    } catch (e) { swatchHex = ''; }
+  } else if (rec && rec.metadata && rec.metadata.color) {
+    const nm = String(rec.metadata.color).toLowerCase();
+    swatchHex = NAME_TO_HEX[nm] || '';
+  }
+
+  const swatchHtml = swatchHex ? ('<div class="thumb-swatch" aria-hidden="true" style="background:' + swatchHex + '"></div>') : '';
+
   if (!imageUrl) {
-    return '<div class="' + classes + '"><div class="thumb-fallback">' + icon + '</div></div>';
+    return '<div class="' + classes + '">' + swatchHtml + '<div class="thumb-fallback">' + icon + '</div></div>';
   }
 
   return (
     '<div class="' + classes + '">' +
+    swatchHtml +
     '<img class="thumb-img" src="' + escAttr(imageUrl) + '" alt="' + escAttr(rec.name || 'Clothing item') + '" loading="lazy" onerror="this.parentNode.classList.remove(\'has-image\'); this.remove();">' +
     '<div class="thumb-fallback">' + icon + '</div>' +
     '</div>'
