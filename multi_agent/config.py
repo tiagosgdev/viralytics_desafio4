@@ -31,3 +31,5 @@ USER_WEIGHT       = 0.80  # split among body/clothing/colour by feature importan
 WEIGHTS_TIMEOUT_S = 30    # max wait for FeatureWeightAgent INFORM reply
 COLLECT_TIMEOUT_S = 60    # max wait to collect all sealed proposals
 ROUND_TIMEOUT_S   = 90    # total round deadline (caller side)
+QUEUE_TTL_S       = 60    # max time a round may sit in the orchestrator queue;
+                           # older rounds are dropped (user has likely moved on)

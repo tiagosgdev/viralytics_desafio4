@@ -94,4 +94,8 @@ class ClothingRecommenderAgent(BaseRecommenderAgent):
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(ClothingScoreBehaviour(), template)
+        from multi_agent.history import history
+        summary = history.agent_context_summary("clothing")
+        if summary:
+            logger.info(summary)
         logger.info("ClothingRecommenderAgent ready.")

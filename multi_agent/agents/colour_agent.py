@@ -112,4 +112,8 @@ class ColourRecommenderAgent(BaseRecommenderAgent):
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(ColourScoreBehaviour(), template)
+        from multi_agent.history import history
+        summary = history.agent_context_summary("colour")
+        if summary:
+            logger.info(summary)
         logger.info("ColourRecommenderAgent ready.")

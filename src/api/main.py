@@ -482,15 +482,18 @@ async def start_session(
     persona = normalize_persona(payload.persona)
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
 
-    recs = await run_in_threadpool(
-        _db_backed_recommendations_with_profile_sync,
-        payload.detected_categories or [],
-        user_profile,                           # ← always pass, even if categories empty
-    )
-
-    # Fall back to whatever the frontend sent if the fetch returned nothing
-    if not recs:
-        recs = payload.recommendations or []
+    # If the caller already carries recommendations (from a prior detect/scan response),
+    # reuse them directly — avoids a redundant DB query for identical categories.
+    if payload.recommendations:
+        recs = payload.recommendations
+    else:
+        recs = await run_in_threadpool(
+            _db_backed_recommendations_with_profile_sync,
+            payload.detected_categories or [],
+            user_profile,
+        )
+        if not recs:
+            recs = []
 
     session = search_service.create_session(
         detected_categories=payload.detected_categories,

@@ -82,14 +82,24 @@ class StockScoreBehaviour(CyclicBehaviour):
 
 
 class StockRecommenderAgent(BaseRecommenderAgent):
-    def __init__(self, jid: str, password: str) -> None:
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        stats: "StockStats | None" = None,
+    ) -> None:
         super().__init__(jid, password)
-        self._stats: StockStats | None = None
+        self._stats: StockStats | None = stats  # shared instance or None
 
     async def setup(self) -> None:
-        loop = asyncio.get_event_loop()
-        self._stats = await loop.run_in_executor(None, StockStats)
+        if self._stats is None:
+            loop = asyncio.get_event_loop()
+            self._stats = await loop.run_in_executor(None, StockStats)
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(StockScoreBehaviour(), template)
+        from multi_agent.history import history
+        summary = history.agent_context_summary("stock")
+        if summary:
+            logger.info(summary)
         logger.info("StockRecommenderAgent ready.")

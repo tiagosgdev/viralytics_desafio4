@@ -1,44 +1,117 @@
-# FashionSense
-> Master's Project | Computer Vision + Semantic Fashion Search
+# Viralytics — FashionSense
+> Master's Project | Computer Vision + Multi-Agent Fashion Recommendation
 
-FashionSense is a fashion outfit detection and recommendation system with two runtime personas:
+FashionSense is a fashion outfit detection and recommendation system. It detects the clothing a person is wearing via live camera, analyses their body shape, and runs a **multi-agent sealed-bid recommendation round** to return personalised store recommendations. Two runtime personas are available:
 
-- **Cruella** — trained YOLO-based outfit detection + LLM-powered semantic search
-- **Edna** — custom FashionNet (edna) outfit detection + local text parsing
-
-The user selects a persona on the landing screen, scans an outfit via live camera, receives store recommendations, and can refine results through chat or voice.
-
----
-
-## Model Weights
-
-Pre-trained edna model weights are too large for the repository. Download from SharePoint:
-
-**[Download model weights](https://myisepipp-my.sharepoint.com/:u:/g/personal/1140331_isep_ipp_pt/IQCCukBlXdvVRoOwaETcMQwwAbNnmYm78sjY0hEas7aCeS4?e=1mLUmX)**
-
-Extract and place under `models/weights/` so the structure matches:
-
-```
-models/weights/
-└── edna_1.5m/
-    └── best.pt
-```
-
-Then run the app with `--edna-weights edna_1.5m` (see Running the App below).
+- **Cruella** — YOLOv8-based outfit detection + LLM-powered semantic search
+- **Edna** — Custom FashionNet (edna) outfit detection + local text parsing
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- CUDA GPU recommended for training (CPU and Apple MPS supported)
-- `ffmpeg` installed for voice transcription
-- Ollama running locally for Cruella's LLM text backend
+- **Docker Desktop** (required for the XMPP broker used by the multi-agent system)
+- `ffmpeg` installed and on PATH (voice transcription)
+- Ollama running locally (Cruella's LLM backend)
+- CUDA GPU recommended for training; CPU and Apple MPS also supported
 
 Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+```
+
+---
+
+## Model Weights
+
+The app auto-discovers fine-tuned YOLOv8 weights under `models/weights/`. Without weights it falls back to the base `yolov8n.pt` (COCO — inaccurate for fashion). Place trained weights at:
+
+```
+models/weights/
+└── yolov8n_fashion/        # or yolov8s_fashion / yolov8m_fashion / yolov8l_fashion
+    └── weights/
+        └── best.pt
+```
+
+Pre-trained edna model weights are available on SharePoint:
+
+**[Download model weights](https://myisepipp-my.sharepoint.com/:u:/g/personal/1140331_isep_ipp_pt/IQCCukBlXdvVRoOwaETcMQwwAbNnmYm78sjY0hEas7aCeS4?e=1mLUmX)**
+
+Extract and place under `models/weights/` following the structure above.
+
+---
+
+## Running the App
+
+A single PowerShell script starts everything — Ollama check, vector DB check, XMPP Docker container, and the FastAPI server:
+
+```powershell
+.\scripts\app\start_full_app.ps1
+```
+
+Open `http://127.0.0.1:8000` in a browser.
+
+**LAN / mobile testing:**
+
+```powershell
+.\scripts\app\start_full_app.ps1 -BindHost 0.0.0.0
+```
+
+**Key flags:**
+
+| Flag | Description |
+|------|-------------|
+| `-BindHost <ip>` | Bind host — use `0.0.0.0` for LAN access (default: `127.0.0.1`) |
+| `-BindPort <n>` | Bind port (default: `8000`) |
+| `-Reload` | Enable uvicorn auto-reload (development only) |
+| `-SkipOllama` | Skip Ollama check (Edna-only mode) |
+| `-SkipVectorCheck` | Skip vector DB check |
+| `-SkipXmpp` | Skip XMPP Docker container (disables multi-agent recommendations) |
+| `-AutoPullModel` | Automatically pull required Ollama model if missing |
+
+**Android app:**
+
+1. Open `android_app/` in Android Studio
+2. Set the server IP to your machine's LAN IP
+3. `Build > Build Bundle(s) / APK(s) > Build APK(s)`
+
+---
+
+## Multi-Agent Recommendation System
+
+FashionSense uses a **SPADE multi-agent system** to produce recommendations. Six XMPP agents coordinate via a sealed-bid Contract Net Protocol:
+
+```
+OrchestratorAgent  — coordinates rounds, aggregates results
+FeatureWeightAgent — computes feature importances and DB filters from context
+BodyAgent          — scores items by body-shape compatibility
+ClothingAgent      — scores items by garment-type / intent match
+ColourAgent        — scores items by colour harmony
+StockAgent         — scores items by inventory health (push_score)
+```
+
+**Round protocol per scan:**
+1. Browser scan detects clothing type + body shape via camera
+2. FastAPI calls `POST /api/recommend` asynchronously (non-blocking — DB recs appear immediately)
+3. Orchestrator requests feature weights, retrieves 40 candidates from the stock DB
+4. CFP broadcast to all four scorer agents simultaneously (sealed bid — no cross-talk)
+5. Each agent responds with a `PROPOSE` containing item scores
+6. Weighted Borda count aggregation → top-10 recommendations
+7. Agent recommendations replace the initial DB results in the UI
+
+**Fault tolerance:** if any scorer agent fails to respond before the timeout, its weight budget is redistributed proportionally among the remaining agents and the round completes normally.
+
+**Shared history:** all agents share a round history log. When an agent comes back online after a failure it reads a summary of what ran while it was absent.
+
+The XMPP broker (Prosody) runs in Docker and is started automatically by `start_full_app.ps1`. To manage it manually:
+
+```bash
+docker compose up -d xmpp        # start broker
+docker compose logs -f xmpp      # view logs
+docker compose down xmpp         # stop broker
 ```
 
 ---
@@ -49,7 +122,7 @@ pip install -r requirements.txt
 
 Dataset source: [Kaggle — DeepFashion2 Original with Dataframes](https://www.kaggle.com/datasets/thusharanair/deepfashion2-original-with-dataframes?resource=download)
 
-A Kaggle account is required. Download and extract to `data/raw/` with this structure:
+Download and extract to `data/raw/` with this structure:
 
 ```
 data/raw/
@@ -67,8 +140,6 @@ data/raw/
 
 ### Build the balanced dataset
 
-Once raw data is in place, run:
-
 ```bash
 python scripts/data_prep/sample_balanced.py \
     --train_csv data/raw/DeepFashion2/img_info_dataframes/train.csv \
@@ -79,21 +150,13 @@ python scripts/data_prep/sample_balanced.py \
     --seed 42
 ```
 
-This produces an 84,051-image balanced dataset across 11 classes (70/15/15 split) at `data/balanced_dataset/`.
+This produces an 84,051-image balanced dataset across 11 classes (70/15/15 split).
 
 ### Background images (required for edna_1.4m+)
 
-Download 2,000 COCO val2017 background images (no people or clothing) used as negative training examples:
-
 ```bash
 python scripts/data/download_bg_images.py
-```
-
-Then add them to the training split:
-
-```bash
 cp bg_images/*.jpg data/balanced_dataset/images/train/
-
 for f in bg_images/*.jpg; do
     touch data/balanced_dataset/labels/train/$(basename $f .jpg).txt
 done
@@ -101,53 +164,7 @@ done
 
 ---
 
-## Running the App
-
-The launcher checks all dependencies (Ollama, vector DB, imports) before starting uvicorn.
-
-**Standard launch (edna 1.5m weights):**
-
-```bash
-python3 scripts/app/start_full_app.py --edna-weights edna_1.5m --auto-pull-model
-```
-
-**With auto-reload (development):**
-
-```bash
-python3 scripts/app/start_full_app.py --edna-weights edna_1.5m --auto-pull-model --reload
-```
-
-**LAN / mobile testing:**
-
-```bash
-python3 scripts/app/start_full_app.py --edna-weights edna_1.5m --auto-pull-model --host 0.0.0.0 --port 8000
-```
-
-Open `http://localhost:8000` in a browser (or the machine's LAN IP for mobile).
-
-**Key flags:**
-
-| Flag | Description |
-|------|-------------|
-| `--edna-weights <folder>` | Weights folder under `models/weights/` for Edna (e.g. `edna_1.5m`) |
-| `--auto-pull-model` | Automatically pull the required Ollama model (`qwen2.5:3b-instruct`) if missing |
-| `--reload` | Enable uvicorn auto-reload (development only) |
-| `--host <ip>` | Bind host — use `0.0.0.0` for LAN access (default: `127.0.0.1`) |
-| `--port <n>` | Bind port (default: `8000`) |
-| `--skip-ollama` | Skip Ollama checks (use if running Edna-only without Cruella) |
-| `--skip-vector-check` | Skip vector DB check (use if LNIAGIA collection not yet built) |
-
-**Android app:**
-
-1. Open `android_app/` in Android Studio
-2. Set the server IP in the app to your machine's LAN IP
-3. `Build > Build Bundle(s) / APK(s) > Build APK(s)`
-
----
-
 ## Training
-
-Train the custom FashionNet (edna) model:
 
 ```bash
 # GPU (recommended)
@@ -160,54 +177,26 @@ python scripts/training/train_custom.py \
     --lambda_box 5.0 \
     --lambda_obj 1.0 \
     --lambda_cls 0.5 \
-    --gr 0.0 \
     --augment medium \
     --multi_cell \
     --optimizer adamw \
     --weight_decay 0.01 \
     --device cuda \
-    --output models/weights/fashionnet
+    --output models/weights/yolov8n_fashion
 
-# CPU (slow — use for testing only)
+# CPU (slow — testing only)
 python scripts/training/train_custom.py --epochs 10 --batch 4 --device cpu
-
-# Apple Silicon
-python scripts/training/train_custom.py --epochs 50 --batch 16 --device mps
 ```
-
-Checkpoints are saved to `models/weights/fashionnet/`. The best validation checkpoint is saved as `best.pt`.
 
 ---
 
 ## Evaluation
 
-Evaluate a trained model on the balanced dataset:
-
 ```bash
 python scripts/evaluation/evaluate_custom.py \
-    --weights models/weights/fashionnet/best.pt \
+    --weights models/weights/yolov8n_fashion/weights/best.pt \
     --data data/balanced_dataset \
     --conf 0.25
-```
-
-Generate training plots:
-
-```bash
-python scripts/evaluation/visualize_results.py \
-    --metrics_json models/weights/fashionnet/metrics.json \
-    --output docs/organized/04_edna/plots/
-```
-
----
-
-## Dataset Analysis
-
-Generate EDA figures for the raw dataset:
-
-```bash
-python scripts/data_prep/analyze_raw_dataset.py \
-    --csv data/raw/DeepFashion2/img_info_dataframes/train.csv \
-    --output docs/organized/01_dataset/raw_dataset/
 ```
 
 ---
@@ -215,53 +204,65 @@ python scripts/data_prep/analyze_raw_dataset.py \
 ## Project Structure
 
 ```
-FashionSense/
+viralytics_desafio4/
 ├── android_app/                    # Native Android client
 ├── data/
-│   ├── mock_store_catalogue_template.json
 │   └── raw/                        # DeepFashion2 raw data (not committed)
-├── docs/
-│   ├── README.md
-│   └── organized/                  # Research documentation
-│       ├── 01_dataset/
-│       ├── 02_yolo_experiments/
-│       ├── 03_fashionnet_experiments/
-│       ├── 04_edna/
-│       ├── 05_evaluation/
-│       └── 06_codebase/
+├── docs/organized/                 # Research documentation
 ├── frontend/
-│   ├── index.html
+│   ├── index.html                  # Single-file browser UI
 │   └── static/css/style.css
 ├── LNIAGIA/                        # Semantic search subsystem (Cruella)
+│   ├── search_app.py
+│   ├── llm_query_parser.py
+│   ├── feature_weighting.py
+│   └── DB/
+│       ├── SQLLite/                # Structured item storage (clothing.db)
+│       └── vector/                 # Qdrant vector search
 ├── models/
 │   └── weights/                    # Trained model weights (not committed)
-│       └── fashionnet/
-├── notebooks/
-│   ├── 01_EDA.ipynb
-│   └── 02_model_comparison.ipynb
+│       ├── yolov8n_fashion/weights/best.pt
+│       └── mediapipe/              # Pose landmarker model
+├── multi_agent/                    # SPADE multi-agent recommendation system
+│   ├── config.py                   # JIDs, timeouts, budget constants
+│   ├── messages.py                 # ACL message builders (CFP/PROPOSE/INFORM/REQUEST)
+│   ├── aggregator.py               # Weighted Borda count + weight redistribution
+│   ├── history.py                  # Shared round history (fault tolerance + context)
+│   ├── run.py                      # RecommendationSystem lifecycle wrapper
+│   └── agents/
+│       ├── base.py
+│       ├── orchestrator.py
+│       ├── weight_agent.py
+│       ├── body_agent.py
+│       ├── clothing_agent.py
+│       ├── colour_agent.py
+│       └── stock_agent.py
+├── prosody_config/                 # Prosody XMPP broker Docker setup
+│   ├── Dockerfile
+│   └── prosody.cfg.lua
 ├── scripts/
 │   ├── app/
-│   ├── data/
+│   │   ├── start_full_app.ps1      # Main launcher (PowerShell)
+│   │   └── start_full_app.py       # Main launcher (Python — called by PS1)
 │   ├── data_prep/
 │   ├── evaluation/
 │   └── training/
 ├── src/
 │   ├── api/
-│   │   ├── main.py
-│   │   ├── schemas.py
-│   │   ├── search_service.py
-│   │   ├── personas.py
-│   │   └── custom_text_parser.py
+│   │   ├── main.py                 # FastAPI app: endpoints, startup, agent integration
+│   │   ├── schemas.py              # Pydantic models
+│   │   ├── search_service.py       # Session management
+│   │   └── auth.py                 # JWT auth
 │   ├── custom_model/               # FashionNet architecture
-│   ├── detection/
-│   │   ├── detector.py
-│   │   ├── fashionnet_detector.py
-│   │   └── camera.py
-│   └── recommendations/
-│       ├── engine.py
-│       └── catalogue.py
-├── requirements.txt
-└── docker-compose.yml
+│   └── detection/
+│       ├── detector.py             # YOLOv8 wrapper + CATEGORY_NAMES (0–12)
+│       ├── fashionnet_detector.py  # FashionNet inference wrapper
+│       └── camera.py               # Multi-frame WebSocket camera session
+├── stock_agent/                    # Stock DB + inventory scoring
+│   ├── stock_agent.py
+│   └── stock_stats.py
+├── docker-compose.yml
+└── requirements.txt
 ```
 
 ---
@@ -274,23 +275,25 @@ FashionSense/
 | GET | `/health` | Health check |
 | POST | `/api/detect/image` | Detect clothing in uploaded image |
 | POST | `/api/mobile/scan` | Mobile scan endpoint |
-| POST | `/api/session/start` | Start a new session |
+| POST | `/api/recommend` | Run multi-agent recommendation round |
+| POST | `/api/session/start` | Start a new search session |
 | GET | `/api/session/{session_id}` | Get session state |
-| POST | `/api/chat` | Chat refinement |
+| POST | `/api/chat` | Chat-based recommendation refinement |
 | POST | `/api/chat/warmup` | Warmup LLM |
 | POST | `/api/transcribe` | Transcribe voice input |
 | GET | `/api/conf` | Get detection confidence threshold |
 | POST | `/api/conf/{value}` | Set detection confidence threshold |
 | WS | `/ws/camera` | Live camera WebSocket stream |
 
-All scan/chat/session requests carry a `persona` field (`cruella` or `edna`).
+`/api/recommend` requires the XMPP broker to be running. Returns `503` if the multi-agent system is unavailable (app continues to serve DB recommendations in that case).
 
 ---
 
 ## Notes
 
-- Model weights are not committed. Place trained weights at `models/weights/fashionnet/best.pt` for Edna to load automatically.
-- Cruella requires Ollama running locally with a compatible model pulled.
-- Voice transcription requires `ffmpeg` on PATH and `faster-whisper` installed.
-- The store catalogue at `data/mock_store_catalogue_template.json` can be replaced with real store data.
-- See `docs/organized/` for full research documentation including dataset analysis, experiment results, and architecture details.
+- Docker Desktop must be running for the XMPP broker. The startup script manages it automatically.
+- Model weights are not committed. Without fine-tuned weights the app falls back to base YOLOv8n (COCO), which has incorrect class mappings for fashion — get or train proper weights.
+- After installing dependencies, run `python -m spacy download en_core_web_sm` for the semantic search to work.
+- Cruella requires Ollama with a compatible model (e.g. `qwen2.5:7b-instruct-q3_K_M`).
+- Voice transcription requires `ffmpeg` on PATH.
+- See `docs/organized/` for full research documentation.

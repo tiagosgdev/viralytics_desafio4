@@ -58,11 +58,16 @@ def borda_aggregate(
 def build_agent_weights(
     feature_weights: dict,
     stock_weight: float = 0.20,
+    present_agents: frozenset[str] | None = None,
 ) -> dict[str, float]:
     """
     Convert FeatureWeightAgent output to per-agent budget.
 
     feature_weights : {"color": {"importance": N}, "type": {...}, "bodyType": {...}}
+    present_agents  : set of agent ids that actually responded this round.
+                      When an agent is absent its weight is redistributed
+                      proportionally among the agents that did respond.
+                      Pass None (default) to assume all four agents are present.
 
     The stock agent gets a fixed `stock_weight` (inventory health signal).
     The remaining 1 - stock_weight is split among body/clothing/colour agents
@@ -80,17 +85,34 @@ def build_agent_weights(
     user_budget = 1.0 - stock_weight
 
     if total <= 0:
-        # Equal split among the three user-preference agents
         share = user_budget / 3.0
-        return {"colour": share, "clothing": share, "body": share, "stock": stock_weight}
+        full = {"colour": share, "clothing": share, "body": share, "stock": stock_weight}
+    else:
+        color_imp = float((feature_weights.get("color")    or {}).get("importance", 0) or 0)
+        type_imp  = float((feature_weights.get("type")     or {}).get("importance", 0) or 0)
+        body_imp  = float((feature_weights.get("bodyType") or {}).get("importance", 0) or 0)
+        full = {
+            "colour":   color_imp / total * user_budget,
+            "clothing": type_imp  / total * user_budget,
+            "body":     body_imp  / total * user_budget,
+            "stock":    stock_weight,
+        }
 
-    color_imp    = float((feature_weights.get("color")    or {}).get("importance", 0) or 0)
-    type_imp     = float((feature_weights.get("type")     or {}).get("importance", 0) or 0)
-    body_imp     = float((feature_weights.get("bodyType") or {}).get("importance", 0) or 0)
+    if present_agents is None:
+        return full
 
-    return {
-        "colour":   color_imp / total * user_budget,
-        "clothing": type_imp  / total * user_budget,
-        "body":     body_imp  / total * user_budget,
-        "stock":    stock_weight,
+    # Identify which agents are missing and pool their weights
+    missing      = {a for a in full if a not in present_agents}
+    missing_pool = sum(full[a] for a in missing)
+
+    if not missing or not missing_pool:
+        return {a: v for a, v in full.items() if a in present_agents}
+
+    # Redistribute the pooled weight proportionally among present agents
+    present      = {a: v for a, v in full.items() if a in present_agents}
+    present_sum  = sum(present.values()) or 1.0
+    redistributed = {
+        a: v + missing_pool * (v / present_sum)
+        for a, v in present.items()
     }
+    return {a: round(v, 4) for a, v in redistributed.items()}

@@ -19,6 +19,8 @@ XMPP broker must be running first:
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
 from typing import Optional
 
 import spade
@@ -30,6 +32,14 @@ from multi_agent.agents.orchestrator   import OrchestratorAgent
 from multi_agent.agents.stock_agent    import StockRecommenderAgent
 from multi_agent.agents.weight_agent   import FeatureWeightAgent
 from multi_agent.config import JIDS, ROUND_TIMEOUT_S, TOP_K, XMPP_PASSWORD
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_STOCK_DIR = _REPO_ROOT / "stock_agent"
+if str(_STOCK_DIR) not in sys.path:
+    sys.path.insert(0, str(_STOCK_DIR))
+
+from stock_agent import StockAgent as _StockAgent  # noqa: E402  # type: ignore[import-untyped]
+from stock_stats import StockStats                  # noqa: E402  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +63,21 @@ class RecommendationSystem:
         if self._started:
             return
 
-        # Scorer agents must be up before the Orchestrator sends CFPs.
-        # FeatureWeightAgent must be up before Orchestrator sends REQUEST.
-        # We start them all and rely on SPADE's async connection setup.
+        # Build StockStats once and share it between OrchestratorAgent (which uses
+        # it to fetch candidates) and StockRecommenderAgent (which uses it to score
+        # push_scores).  This avoids loading the same SQLite data twice at startup.
+        loop         = asyncio.get_event_loop()
+        shared_stats = await loop.run_in_executor(None, StockStats)
+        shared_stock = _StockAgent(stats=shared_stats)
+
         weight_agent   = FeatureWeightAgent(JIDS["weights"],      XMPP_PASSWORD)
         body_agent     = BodyRecommenderAgent(JIDS["body"],       XMPP_PASSWORD)
         clothing_agent = ClothingRecommenderAgent(JIDS["clothing"], XMPP_PASSWORD)
         colour_agent   = ColourRecommenderAgent(JIDS["colour"],   XMPP_PASSWORD)
-        stock_agent    = StockRecommenderAgent(JIDS["stock"],     XMPP_PASSWORD)
-        orchestrator   = OrchestratorAgent(JIDS["orchestrator"],  XMPP_PASSWORD)
+        stock_agent    = StockRecommenderAgent(JIDS["stock"],     XMPP_PASSWORD,
+                                               stats=shared_stats)
+        orchestrator   = OrchestratorAgent(JIDS["orchestrator"],  XMPP_PASSWORD,
+                                           stock_agent=shared_stock)
 
         self._agents = [
             weight_agent, body_agent, clothing_agent,

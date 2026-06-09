@@ -22,6 +22,7 @@ from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
 from multi_agent.agents.base import BaseRecommenderAgent
+from multi_agent.history import history
 from multi_agent.messages import parse, make_propose, comm_log, CFP
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -132,4 +133,6 @@ class BodyRecommenderAgent(BaseRecommenderAgent):
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(BodyScoreBehaviour(), template)
+        if summary := history.agent_context_summary("body"):
+            logger.info(summary)
         logger.info("BodyRecommenderAgent ready.")

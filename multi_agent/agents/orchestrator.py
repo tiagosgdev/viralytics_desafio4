@@ -21,6 +21,7 @@ so there is never any cross-contamination between rounds.
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from multi_agent.config import (
     TOP_K,
     WEIGHTS_TIMEOUT_S,
 )
+from multi_agent.history import history
 from multi_agent.messages import (
     CFP,
     INFORM,
@@ -60,10 +62,31 @@ logger = logging.getLogger(__name__)
 # into an XMPP message body (asyncio.Future is not JSON-serialisable).
 _INTERNAL_CTX_KEYS = frozenset({"conv_id", "result_future"})
 
+# Per-agent CFP field sets — each agent only receives the candidate fields it
+# actually reads.  item_id and size are always included (they are the item key).
+# The full candidate dict is kept in-process for _build_result(); these sets
+# only control what is put on the wire.
+_CFP_FIELDS: dict[str, frozenset[str]] = {
+    # body_agent: fetches body_type from clothing.db by item_id — needs nothing else
+    "body":     frozenset({"item_id", "size"}),
+    # colour_agent: scores by item colour field against detected colour
+    "colour":   frozenset({"item_id", "size", "color"}),
+    # stock_agent: fetches push_scores from StockStats by (item_id, size)
+    "stock":    frozenset({"item_id", "size"}),
+    # clothing_agent: counts how many include-filter axes each item satisfies
+    "clothing": frozenset({"item_id", "size", "type", "age_group", "occasion",
+                           "season", "style", "pattern", "material", "gender", "fit"}),
+}
+
 
 def _msg_context(context: dict) -> dict:
     """Return a JSON-safe copy of context with internal orchestration keys removed."""
     return {k: v for k, v in context.items() if k not in _INTERNAL_CTX_KEYS}
+
+
+def _slim_candidates(candidates: list[dict], fields: frozenset[str]) -> list[dict]:
+    """Return a copy of candidates keeping only the requested fields."""
+    return [{k: c[k] for k in fields if k in c} for c in candidates]
 
 
 # ── Orchestration behaviour ───────────────────────────────────────────────────
@@ -79,6 +102,19 @@ class OrchestratorBehaviour(CyclicBehaviour):
         conv_id: str  = context["conv_id"]
         fut: asyncio.Future = context["result_future"]
 
+        # ── Staleness check ───────────────────────────────────────────────
+        if history.is_stale(conv_id):
+            wait_s = round(time.monotonic() - context.get("queued_at", time.monotonic()), 1)
+            logger.warning(
+                f"[{conv_id}] Round dropped — was queued for {wait_s}s "
+                f"(queue TTL exceeded). User has likely moved on."
+            )
+            history.record_stale(conv_id)
+            if not fut.done():
+                fut.set_result([])
+            return
+
+        history.record_started(conv_id)
         logger.info(f"[{conv_id}] Round started.")
 
         try:
@@ -92,6 +128,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
             )
             if not candidates_info:
                 logger.warning(f"[{conv_id}] No candidates; resolving with empty list.")
+                history.record_complete(conv_id, 0, [], list(SCORER_NAMES))
                 fut.set_result([])
                 return
 
@@ -103,11 +140,22 @@ class OrchestratorBehaviour(CyclicBehaviour):
 
             # ── 4. Collect sealed proposals ────────────────────────────────
             proposals = await self._collect_proposals(conv_id)
-            logger.info(f"[{conv_id}] Proposals from: {sorted(proposals)}.")
+            responded = sorted(proposals.keys())
+            missing   = sorted(set(SCORER_NAMES) - set(responded))
+            logger.info(f"[{conv_id}] Proposals from: {responded}.")
+            if missing:
+                logger.warning(
+                    f"[{conv_id}] Agents did not respond: {missing}. "
+                    f"Redistributing their weight among: {responded}."
+                )
+                comm_log("orchestrator", "—", "WARN", conv_id,
+                         f"missing agents {missing} — redistributing weights")
 
-            # ── 5. Weighted Borda count ────────────────────────────────────
+            # ── 5. Weighted Borda count (with redistribution if agents missing) ──
             agent_weights = build_agent_weights(
-                weights_result.get("weights", {}), STOCK_WEIGHT
+                weights_result.get("weights", {}),
+                STOCK_WEIGHT,
+                present_agents=frozenset(responded),
             )
             top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
 
@@ -116,11 +164,13 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 top_k_keys, candidates_info, proposals, agent_weights
             )
 
+            history.record_complete(conv_id, len(result), responded, missing)
             fut.set_result(result)
             logger.info(f"[{conv_id}] Round complete — top-{TOP_K} resolved.")
 
         except Exception as exc:
             logger.error(f"[{conv_id}] Round failed: {exc}", exc_info=True)
+            history.record_failed(conv_id, str(exc))
             if not fut.done():
                 fut.set_exception(exc)
 
@@ -222,16 +272,22 @@ class OrchestratorBehaviour(CyclicBehaviour):
         weights_result: dict,
         context: dict,
     ) -> None:
+        ctx = _msg_context(context)
         for name in SCORER_NAMES:
+            fields = _CFP_FIELDS.get(name)
+            payload_candidates = (
+                _slim_candidates(candidates_info, fields) if fields else candidates_info
+            )
             cfp = make_cfp(
                 to_jid         = JIDS[name],
                 conv_id        = conv_id,
-                candidates     = candidates_info,
+                candidates     = payload_candidates,
                 weights_result = weights_result,
-                context        = _msg_context(context),
+                context        = ctx,
             )
             await self.send(cfp)
-            comm_log("orchestrator", name, "CFP", conv_id, f"{len(candidates_info)} candidates")
+            comm_log("orchestrator", name, "CFP", conv_id,
+                     f"{len(candidates_info)} candidates ({len(payload_candidates[0]) if payload_candidates else 0} fields/item)")
 
     async def _collect_proposals(self, conv_id: str) -> dict[str, dict[str, float]]:
         proposals: dict[str, dict[str, float]] = {}
@@ -300,15 +356,21 @@ def _build_result(
 # ── Agent class ───────────────────────────────────────────────────────────────
 
 class OrchestratorAgent(BaseRecommenderAgent):
-    def __init__(self, jid: str, password: str) -> None:
+    def __init__(
+        self,
+        jid: str,
+        password: str,
+        stock_agent: "_StockAgent | None" = None,
+    ) -> None:
         super().__init__(jid, password)
         self._round_queue: asyncio.Queue | None = None
-        self._stock_agent: _StockAgent | None   = None
+        self._stock_agent: _StockAgent | None   = stock_agent  # shared instance or None
 
     async def setup(self) -> None:
         self._round_queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-        self._stock_agent = await loop.run_in_executor(None, _StockAgent)
+        if self._stock_agent is None:
+            loop = asyncio.get_event_loop()
+            self._stock_agent = await loop.run_in_executor(None, _StockAgent)
         self.add_behaviour(OrchestratorBehaviour())
         logger.info("OrchestratorAgent ready.")
 
@@ -327,15 +389,18 @@ class OrchestratorAgent(BaseRecommenderAgent):
         Queue a new recommendation round.  Returns the conv_id (UUID hex).
         The caller awaits `result_future` to get the top-10 list.
         """
-        conv_id = uuid4().hex
-        self._round_queue.put_nowait({
+        conv_id   = uuid4().hex
+        context   = {
             "conv_id":            conv_id,
             "result_future":      result_future,
+            "queued_at":          time.monotonic(),
             "detected_color":     detected_color,
             "detected_type":      detected_type,
             "detected_body_type": detected_body_type,
             "user_answer":        user_answer,
             "user_gender":        user_gender,
             "user_height_cm":     user_height_cm,
-        })
+        }
+        history.record_enqueued(conv_id, context)
+        self._round_queue.put_nowait(context)
         return conv_id
