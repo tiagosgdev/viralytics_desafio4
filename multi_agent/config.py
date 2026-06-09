@@ -28,8 +28,13 @@ STOCK_WEIGHT      = 0.20  # fixed weight for the StockAgent (inventory pressure)
 USER_WEIGHT       = 0.80  # split among body/clothing/colour by feature importances
 
 # Timeouts (seconds)
-WEIGHTS_TIMEOUT_S = 30    # max wait for FeatureWeightAgent INFORM reply
+WEIGHTS_TIMEOUT_S = 120   # max wait for FeatureWeightAgent INFORM reply
+                           # (fast-path ~0 ms; Ollama LLM path ~48 s on CPU)
 COLLECT_TIMEOUT_S = 60    # max wait to collect all sealed proposals
-ROUND_TIMEOUT_S   = 90    # total round deadline (caller side)
+ROUND_TIMEOUT_S   = 200   # total round deadline (WEIGHTS + COLLECT + margin)
 QUEUE_TTL_S       = 60    # max time a round may sit in the orchestrator queue;
                            # older rounds are dropped (user has likely moved on)
+
+# Back-pressure: maximum number of rounds that may sit in the orchestrator
+# queue at once.  Rounds beyond this cap are dropped immediately and return [].
+QUEUE_MAX_SIZE    = 10

@@ -25,6 +25,12 @@ def _item_key(item_id: int, size: str) -> str:
     return f"{item_id}:{size}"
 
 
+# Axes to skip in clothing scoring — body_type is handled with a proper
+# per-item DB lookup by BodyRecommenderAgent; penalising clothing candidates
+# for a field that isn't in their CFP payload deflates all scores uniformly.
+_SKIP_AXES: frozenset[str] = frozenset({"body_type"})
+
+
 def _score_candidates(
     candidates_info: list[dict],
     filters: dict,
@@ -33,9 +39,11 @@ def _score_candidates(
     Match-count score: how many include axes does each item satisfy?
     Normalised by the number of active filter axes so the result is in [0, 1].
     """
-    include: dict[str, list[str]] = (
+    raw_include: dict[str, list[str]] = (
         (filters.get("filters") or {}).get("include") or {}
     )
+    # Drop axes this agent doesn't evaluate (body_type → BodyRecommenderAgent).
+    include = {k: v for k, v in raw_include.items() if k not in _SKIP_AXES}
 
     # No meaningful filters → uniform score of 0.5
     if not include:

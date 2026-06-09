@@ -4,12 +4,13 @@ Color utilities: dominant color extraction and mapping to human-friendly names.
 Algorithm:
  - Input: BGR numpy image (crop of detected clothing)
  - Convert to HSV, optional median blur
- - Reshape pixels and run KMeans (k=3 default) on HSV (only H and S channels optionally)
+ - Reshape pixels and run KMeans (k=3 default) on HSV
  - Pick largest cluster by pixel count as dominant
- - Convert centroid to RGB and return along with the nearest name from
-   matplotlib's built-in CSS/XKCD color palettes.
+ - Convert centroid to RGB and map to the nearest name in the canonical palette.
 
-This is intentionally lightweight (no heavy DL). KMeans uses OpenCV's kmeans.
+The palette keys are locked to the DB item color vocabulary so that vision
+output can be compared directly against item.color values and the ColourAgent
+compatibility matrix.
 """
 
 from __future__ import annotations
@@ -19,59 +20,35 @@ from typing import Dict, Tuple, Optional
 import cv2
 import numpy as np
 
+# Canonical palette — keys exactly match the DB item color vocabulary and the
+# ColourRecommenderAgent compatibility matrix.  Mapping vision output to this
+# palette ensures detected_color always aligns with what the agent expects.
 FALLBACK_PALETTE = {
-    "black":      (0, 0, 0),
-    "white":      (255, 255, 255),
-    "gray":       (128, 128, 128),
-    "light_gray": (200, 200, 200),
-    "red":        (220, 20, 60),
-    "maroon":     (128, 0, 0),
-    "burgundy":   (128, 0, 32),
-    "pink":       (255, 105, 180),
-    "orange":     (255, 165, 0),
-    "yellow":     (255, 215, 0),
-    "beige":      (245, 245, 220),
-    "brown":      (150, 75, 0),
-    "olive":      (128, 128, 0),
-    "green":      (34, 139, 34),
-    "teal":       (0, 128, 128),
-    "cyan":       (0, 255, 255),
-    "blue":       (30, 144, 255),
-    "navy":       (0, 0, 128),
-    "purple":     (128, 0, 128),
-    "lavender":   (230, 230, 250),
-    "mauve":      (224, 176, 255),
-    "mint":       (152, 255, 152),
-    "coral":      (255, 127, 80),
-    "gold":       (212, 175, 55),
+    "black":    (10,  10,  10),
+    "white":    (255, 255, 255),
+    "gray":     (128, 128, 128),
+    "red":      (220,  20,  60),
+    "burgundy": (128,   0,  32),
+    "pink":     (255, 105, 180),
+    "orange":   (255, 165,   0),
+    "yellow":   (255, 215,   0),
+    "beige":    (245, 220, 180),
+    "cream":    (255, 253, 208),
+    "brown":    (150,  75,   0),
+    "olive":    (107, 142,  35),
+    "green":    ( 34, 139,  34),
+    "teal":     (  0, 128, 128),
+    "blue":     ( 30, 144, 255),
+    "navy":     (  0,   0, 128),
+    "purple":   (128,   0, 128),
+    "coral":    (255, 127,  80),
 }
-
-
-def _clean_color_name(name: str) -> str:
-    return name.replace("xkcd:", "").replace("_", " ").strip()
-
-
-def _hex_to_rgb(hex_value: str) -> Tuple[int, int, int]:
-    from matplotlib import colors as mpl_colors
-
-    r, g, b = mpl_colors.to_rgb(hex_value)
-    return round(r * 255), round(g * 255), round(b * 255)
 
 
 @lru_cache(maxsize=1)
 def _reference_palette() -> Dict[str, Tuple[int, int, int]]:
-    """Return named colors from matplotlib, with a small local fallback."""
-    try:
-        from matplotlib import colors as mpl_colors
-
-        palette: Dict[str, Tuple[int, int, int]] = {}
-        for name, value in mpl_colors.CSS4_COLORS.items():
-            palette[_clean_color_name(name)] = _hex_to_rgb(value)
-        for name, value in mpl_colors.XKCD_COLORS.items():
-            palette[_clean_color_name(name)] = _hex_to_rgb(value)
-        return palette
-    except Exception:
-        return FALLBACK_PALETTE
+    """Return the canonical clothing colour palette (aligned with DB vocabulary)."""
+    return dict(FALLBACK_PALETTE)
 
 
 def _rgb_distance(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> float:
@@ -79,7 +56,7 @@ def _rgb_distance(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> float:
 
 
 def _name_from_rgb(rgb: Tuple[int, int, int]) -> str:
-    # Find nearest named matplotlib color by Euclidean distance in RGB space.
+    # Find nearest palette entry by Euclidean distance in RGB space.
     best_name = ""
     best_d = float("inf")
     for name, pal in _reference_palette().items():

@@ -140,7 +140,7 @@ class CameraStream:
                 except Exception:
                     pass
 
-                body_analysis, body_annotated_frame = self._resolve_body_analysis(last_frame)
+                body_analysis, body_annotated_frame = await self._resolve_body_analysis(last_frame)
 
                 await send(json.dumps({
                     "type": "results",
@@ -250,8 +250,10 @@ class CameraStream:
 
             annotated = self._draw_capture_overlay(frame, result, int(remaining) + 1)
 
-            # Accumulate
+            # Accumulate — skip unknown YOLO fallback class IDs (e.g. class_16)
             for det in result.detections:
+                if det.class_name.startswith("class_"):
+                    continue
                 conf_totals[det.class_name] = conf_totals.get(det.class_name, 0.0) + det.confidence
                 conf_counts[det.class_name] = conf_counts.get(det.class_name, 0)   + 1
 
@@ -432,11 +434,16 @@ class CameraStream:
                 print(f"Warning: DB recommendation resolver failed: {exc}")
         return self.recommender.recommend(categories)
 
-    def _resolve_body_analysis(self, frame: Optional[np.ndarray]) -> tuple[dict | None, str | None]:
+    async def _resolve_body_analysis(self, frame: Optional[np.ndarray]) -> tuple[dict | None, str | None]:
         if frame is None or self.body_analysis_resolver is None:
             return None, None
         try:
-            return self.body_analysis_resolver(frame.copy(), self._user_height_cm, self._user_gender)
+            resolver   = self.body_analysis_resolver
+            height_cm  = self._user_height_cm
+            gender     = self._user_gender
+            frame_copy = frame.copy()
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, resolver, frame_copy, height_cm, gender)
         except Exception as exc:
             print(f"Warning: body analysis resolver failed: {exc}")
             return None, None

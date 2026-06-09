@@ -30,6 +30,20 @@ _DB_PATH   = _REPO_ROOT / "LNIAGIA" / "DB" / "SQLLite" / "clothing.db"
 
 logger = logging.getLogger(__name__)
 
+# Module-level persistent connection — opened once and reused across rounds.
+# check_same_thread=False because _load_body_types is called from a thread-pool
+# executor while the agent lives on the asyncio event loop thread.
+_db_conn: sqlite3.Connection | None = None
+
+
+def _get_db_conn() -> sqlite3.Connection | None:
+    global _db_conn
+    if not _DB_PATH.exists():
+        return None
+    if _db_conn is None:
+        _db_conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+    return _db_conn
+
 # Shapes considered "close enough" to get partial credit.
 # Symmetric: if A is adjacent to B then B is adjacent to A.
 _ADJACENT: dict[str, frozenset] = {
@@ -50,17 +64,18 @@ def _item_key(item_id: int, size: str) -> str:
 
 def _load_body_types(item_ids: list[int]) -> dict[int, frozenset[str]]:
     """Batch-fetch body_type column from clothing.db for the given item ids."""
-    if not item_ids or not _DB_PATH.exists():
+    if not item_ids:
+        return {}
+    conn = _get_db_conn()
+    if conn is None:
         return {}
 
     placeholders = ",".join("?" * len(item_ids))
     try:
-        conn = sqlite3.connect(str(_DB_PATH))
         rows = conn.execute(
             f"SELECT id, body_type FROM items WHERE id IN ({placeholders})",
             item_ids,
         ).fetchall()
-        conn.close()
     except Exception as exc:
         logger.error(f"body_type DB query failed: {exc}")
         return {}

@@ -520,6 +520,7 @@ let introRequestToken = 0;
 let agentRoundGeneration = 0;
 let currentDetectedBodyType = '';
 let currentDetectedClothingType = '';
+let currentDetectedColor = '';
 
 const feed = document.getElementById('feed');
 const landingScreen = document.getElementById('landing-screen');
@@ -782,7 +783,8 @@ function handleCameraMessage(msg) {
     // Trigger multi-agent round asynchronously (non-blocking)
     currentDetectedClothingType = (msg.detections || [])[0]?.class_name || '';
     currentDetectedBodyType = msg.body_analysis?.body_shape || '';
-    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType);
+    currentDetectedColor = msg.dominant_color?.name || (msg.detections || [])[0]?.color_name || '';
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -805,6 +807,7 @@ function startScan() {
   agentRoundGeneration++; // invalidate any in-flight agent round
   currentDetectedBodyType = '';
   currentDetectedClothingType = '';
+  currentDetectedColor = '';
   const agentEl = document.getElementById('agent-status');
   if (agentEl) agentEl.hidden = true;
   toggleRecommendationsModal(false);
@@ -960,7 +963,7 @@ function formatAgentRec(item) {
   };
 }
 
-async function triggerAgentRecommendations(detectedType, detectedBodyType) {
+async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor) {
   const myGen = ++agentRoundGeneration;
   const agentEl = document.getElementById('agent-status');
 
@@ -974,7 +977,7 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType) {
   const payload = {
     detected_type:      detectedType      || '',
     detected_body_type: detectedBodyType  || '',
-    detected_color:     '',
+    detected_color:     detectedColor     || '',
     user_gender:        genderEl ? (genderEl.value || '') : '',
   };
 

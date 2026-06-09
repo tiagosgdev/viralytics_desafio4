@@ -41,6 +41,38 @@ _FALLBACK_WEIGHTS = {
 }
 
 
+def _rule_based_weights(ctx: dict) -> dict:
+    """
+    Deterministic weights for rounds where user_answer is empty.
+
+    When the user has not answered an intent question yet, the three detected
+    features are treated as equally important.  This path takes microseconds
+    and avoids an unnecessary Ollama call.
+    """
+    detected_color     = str(ctx.get("detected_color")     or "").strip()
+    detected_type      = str(ctx.get("detected_type")      or "").strip()
+    detected_body_type = str(ctx.get("detected_body_type") or "").strip()
+
+    include: dict = {}
+    if detected_color:
+        include["color"] = [detected_color]
+    if detected_type:
+        include["type"] = [detected_type]
+    if detected_body_type:
+        include["body_type"] = [detected_body_type]
+
+    query = " ".join(filter(None, [detected_color, detected_type])) or "clothing"
+    return {
+        "query":   query,
+        "filters": {"include": include, "exclude": {}},
+        "weights": {
+            "color":    {"importance": 33},
+            "type":     {"importance": 34},
+            "bodyType": {"importance": 33},
+        },
+    }
+
+
 class WeightBehaviour(CyclicBehaviour):
     async def run(self) -> None:
         msg = await self.receive(timeout=60)
@@ -51,26 +83,33 @@ class WeightBehaviour(CyclicBehaviour):
         conv_id = data.get("conv_id", "")
         ctx     = data.get("context", {})
 
-        logger.info(f"[{conv_id}] FeatureWeightAgent: analysing intent.")
+        user_answer = str(ctx.get("user_answer") or "").strip()
 
-        loop = asyncio.get_event_loop()
-        try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: analyze_intent(
-                    detected_color     = str(ctx.get("detected_color",     "") or ""),
-                    detected_type      = str(ctx.get("detected_type",      "") or ""),
-                    detected_body_type = str(ctx.get("detected_body_type", "") or ""),
-                    user_answer        = str(ctx.get("user_answer",        "") or ""),
-                ),
-            )
-        except Exception as exc:
-            logger.error(f"[{conv_id}] analyze_intent failed: {exc}")
-            result = {
-                "query":   str(ctx.get("detected_type") or "clothing"),
-                "filters": {"include": {}, "exclude": {}},
-                "weights": _FALLBACK_WEIGHTS,
-            }
+        if not user_answer:
+            # Fast path: no user text to interpret — deterministic rules, ~0 ms.
+            result = _rule_based_weights(ctx)
+            logger.info(f"[{conv_id}] FeatureWeightAgent: fast-path (no user answer).")
+        else:
+            # LLM path: interpret the user's text to derive importance weights.
+            logger.info(f"[{conv_id}] FeatureWeightAgent: calling analyze_intent.")
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: analyze_intent(
+                        detected_color     = str(ctx.get("detected_color",     "") or ""),
+                        detected_type      = str(ctx.get("detected_type",      "") or ""),
+                        detected_body_type = str(ctx.get("detected_body_type", "") or ""),
+                        user_answer        = user_answer,
+                    ),
+                )
+            except Exception as exc:
+                logger.error(f"[{conv_id}] analyze_intent failed: {exc}")
+                result = {
+                    "query":   str(ctx.get("detected_type") or "clothing"),
+                    "filters": {"include": {}, "exclude": {}},
+                    "weights": _FALLBACK_WEIGHTS,
+                }
 
         reply = make_inform(
             to_jid  = str(msg.sender),

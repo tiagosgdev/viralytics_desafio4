@@ -11,21 +11,47 @@ Two purposes:
   2. Agent context on comeback: when a scorer agent restarts after a failure it
      calls history.agent_context_summary(agent_id) to see what happened while
      it was down — which rounds ran, how many it missed, and what was detected.
+     Completed/failed rounds are persisted to a local SQLite file so agents
+     that recover after a full process restart still have context.
 
 All public methods are thread-safe (agents may call from executor threads).
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import sqlite3
 import time
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from multi_agent.config import QUEUE_TTL_S
 
 MAX_HISTORY = 50   # keep last N round records in memory
+
+_HISTORY_DB = Path(__file__).resolve().parent / "history.db"
+
+_CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS round_history (
+    conv_id            TEXT PRIMARY KEY,
+    wall_time          REAL NOT NULL,
+    status             TEXT NOT NULL,
+    detected_color     TEXT,
+    detected_type      TEXT,
+    detected_body_type TEXT,
+    result_count       INTEGER DEFAULT 0,
+    agents_responded   TEXT,
+    agents_missing     TEXT,
+    error              TEXT,
+    duration_s         REAL
+)
+"""
+
+logger = logging.getLogger(__name__)
 
 
 # ── Record ────────────────────────────────────────────────────────────────────
@@ -57,12 +83,95 @@ class RoundRecord:
 # ── History store ─────────────────────────────────────────────────────────────
 
 class RoundHistory:
-    """Thread-safe in-memory log of recommendation rounds."""
+    """Thread-safe log of recommendation rounds with optional SQLite persistence."""
 
     def __init__(self) -> None:
         self._lock    = threading.Lock()
         self._records: dict[str, RoundRecord] = {}
         self._order:   deque[str] = deque(maxlen=MAX_HISTORY)
+        self._db: Optional[sqlite3.Connection] = None
+        self._init_db()
+        self._load_from_db()
+
+    # ── Persistence helpers ───────────────────────────────────────────────────
+
+    def _init_db(self) -> None:
+        try:
+            self._db = sqlite3.connect(str(_HISTORY_DB), check_same_thread=False)
+            self._db.execute(_CREATE_SQL)
+            self._db.commit()
+        except Exception as exc:
+            logger.warning(f"[history] DB init failed ({exc}); running in-memory only.")
+            self._db = None
+
+    def _load_from_db(self) -> None:
+        """Populate in-memory store from the last MAX_HISTORY persisted records."""
+        if self._db is None:
+            return
+        try:
+            rows = self._db.execute(
+                "SELECT conv_id, status, wall_time, detected_color, detected_type, "
+                "detected_body_type, result_count, agents_responded, agents_missing, "
+                "error, duration_s FROM round_history "
+                "ORDER BY wall_time DESC LIMIT ?",
+                (MAX_HISTORY,),
+            ).fetchall()
+        except Exception as exc:
+            logger.warning(f"[history] Failed to load persisted history: {exc}")
+            return
+
+        for row in reversed(rows):  # oldest first so _order is chronological
+            (conv_id, status, _wall_time, det_color, det_type, det_body,
+             result_count, responded_json, missing_json, error, duration_s) = row
+
+            rec = RoundRecord(
+                conv_id  = conv_id,
+                queued_at = 0.0,  # monotonic from dead process; treat as very old
+                context   = {
+                    "detected_color":     det_color or "",
+                    "detected_type":      det_type  or "",
+                    "detected_body_type": det_body  or "",
+                },
+                status            = status,
+                result_count      = result_count or 0,
+                agents_responded  = json.loads(responded_json or "[]"),
+                agents_missing    = json.loads(missing_json   or "[]"),
+                error             = error,
+            )
+            if duration_s is not None:
+                rec.started_at   = 0.0
+                rec.completed_at = duration_s  # relative; duration is still correct
+            with self._lock:
+                self._records[conv_id] = rec
+                self._order.append(conv_id)
+
+    def _persist(self, rec: RoundRecord) -> None:
+        """Write or update one record in the SQLite store."""
+        if self._db is None:
+            return
+        try:
+            self._db.execute(
+                "INSERT OR REPLACE INTO round_history "
+                "(conv_id, wall_time, status, detected_color, detected_type, "
+                "detected_body_type, result_count, agents_responded, agents_missing, "
+                "error, duration_s) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    rec.conv_id,
+                    time.time(),
+                    rec.status,
+                    rec.context.get("detected_color",     ""),
+                    rec.context.get("detected_type",      ""),
+                    rec.context.get("detected_body_type", ""),
+                    rec.result_count,
+                    json.dumps(rec.agents_responded),
+                    json.dumps(rec.agents_missing),
+                    rec.error,
+                    rec.duration_s(),
+                ),
+            )
+            self._db.commit()
+        except Exception as exc:
+            logger.warning(f"[history] Failed to persist round {rec.conv_id}: {exc}")
 
     # ── Writers (called by orchestrator) ─────────────────────────────────────
 
@@ -107,6 +216,7 @@ class RoundHistory:
                 rec.agents_responded = list(agents_responded)
                 rec.agents_missing   = list(agents_missing)
                 rec.completed_at     = time.monotonic()
+                self._persist(rec)
 
     def record_failed(self, conv_id: str, error: str) -> None:
         with self._lock:
@@ -115,6 +225,7 @@ class RoundHistory:
                 rec.status       = "failed"
                 rec.error        = error
                 rec.completed_at = time.monotonic()
+                self._persist(rec)
 
     # ── Queries ───────────────────────────────────────────────────────────────
 

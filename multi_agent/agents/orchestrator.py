@@ -10,8 +10,7 @@ Round protocol (closed letter / sealed bid):
   4. CFP     → all four scorer agents (simultaneously — sealed bid)
   5. PROPOSE ← body, clothing, colour, stock (each independently, no cross-talk)
   6. Weighted Borda count aggregation → top-10
-  7. INFORM  → all agents (final result broadcast)
-  8. Result future resolved → caller unblocks
+  7. Result future resolved → caller unblocks
 
 Rounds are serialised through an asyncio.Queue.  Multiple concurrent round
 triggers are queued and processed one at a time by a single CyclicBehaviour,
@@ -33,6 +32,7 @@ from multi_agent.config import (
     COLLECT_TIMEOUT_S,
     JIDS,
     N_CANDIDATES,
+    QUEUE_MAX_SIZE,
     SCORER_NAMES,
     STOCK_WEIGHT,
     TOP_K,
@@ -314,6 +314,13 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 agent_id = data.get("agent_id") or str(msg.sender).split("@")[0]
                 if agent_id not in proposals:
                     proposals[agent_id] = data.get("scores", {})
+            else:
+                # Stale message from a previous round or wrong type — discard.
+                logger.debug(
+                    f"[{conv_id}] _collect_proposals: discarding stale message "
+                    f"(performative={msg.get_metadata('performative')!r}, "
+                    f"conv_id={msg.get_metadata('conv_id')!r[:8]})"
+                )
 
         return proposals
 
@@ -367,7 +374,7 @@ class OrchestratorAgent(BaseRecommenderAgent):
         self._stock_agent: _StockAgent | None   = stock_agent  # shared instance or None
 
     async def setup(self) -> None:
-        self._round_queue = asyncio.Queue()
+        self._round_queue = asyncio.Queue(maxsize=QUEUE_MAX_SIZE)
         if self._stock_agent is None:
             loop = asyncio.get_event_loop()
             self._stock_agent = await loop.run_in_executor(None, _StockAgent)
@@ -402,5 +409,13 @@ class OrchestratorAgent(BaseRecommenderAgent):
             "user_height_cm":     user_height_cm,
         }
         history.record_enqueued(conv_id, context)
-        self._round_queue.put_nowait(context)
+        try:
+            self._round_queue.put_nowait(context)
+        except asyncio.QueueFull:
+            logger.warning(
+                f"[{conv_id}] Round queue full ({QUEUE_MAX_SIZE} pending) — dropping."
+            )
+            history.record_failed(conv_id, "queue full")
+            if not result_future.done():
+                result_future.set_result([])
         return conv_id
