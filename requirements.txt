@@ -21,7 +21,7 @@ numpy>=1.26.4
 pandas>=2.2.2
 scikit-learn>=1.4.2
 sentence-transformers>=3.4.1
-qdrant-client>=1.17.1
+qdrant-client>=1.16.1,<1.17
 ollama>=0.6.1
 
 # Experiment Tracking

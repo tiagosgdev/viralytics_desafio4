@@ -12,10 +12,12 @@ from pathlib import Path
 
 import ollama
 
-# Allow importing nl_mappings from the same vector/ folder
+# Ensure the LNIAGIA package root is on sys.path so `DB` imports work
+# (this file lives in LNIAGIA/query_parsing, and DB/ is a sibling folder).
 _SCRIPT_DIR = Path(__file__).resolve().parent
-if str(_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT_DIR))
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+if str(_PROJECT_ROOT) not in sys.path:
+  sys.path.insert(0, str(_PROJECT_ROOT))
 
 from DB.vector.nl_mappings import ALL_MAPPINGS
 from DB.models import FILTERABLE_FIELDS, FREE_TEXT_FILTER_FIELDS
@@ -611,7 +613,14 @@ def parse_query(query: str, model: str | None = None, verbose: bool = False) -> 
             {"role": "system", "content": _build_system_prompt()},
             {"role": "user", "content": _build_user_prompt(query)},
         ],
-        options={"temperature": 0},
+        # Latency knobs (safe, output unchanged):
+        # - format="json" constrains decoding to a JSON object (no fences).
+        # - keep_alive keeps the model resident so repeated calls skip reload.
+        # - num_ctx=4096 ensures the large system prompt isn't silently
+        #   truncated by the ~2048 default; num_predict caps output length.
+        format="json",
+        keep_alive="30m",
+        options={"temperature": 0, "num_ctx": 4096, "num_predict": 512},
     )
 
     raw = response.message.content.strip()
@@ -676,7 +685,10 @@ def refine_query(
                 ),
             },
         ],
-        options={"temperature": 0},
+        # Same latency knobs as parse_query (see note there).
+        format="json",
+        keep_alive="30m",
+        options={"temperature": 0, "num_ctx": 4096, "num_predict": 512},
     )
 
     raw = response.message.content.strip()
@@ -764,6 +776,19 @@ if __name__ == "__main__":
     print(f"  Refiner model: {OLLAMA_REFINER_MODEL}")
     print(f"  Interaction model: {OLLAMA_ROUTER_MODEL}")
     print("  Type a clothing query, or 'exit' to quit.\n")
+
+    # Warm up the Ollama model once before prompting the user so the
+    # first interactive query isn't delayed by model startup.
+    try:
+      print(" Loading LLM model (warming up)...")
+      _ = ollama.chat(
+        model=OLLAMA_REFINER_MODEL,
+        messages=[{"role": "system", "content": "warmup"}, {"role": "user", "content": "ping"}],
+        options={"temperature": 0},
+      )
+      print(" Model ready.\n")
+    except Exception as e:
+      print(f" Warning: could not warm up Ollama model: {e}\n")
 
     print(" System prompt:")
     print(_build_system_prompt())

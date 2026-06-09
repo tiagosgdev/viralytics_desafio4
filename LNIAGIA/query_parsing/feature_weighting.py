@@ -1,0 +1,691 @@
+# ════════════════════════════════════════════════════════════
+# feature_weighting.py
+# Asks the user what they are looking for (in a persona voice),
+# then analyses the answer against the 3 detected features
+# (color, type, body type) and returns filters plus importance
+# weights that sum to 100.
+# ════════════════════════════════════════════════════════════
+
+import json
+import random
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+import ollama
+
+_SCRIPT_DIR = Path(__file__).resolve().parent           # LNIAGIA/query_parsing/
+_LNIAGIA_DIR = _SCRIPT_DIR.parent                       # LNIAGIA/
+for _path in (_LNIAGIA_DIR, _SCRIPT_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+from DB.models import TYPE, COLOR, BODY_TYPE
+from query_parsing.llm_query_parser import (
+    OLLAMA_REFINER_MODEL,
+    _build_system_prompt,
+    _validate,
+)
+
+# ══════════════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════════════
+
+DEFAULT_PERSONA = "cruella"
+SUPPORTED_PERSONAS = {"cruella", "edna"}
+
+_TYPE_DISPLAY_MAP = {
+    "short_sleeve_top": "t-shirt",
+    "long_sleeve_top": "long-sleeve top",
+    "long_sleeve_outwear": "jacket",
+    "vest": "vest",
+    "shorts": "shorts",
+    "trousers": "trousers",
+    "skirt": "skirt",
+    "short_sleeve_dress": "short-sleeve dress",
+    "long_sleeve_dress": "long-sleeve dress",
+    "vest_dress": "sleeveless dress",
+    "sling_dress": "slip dress",
+}
+
+# Templates use {color}, {type} and {body_type} placeholders.
+# generate_intent_question picks one at random per call so the user does
+# not see the same opener on every scan.
+_QUESTION_VARIANTS: dict[str, tuple[str, ...]] = {
+    "cruella": (
+        "Darling, I see a {color} {type} made for a {body_type} shape. Tell me what you are hunting for.",
+        "Oh darling, a {color} {type} flattering a {body_type} figure — bold start. What direction are we taking this?",
+        "Well well, a {color} {type} cut for a {body_type} shape. Spill it, darling — what look are you after?",
+        "A {color} {type} for a {body_type} silhouette — promising, darling. What do you want next?",
+        "Darling, that {color} {type} made for a {body_type} shape is only the opening act. What are you really craving?",
+    ),
+    "edna": (
+        "I see a {color} {type} made for a {body_type} shape. Tell me exactly what you are looking for.",
+        "Detected: {color} {type}, {body_type} shape. State what you want. Be specific.",
+        "A {color} {type} for a {body_type} figure. Now — what are we changing, keeping, or replacing?",
+        "{color} {type}, {body_type} shape. Tell me your requirements. No vagueness.",
+        "I have a {color} {type} for a {body_type} shape on screen. Describe what you need.",
+    ),
+}
+
+_DEFAULT_QUESTION_VARIANTS: tuple[str, ...] = (
+    "I see a {color} {type} made for a {body_type} shape. What are you looking for?",
+    "Looks like a {color} {type} for a {body_type} figure. What would you like next?",
+    "I detected a {color} {type} made for a {body_type} shape. Tell me what you want.",
+)
+
+
+# ══════════════════════════════════════════════════════════════
+# PERSONA
+# ══════════════════════════════════════════════════════════════
+
+def _normalize_persona(value: Any) -> str:
+    key = str(value or DEFAULT_PERSONA).strip().lower()
+    if key == "cruela":
+        key = "cruella"
+    if key in SUPPORTED_PERSONAS:
+        return key
+    return DEFAULT_PERSONA
+
+
+def _humanize_type(value: str) -> str:
+    return _TYPE_DISPLAY_MAP.get(value, str(value or "").replace("_", " "))
+
+
+def _humanize_body_type(value: str) -> str:
+    return str(value or "").replace("_", " ")
+
+
+# ══════════════════════════════════════════════════════════════
+# STEP 1 — ASK THE USER
+# ══════════════════════════════════════════════════════════════
+
+def generate_intent_question(
+    detected_color: str,
+    detected_type: str,
+    detected_body_type: str,
+    persona: str = DEFAULT_PERSONA,
+) -> str:
+    """
+    Build a short, persona-styled question that asks the user what they
+    are looking for, given the three detected features.
+
+    Picks a random phrase from the persona's variant list so the question
+    feels fresh across multiple scans. No LLM call — pure string formatting.
+    """
+    persona_key = _normalize_persona(persona)
+    variants = _QUESTION_VARIANTS.get(persona_key, _DEFAULT_QUESTION_VARIANTS)
+    template = random.choice(variants)
+    return template.format(
+        color=detected_color,
+        type=_humanize_type(detected_type),
+        body_type=_humanize_body_type(detected_body_type),
+    )
+
+# ══════════════════════════════════════════════════════════════
+# STEP 2 — ANALYSE THE ANSWER
+# ══════════════════════════════════════════════════════════════
+
+def _build_intent_system_prompt() -> str:
+    color_values = json.dumps(sorted(COLOR))
+    type_values = json.dumps(sorted(TYPE))
+    body_type_values = json.dumps(sorted(BODY_TYPE))
+    base_prompt = _build_system_prompt()
+
+    return f"""\
+{base_prompt}
+
+═══════════════════════════════════════════════════════════════
+IN-STORE SCAN MODE — THIS SUPERSEDES THE OUTPUT SCHEMA ABOVE
+═══════════════════════════════════════════════════════════════
+
+You weigh three clothing features by user intent and produce scan filters.
+
+Inputs:
+- detected_color, detected_type, detected_body_type (from the vision scan)
+- user_answer: free text replying to "what are you looking for?"
+
+SCAN FILTER RULES (in addition to ALL rules above):
+- detected_type is the shopper's starting garment. Put it in
+    include.type UNLESS the answer names a different type — then use the
+    new type only (do NOT exclude the old one).
+- detected_color: keep it in include.color UNLESS the answer names a
+    different color or negates it (then follow the normal negation rules).
+- detected_body_type is a HARD constraint from the vision system. ALWAYS
+    put detected_body_type in include.body_type, UNLESS the shopper
+    explicitly names a different body shape — then use the shopper's shape.
+    Use ONLY the valid values listed below.
+- Only add something to exclude when the shopper explicitly says they do
+    NOT want it (direct negation like "not", "don't want", "avoid"). Do not
+    infer excludes from preferences alone.
+- All other fields follow the normal include/exclude rules above.
+
+WEIGHTS — also score the importance of the three scan features:
+- color, type, bodyType (body shape).
+- Each importance is a number greater than 0; the three MUST sum to 100.
+- Higher importance = the user emphasised that feature more.
+- Explicit mentions outweigh implicit / contextual hints.
+- A contradiction (user wants a different value) scores HIGH because the
+    user clearly cares about that feature.
+- A feature the user never mentions still gets some importance — never 0.
+- If the user talks about fit ("fit", "fits", "fitting", "fits me well"),
+    give EXTRA importance to bodyType.
+
+VALID VALUES (use ONLY these exact strings):
+- color:    {color_values}
+- type:     {type_values}
+- bodyType: {body_type_values}
+
+EXAMPLES (detected_color=red, detected_type=short_sleeve_top, detected_body_type=hourglass).
+These examples show ONLY the weights block for clarity; still return the
+full scan output schema below.
+
+Example A — user_answer: "I am looking for a t-shirt"
+    Mentions type only. Color and body type are not mentioned.
+    {{
+        "color":    {{"value": "red", "importance": 12}},
+        "type":     {{"value": "short_sleeve_top", "importance": 76}},
+        "bodyType": {{"value": "hourglass", "importance": 12}}
+    }}
+
+Example B — user_answer: "I want a red casual t-shirt"
+    Mentions color + type. "casual" is style and is ignored. Body type not mentioned.
+    {{
+        "color":    {{"value": "red", "importance": 47}},
+        "type":     {{"value": "short_sleeve_top", "importance": 47}},
+        "bodyType": {{"value": "hourglass", "importance": 6}}
+    }}
+
+Example C — user_answer: "I want something for the summer"
+    Summer softly hints at short-sleeve tops. No explicit feature mention.
+    {{
+        "color":    {{"value": "red", "importance": 28}},
+        "type":     {{"value": "short_sleeve_top", "importance": 44}},
+        "bodyType": {{"value": "hourglass", "importance": 28}}
+    }}
+
+Example D — user_answer: "I am looking for a green t-shirt"
+    Contradicts color (red -> green) AND confirms type. Body type not mentioned.
+    {{
+        "color":    {{"value": "green", "importance": 47}},
+        "type":     {{"value": "short_sleeve_top", "importance": 47}},
+        "bodyType": {{"value": "hourglass", "importance": 6}}
+    }}
+
+Example E — user_answer: "Something for a pear shape in blue"
+    Contradicts color (red -> blue) AND body type (hourglass -> pear). Type not mentioned.
+    {{
+        "color":    {{"value": "blue", "importance": 45}},
+        "type":     {{"value": "short_sleeve_top", "importance": 10}},
+        "bodyType": {{"value": "pear", "importance": 45}}
+    }}
+
+Example F — user_answer: "Something that fits me well"
+    Mentions fit, which hints at body type being more important. No explicit feature mention.
+    {{
+        "color":    {{"value": "blue", "importance": 20}},
+        "type":     {{"value": "short_sleeve_top", "importance": 20}},
+        "bodyType": {{"value": "pear", "importance": 60}}
+    }}
+
+FINAL SCAN OUTPUT — return ONLY this JSON object (no markdown, no prose):
+{{
+    "query": "<short semantic search text consistent with the filters>",
+    "filters": {{
+        "include": {{ "<field>": ["<value>", ...] }},
+        "exclude": {{ "<field>": ["<value>", ...] }}
+    }},
+    "weights": {{
+        "color":    {{"importance": <number>}},
+        "type":     {{"importance": <number>}},
+        "bodyType": {{"importance": <number>}}
+    }}
+}}
+"""
+
+
+def _build_intent_user_prompt(
+    detected_color: str,
+    detected_type: str,
+    detected_body_type: str,
+    user_answer: str,
+) -> str:
+    return (
+        f"detected_color: {detected_color}\n"
+        f"detected_type: {detected_type}\n"
+        f"detected_body_type: {detected_body_type}\n"
+        f"user_answer: {json.dumps(user_answer)}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+# STEP 2 — ONE CALL: FILTERS + WEIGHTS FOR THE SCAN FLOW
+# ══════════════════════════════════════════════════════════════
+#
+# The in-store flow is: vision detects (color, type, body_type) ->
+# we ask ONE question -> the shopper answers -> from that single answer
+# we need BOTH:
+#   (a) the full include/exclude filter schema to query the DB, and
+#   (b) the importance weights for the 3 features used by the
+#       bidding/voting multi-agent system.
+#
+# These are produced in ONE LLM call so the filter values and the
+# weight values cannot diverge (consistency by construction):
+# the LLM returns the filters + 3 importance numbers, and the code
+# reads each weight's VALUE back FROM the final filters (color/type)
+# and from vision (body_type). This also keeps us within the latency
+# budget (one round-trip instead of two).
+
+# ── Deterministic color-negation handling ──────────────────────
+# The small quantized LLM is unreliable at (a) moving a negated color
+# category to "exclude" and (b) scoring how confident we are in a color
+# the shopper just rejected. We therefore reconcile color in code, from
+# the raw answer, so filters and the confidence number always agree.
+
+# Mirrors the COLOR EXPANSIONS in llm_query_parser's system prompt.
+_COLOR_CATEGORY_MAP: dict[str, tuple[str, ...]] = {
+    "dark": ("black", "navy", "burgundy", "olive", "brown"),
+    "light": ("white", "beige", "cream", "pink", "yellow"),
+    "neutral": ("white", "gray", "beige", "cream", "brown"),
+    "vivid": ("white", "yellow", "orange", "pink", "red", "purple", "coral", "teal"),
+    "bold": ("white", "yellow", "orange", "pink", "red", "purple", "coral", "teal"),
+    "bright": ("white", "yellow", "orange", "pink", "red", "purple", "coral", "teal"),
+}
+
+_NEGATION_WORDS = {
+    "not", "no", "dont", "never", "avoid", "without", "hate", "cannot",
+    "cant", "nope", "neither", "nor", "exclude", "skip",
+}
+
+_FIT_TERMS_RE = re.compile(r"\bfit(s|ting)?\b")
+_BODYTYPE_FIT_BOOST = 1.6
+
+# Confidence (=importance %) the color feature is pinned to when the
+# shopper rejects the detected color. Both are very low, by request:
+#   - direct  ("I don't want red", detected red) -> between 0 and 1
+#   - category ("not too dark", detected black)  -> between 1 and 2
+_COLOR_DIRECT_NEGATION_PCT = 0.5
+_COLOR_CATEGORY_NEGATION_PCT = 1.5
+# When the shopper negates a *different* color, the detected one survived
+# and gains a little confidence — applied as a multiplier pre-normalization.
+_COLOR_SURVIVOR_BOOST = 1.3
+
+
+def _is_negation_token(token: str) -> bool:
+    return token in _NEGATION_WORDS or token.endswith("n't")
+
+
+def _mentions_fit(answer: str) -> bool:
+    return bool(_FIT_TERMS_RE.search(str(answer or "").lower()))
+
+
+def _split_terms_by_negation(
+    answer: str,
+    candidate_terms: set[str],
+) -> tuple[set[str], set[str]]:
+    """
+    Return (negated_terms, positive_terms) found in `answer`.
+
+    A candidate term is "negated" when a negation cue appears before it in
+    the SAME clause (covers "not red", "I don't want red", "not too dark").
+    Punctuation (",", ".", ";") ends a clause, so a negation does not leak
+    into the next one — e.g. "not red, I want blue" negates only red.
+    Otherwise the term is "positive".
+    """
+    tokens = re.findall(r"[a-z']+|[,.;]", str(answer or "").lower())
+    boundaries = {",", ".", ";"}
+    neg_positions = [i for i, tok in enumerate(tokens) if _is_negation_token(tok)]
+
+    negated: set[str] = set()
+    positive: set[str] = set()
+    for j, tok in enumerate(tokens):
+        if tok not in candidate_terms:
+            continue
+        in_negation = any(
+            i < j
+            and (j - i) <= 6
+            and not any(tokens[k] in boundaries for k in range(i + 1, j))
+            for i in neg_positions
+        )
+        (negated if in_negation else positive).add(tok)
+    return negated, positive
+
+
+def _reconcile_color_negation(
+    answer: str,
+    detected_color: str,
+    include: dict[str, list[str]],
+    exclude: dict[str, list[str]],
+) -> str:
+    """
+    Make the color filters agree with what the shopper actually said and
+    return a state describing the detected color's standing:
+
+        "confirmed_positive" | "replaced_positive" |
+        "direct_negation" | "category_negation" |
+        "other_negation" | "neutral"
+
+    Mutates `include`/`exclude` so negated colors (named or via category)
+    are removed from include and added to exclude.
+    """
+    color_set = set(COLOR)
+    candidate_terms = color_set | set(_COLOR_CATEGORY_MAP)
+    negated, positive = _split_terms_by_negation(answer, candidate_terms)
+
+    negated_named = {t for t in negated if t in color_set}
+    negated_category_colors: set[str] = set()
+    for term in negated:
+        if term in _COLOR_CATEGORY_MAP:
+            negated_category_colors.update(_COLOR_CATEGORY_MAP[term])
+    negated_colors = negated_named | negated_category_colors
+
+    positive_named = {t for t in positive if t in color_set}
+    positive_category_colors: set[str] = set()
+    for term in positive:
+        if term in _COLOR_CATEGORY_MAP:
+            positive_category_colors.update(_COLOR_CATEGORY_MAP[term])
+
+    # Apply negations to the filters (move out of include, into exclude).
+    if negated_colors:
+        kept_include = [c for c in include.get("color", []) if c not in negated_colors]
+        if kept_include:
+            include["color"] = kept_include
+        else:
+            include.pop("color", None)
+
+        current_exclude = list(exclude.get("color", []))
+        for color in sorted(negated_colors):
+            if color not in current_exclude:
+                current_exclude.append(color)
+        exclude["color"] = current_exclude
+
+    # Decide the detected color's standing (positive intent wins).
+    if detected_color in positive_named or detected_color in positive_category_colors:
+        return "confirmed_positive"
+    if positive_named:
+        return "replaced_positive"
+    if detected_color in negated_named:
+        return "direct_negation"
+    if detected_color in negated_category_colors:
+        return "category_negation"
+    if negated_colors:
+        return "other_negation"
+    return "neutral"
+
+
+def _first(values: Any) -> Any:
+    if isinstance(values, list) and values:
+        return values[0]
+    return None
+
+
+def _inject_detected_filters(
+    include: dict[str, list[str]],
+    detected_type: str,
+    detected_body_type: str,
+) -> None:
+    """
+    Guarantee the scan's hard features are present in include.
+
+    - type: inject detected_type only if the LLM produced no type at all
+      (i.e. the shopper did not name a different garment).
+    - body_type: inject detected_body_type only if the LLM produced none
+      (the override case keeps whatever valid body shape the LLM set).
+
+    Only valid closed-set values are injected, so the result stays clean
+    even if vision emits an unexpected token.
+    """
+    if not include.get("type") and detected_type in set(TYPE):
+        include["type"] = [detected_type]
+    if not include.get("body_type") and detected_body_type in set(BODY_TYPE):
+        include["body_type"] = [detected_body_type]
+
+
+def _normalize_scan_weights(
+    raw_weights: Any,
+    values: dict[str, str],
+    user_answer: str,
+    color_state: str = "neutral",
+) -> dict[str, dict[str, Any]]:
+    """
+    Build the {color/type/bodyType: {value, importance}} block.
+
+    Importance numbers come from the LLM; VALUES come from `values`
+    (derived from the final filters + vision) so they cannot diverge.
+
+    `color_state` (from _reconcile_color_negation) overrides the color
+    importance deterministically:
+      - direct_negation   -> pinned very low (~0.5)
+      - category_negation -> pinned low      (~1.5)
+      - other_negation    -> small boost (the detected color survived)
+      - confirmed/replaced/neutral -> LLM number kept as-is
+
+    Pinned color is held fixed; the remaining budget (100 - pinned) is
+    split across the other features in proportion to their LLM numbers.
+    Guarantees: every importance > 0 and the three sum to 100.0.
+    """
+    if not isinstance(raw_weights, dict):
+        raw_weights = {}
+
+    features = ("color", "type", "bodyType")
+    raw_importances: dict[str, float] = {}
+    for feature in features:
+        block = raw_weights.get(feature)
+        candidate = block.get("importance") if isinstance(block, dict) else block
+        try:
+            importance = float(candidate)
+        except (TypeError, ValueError):
+            importance = 0.0
+        if importance <= 0:
+            importance = 1.0
+        raw_importances[feature] = importance
+
+    if _mentions_fit(user_answer):
+        raw_importances["bodyType"] *= _BODYTYPE_FIT_BOOST
+
+    # Apply the deterministic color override.
+    pinned: dict[str, float] = {}
+    if color_state == "direct_negation":
+        pinned["color"] = _COLOR_DIRECT_NEGATION_PCT
+    elif color_state == "category_negation":
+        pinned["color"] = _COLOR_CATEGORY_NEGATION_PCT
+    elif color_state == "other_negation":
+        raw_importances["color"] *= _COLOR_SURVIVOR_BOOST
+
+    unpinned = [f for f in features if f not in pinned]
+    remaining = max(0.0, 100.0 - sum(pinned.values()))
+    unpinned_total = sum(raw_importances[f] for f in unpinned)
+
+    result: dict[str, dict[str, Any]] = {}
+    for feature in features:
+        if feature in pinned:
+            pct = round(pinned[feature], 2)
+        elif unpinned_total <= 0:
+            pct = round(remaining / len(unpinned), 2)
+        else:
+            pct = round((raw_importances[feature] / unpinned_total) * remaining, 2)
+        result[feature] = {"value": values[feature], "importance": pct}
+
+    # Absorb rounding drift into the dominant UNPINNED feature (never the
+    # pinned color, whose low value is intentional).
+    drift = round(100.0 - sum(r["importance"] for r in result.values()), 2)
+    if drift != 0 and unpinned:
+        top = max(unpinned, key=lambda k: result[k]["importance"])
+        result[top]["importance"] = round(result[top]["importance"] + drift, 2)
+
+    return result
+
+
+def analyze_intent(
+    detected_color: str,
+    detected_type: str,
+    detected_body_type: str,
+    user_answer: str,
+    model: str | None = None,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """
+    ONE LLM call that turns a single shopper answer into BOTH the DB
+    filters and the multi-agent importance weights for the scan flow.
+
+    Returns:
+        {
+          "query":   "<semantic search text>",
+          "filters": {"include": {...}, "exclude": {...}},
+          "weights": {
+            "color":    {"value": "<valid color>",     "importance": <float>},
+            "type":     {"value": "<valid type>",       "importance": <float>},
+            "bodyType": {"value": "<valid body type>",  "importance": <float>}
+          }
+        }
+
+    Guarantees:
+        - filters only contain valid closed-set values (via _validate)
+        - detected type + body_type are always present in include
+          (body_type is a HARD Qdrant filter) unless the shopper
+          explicitly replaced them
+        - every weight importance > 0 and the three sum to 100.0
+        - each weight VALUE is read back from the final filters / vision,
+          so weights and filters are always consistent
+    """
+    model = model or OLLAMA_REFINER_MODEL
+    system_prompt = _build_intent_system_prompt()
+
+    parsed: Any = {}
+    try:
+        response = ollama.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": _build_intent_user_prompt(
+                        detected_color, detected_type, detected_body_type, user_answer
+                    ),
+                },
+            ],
+            format="json",
+            keep_alive="30m",
+            options={"temperature": 0.5, "num_predict": 512, "num_ctx": 4096},
+        )
+
+        raw = ""
+        message_obj = getattr(response, "message", None)
+        if message_obj is not None:
+            raw = str(getattr(message_obj, "content", "")).strip()
+        elif isinstance(response, dict):
+            raw = str(response.get("message", {}).get("content", "")).strip()
+
+        if verbose:
+            print(f"\n  [LLM raw scan response]\n  {raw}\n")
+
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0].strip()
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            if verbose:
+                print("  WARNING: invalid JSON from LLM, using detected-only fallback.")
+            parsed = {}
+    except Exception as exc:
+        if verbose:
+            print(f"  WARNING: LLM call failed ({exc}). Using detected-only fallback.")
+        parsed = {}
+
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    # ── Filters: validate against the closed sets, then guarantee the
+    #    hard scan features are present. ──────────────────────────────
+    raw_filters = parsed.get("filters")
+    if not isinstance(raw_filters, dict):
+        raw_filters = {}
+    validated = _validate(raw_filters)
+    include = validated.get("include") if isinstance(validated.get("include"), dict) else {}
+    exclude = validated.get("exclude") if isinstance(validated.get("exclude"), dict) else {}
+
+    # Deterministically reconcile color negation (the small LLM is
+    # unreliable here): moves negated colors / categories out of include
+    # and into exclude, and reports the detected color's standing so the
+    # confidence number can be set accordingly.
+    color_state = _reconcile_color_negation(user_answer, detected_color, include, exclude)
+
+    _inject_detected_filters(include, detected_type, detected_body_type)
+    filters = {"include": include, "exclude": exclude}
+
+    if verbose:
+        print(f"  [color state] {color_state}")
+
+    # ── Weight VALUES are read back from the final filters / vision so
+    #    they always match what the DB will actually be queried with. ──
+    values = {
+        "color": _first(include.get("color")) or detected_color,
+        "type": _first(include.get("type")) or detected_type,
+        "bodyType": _first(include.get("body_type")) or detected_body_type,
+    }
+    weights = _normalize_scan_weights(
+        parsed.get("weights"), values, user_answer, color_state
+    )
+
+    # ── Semantic query text. ────────────────────────────────────────
+    query = parsed.get("query")
+    if not isinstance(query, str) or not query.strip():
+        query = " ".join(
+            part for part in (values["color"], _humanize_type(values["type"])) if part
+        ).strip() or "clothing"
+
+    return {"query": query.strip(), "filters": filters, "weights": weights}
+
+
+# ══════════════════════════════════════════════════════════════
+# CLI — quick manual test
+# ══════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("  Feature Weighting — Intent Analysis")
+    print("=" * 60)
+    print(f"  Refiner model: {OLLAMA_REFINER_MODEL}")
+    print()
+
+    detected_color = input("  Detected color     (default red)              > ").strip() or "red"
+    detected_type = input("  Detected type      (default short_sleeve_top) > ").strip() or "short_sleeve_top"
+    detected_body_type = input("  Detected body type (default hourglass)        > ").strip() or "hourglass"
+    persona = input("  Persona            (default cruella)          > ").strip() or DEFAULT_PERSONA
+
+    print()
+    question = generate_intent_question(
+        detected_color, detected_type, detected_body_type, persona=persona
+    )
+    print(f"  Assistant > {question}")
+
+    user_answer = input("  You       > ").strip()
+    if not user_answer:
+        print("  (no answer, exiting)")
+        sys.exit(0)
+
+    import time
+
+    start = time.perf_counter()
+    scan = analyze_intent(
+        detected_color, detected_type, detected_body_type, user_answer, verbose=True
+    )
+    elapsed = time.perf_counter() - start
+
+    weights = scan["weights"]
+
+    print("\n  Query:")
+    print(f"    {scan['query']}")
+
+    print("\n  Filters:")
+    print(f"    {json.dumps(scan['filters'], ensure_ascii=False)}")
+
+    print("\n  Weights:")
+    for feature in ("color", "type", "bodyType"):
+        data = weights[feature]
+        print(f"    {feature:9s}: {str(data['value']):25s} - {data['importance']}%")
+    print(f"\n  Sum: {sum(r['importance'] for r in weights.values())}%")
+    print(f"  Elapsed (one merged call): {elapsed:.2f}s")

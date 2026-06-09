@@ -18,6 +18,8 @@ import os
 import torch
 from ultralytics import YOLO
 
+from src.utils.color_utils import get_dominant_color_name
+
 try:
     from ultralytics.nn.tasks import DetectionModel
 except Exception:  # pragma: no cover - version-dependent import
@@ -97,6 +99,7 @@ class Detection:
     confidence:  float
     bbox:        List[int]          # [x1, y1, x2, y2] in pixels
     color:       tuple = field(default_factory=lambda: (0, 255, 0))
+    color_name:  str = ""
 
 
 @dataclass
@@ -139,15 +142,28 @@ class BaseDetector(ABC):
             cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
 
             # Label background
-            label = f"{det.class_name}"
+            label = det.class_name.replace("_", " ")
             if show_conf:
                 label += f"  {det.confidence:.0%}"
+            if det.color_name:
+                color_label = det.color_name.replace("_", " ")
+                label += f" | {color_label}"
             (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-            cv2.rectangle(out, (x1, y1 - th - baseline - 6), (x1 + tw + 4, y1), color, -1)
+            label_x1 = min(x1, max(0, out.shape[1] - tw - 4))
+            label_x2 = min(out.shape[1] - 1, label_x1 + tw + 4)
+            if y1 - th - baseline - 6 >= 0:
+                label_y1 = y1 - th - baseline - 6
+                label_y2 = y1
+                text_y = y1 - baseline - 2
+            else:
+                label_y1 = y1
+                label_y2 = min(out.shape[0] - 1, y1 + th + baseline + 6)
+                text_y = min(out.shape[0] - 2, y1 + th + 2)
+            cv2.rectangle(out, (label_x1, label_y1), (label_x2, label_y2), color, -1)
 
             # Label text
             cv2.putText(
-                out, label, (x1 + 2, y1 - baseline - 2),
+                out, label, (label_x1 + 2, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA,
             )
 
@@ -206,7 +222,9 @@ class FashionDetector(BaseDetector):
         )
 
         inference_ms = (time.perf_counter() - t0) * 1000
-        detections   = self._parse(results)
+
+        # Parse detections and enrich each with dominant color (from the input frame)
+        detections   = self._parse(results, frame)
 
         return DetectionResult(
             detections   = detections,
@@ -217,16 +235,57 @@ class FashionDetector(BaseDetector):
 
     # ── Private ────────────────────────────────────────────────────────────
 
-    def _parse(self, results) -> List[Detection]:
+    def _parse(self, results, frame: np.ndarray) -> List[Detection]:
+        """Parse raw YOLO results into Detection objects and compute dominant color per box.
+
+        The frame must be the original BGR image used for inference so we can crop
+        detection boxes and run the color pipeline (HSV -> KMeans -> map to name).
+        """
         detections = []
+        H, W = frame.shape[:2]
+
         for r in results:
             for box in r.boxes:
                 class_id = int(box.cls.item())
-                detections.append(Detection(
+                bbox = [int(v) for v in box.xyxy[0].tolist()]
+
+                # Clip bbox to frame
+                x1 = max(0, min(W - 1, bbox[0]))
+                y1 = max(0, min(H - 1, bbox[1]))
+                x2 = max(0, min(W - 1, bbox[2]))
+                y2 = max(0, min(H - 1, bbox[3]))
+
+                det = Detection(
                     class_id   = class_id,
                     class_name = CATEGORY_NAMES.get(class_id, f"class_{class_id}"),
                     confidence = float(box.conf.item()),
-                    bbox       = [int(v) for v in box.xyxy[0].tolist()],
+                    bbox       = [x1, y1, x2, y2],
                     color      = CATEGORY_COLORS.get(class_id, (0, 255, 0)),
-                ))
+                )
+
+                # Crop region and compute dominant color + name. Be defensive in case
+                # the crop is empty or too small.
+                try:
+                    if x2 > x1 and y2 > y1:
+                        crop = frame[y1:y2, x1:x2]
+                        dom_rgb, dom_name = get_dominant_color_name(crop)
+                        if dom_rgb is not None:
+                            det.color = dom_rgb
+                        det.color_name = dom_name or ""
+                        # Print detected color info to the server terminal for debugging/visibility
+                        try:
+                            print(f"[DETECT] {det.class_name} conf={det.confidence:.3f} color={det.color} color_name='{det.color_name}' bbox={det.bbox}")
+                        except Exception:
+                            # Keep parsing robust even if print formatting fails
+                            print(f"[DETECT] {det.class_name} conf={det.confidence:.3f} color=<unknown> bbox={det.bbox}")
+                except Exception:
+                    # If color extraction fails, keep default category color
+                    det.color_name = ""
+                    try:
+                        print(f"[DETECT] {det.class_name} conf={det.confidence:.3f} color={det.color} color_name='<error>' bbox={det.bbox}")
+                    except Exception:
+                        print(f"[DETECT] {det.class_name} conf={det.confidence:.3f} color=<error> bbox={det.bbox}")
+
+                detections.append(det)
+
         return detections

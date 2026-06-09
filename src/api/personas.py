@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ PERSONA_CONFIGS = {
 }
 
 
-def normalize_persona(value: str | None) -> str:
+def normalize_persona(value: Optional[str]) -> str:
     if not value:
         return "cruella"
     key = str(value).strip().lower()
