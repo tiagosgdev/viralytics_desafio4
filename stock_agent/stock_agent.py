@@ -19,23 +19,23 @@ sys.path.insert(0, str(BASE_DIR))
 from stock_stats import StockStats, PIVOT_KEYS, QUERY_KEYS, RANGE_KEYS  # noqa: E402
 
 
-_PICK_JSON_SCHEMA = {
+_TOKEN_ALLOCATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "picks": {
+        "allocation": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
                     "item_id": {"type": "integer"},
                     "size": {"type": "string"},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "tokens": {"type": "integer", "minimum": 1},
                 },
-                "required": ["item_id", "size", "confidence"],
+                "required": ["item_id", "size", "tokens"],
             },
         }
     },
-    "required": ["picks"],
+    "required": ["allocation"],
 }
 
 
@@ -78,44 +78,47 @@ def _current_season(today: datetime | None = None) -> str:
 
 _SYSTEM_PROMPT_TEMPLATE = """You are the stock manager of a clothing store.
 
-A customer query produced {n_candidates} candidate items. Some match the
-customer's wishes perfectly, others match partially. Your job is to pick
-the **top {k}** items the store should recommend.
+A customer query produced {n_candidates} candidate items. You have a
+budget of EXACTLY {total_tokens} TOKENS (not more, not less, total
+across the whole allocation). Distribute these {total_tokens} tokens
+across the candidates to express how strongly you want each item pushed.
+
+Token allocation rules (STRICT):
+- The SUM of `tokens` across ALL entries in your allocation MUST equal
+  {total_tokens}. Example: if {total_tokens}=10 you might output one
+  entry with tokens=10, or two entries with tokens=7 and tokens=3, or
+  ten entries with tokens=1 each — but the sum is always {total_tokens}.
+- Each listed entry needs at least 1 token. Don't list items with 0.
+- Multiple tokens on the same (item_id, size) pair = stronger preference.
+- The `item_id` and `size` MUST come VERBATIM from the candidate list
+  I send you below. DO NOT invent item_ids. DO NOT list sizes the
+  candidate row doesn't have.
 
 Weigh these store-side priorities:
 
 - **Clear old stock** — older items (high `age_days`) and high-stagnation
-  items (large `days_since_last_sale`) are preferred for pushing.
-- **Avoid pushing fast movers** — items with high `sales_velocity`
-  (units sold per day) sell themselves; rank them lower.
+  items (large `days_since_last_sale`) deserve more tokens.
+- **Avoid fast movers** — items with high `sales_velocity` sell themselves;
+  spend fewer tokens on them.
 - **Prefer current season** — items whose `season` matches "{current_season}"
-  (or are "all-season") are slightly preferred, all else equal.
-- **Reasonable stock** — don't push items with very low `stock_count`
-  (risk running out before customer arrives).
-- `push_score` is a precomputed combined signal (higher = stronger
-  candidate to push). Treat as ONE input among the above, not the only one.
-- Each candidate also carries `style`, `pattern`, `material`, `gender`,
-  `age_group`, `occasion`, `brand`, `price`. Use them to break ties or
-  to spot items that suit the customer's likely intent.
+  (or are "all-season") earn an edge.
+- **Reasonable stock** — don't load up items with very low `stock_count`
+  (runout risk before customer arrives).
+- `push_score` is a precomputed combined signal — strong input but not
+  the only one. Integrate with the other dimensions.
+- Other attributes (style, pattern, material, gender, age_group, occasion,
+  brand, price, body_type) for tie-breaking.
 
 Reply with a JSON object using EXACTLY this schema. No prose, no markdown,
 no extra fields:
 
-{{"picks": [{{"item_id": <int>, "size": "<S>", "confidence": <float 0..1>}}, ...]}}
+{{"allocation": [{{"item_id": <int>, "size": "<S>", "tokens": <int>}}, ...]}}
 
-Constraints:
-- Exactly {k} entries in `picks`, in priority order (highest confidence first).
+Constraints (will be validated):
+- sum of `tokens` across entries == {total_tokens}
 - Each entry is a FLAT object with ONLY three keys: `item_id` (int),
-  `size` (string), `confidence` (float). Do NOT nest under "item",
-  "data", or any other wrapper key. Do NOT include color/type/stock/etc.
-- `confidence` ∈ [0, 1] is YOUR self-assessed certainty that THIS is the
-  right pick given all the store priorities above PLUS the precomputed
-  `push_score` visible in each candidate row. 1.0 = sure, 0.0 = wild guess.
-  High push_score + good season match + healthy stock → high confidence.
-  Don't just copy the push_score; integrate it with the other signals.
-- Every (item_id, size) MUST be one of the candidates I sent you.
-- Do not invent items, do not include any other fields, do not wrap in
-  markdown fences."""
+  `size` (string), `tokens` (int ≥ 1). No nesting, no extra fields.
+- Every (item_id, size) MUST be one of the candidates I sent you."""
 
 
 # ─── StockAgent ─────────────────────────────────────────────────────────
@@ -302,48 +305,50 @@ class StockAgent:
         """
         return self.stats.get_push_scores(candidates, missing=0.0)
 
-    # ─── 3. LLM picks top-k ────────────────────────────────────────────
+    # ─── 3. LLM allocates token budget ─────────────────────────────────
 
-    def pick_top(
+    def allocate_tokens(
         self,
         candidates: list[tuple[int, str]],
-        k: int = 10,
+        total_tokens: int = 10,
         *,
         verbose: bool = False,
     ) -> list[dict]:
-        """LLM stock-manager picks top-k with per-item confidence.
+        """LLM stock-manager distributes `total_tokens` (default 10) across
+        candidates per stock-manager directives.
 
         Returns:
-            list of dicts: {"item_id": int, "size": str, "confidence": float}
-            confidence ∈ [0, 1] is the LLM's self-assessed certainty
-            (already factoring in push_score, which it sees in the
-            candidate context).
+            list of dicts: {"item_id": int, "size": str, "tokens": int}
+            — only items receiving ≥1 token; sum of tokens == total_tokens.
+            Items not appearing in the result implicitly receive 0 tokens.
+
+        Multiple tokens per item allowed (concentration → stronger preference).
 
         Non-deterministic: temperature from stock_config.json
-        (default 0.5) → picks vary across calls.
+        (default 0.5) → allocations vary across calls.
 
-        Raises RuntimeError if Ollama is unreachable or returns invalid output.
+        Phase 2 Coordinator multiplies each agent's tokens by the agent's
+        vote-weight to determine final winners. Per-agent weight is owned
+        by the Coordinator, not exposed here.
+
+        Raises RuntimeError if Ollama is unreachable or returns no valid output.
         """
         if not candidates:
             raise ValueError("candidates is empty")
-        if k <= 0:
-            raise ValueError(f"k must be > 0, got {k}")
-        if k > len(candidates):
-            raise ValueError(
-                f"k={k} larger than candidates={len(candidates)}"
-            )
+        if total_tokens <= 0:
+            raise ValueError(f"total_tokens must be > 0, got {total_tokens}")
 
         candidate_set = set(candidates)
         table = self._candidate_table(candidates)
         system = _SYSTEM_PROMPT_TEMPLATE.format(
             n_candidates=len(candidates),
-            k=k,
+            total_tokens=total_tokens,
             current_season=_current_season(),
         )
         user = (
             "Candidate items (JSON list):\n"
             f"{table}\n\n"
-            f"Pick top {k} as JSON per the schema above."
+            f"Distribute {total_tokens} tokens per the schema above."
         )
 
         try:
@@ -354,7 +359,7 @@ class StockAgent:
                     {"role": "user", "content": user},
                 ],
                 options={"temperature": self.llm_temperature},
-                format=_PICK_JSON_SCHEMA,  # Ollama JSON Schema enforcement
+                format=_TOKEN_ALLOCATION_SCHEMA,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -365,12 +370,9 @@ class StockAgent:
         if verbose:
             print(f"\n[LLM raw]\n{raw}\n")
 
-        # Defensive fence strip — format="json" should prevent this but some
-        # small models still leak markdown.
+        # Defensive fence strip
         if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-            raw = raw.rsplit("```", 1)[0]
-            raw = raw.strip()
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
 
         try:
             parsed = json.loads(raw)
@@ -379,71 +381,131 @@ class StockAgent:
                 f"LLM returned invalid JSON: {exc}\nraw: {raw[:500]}"
             ) from exc
 
-        # Accept either {"picks": [...]} or a bare [...] or any dict whose
-        # value is a list — small models invent their own key name + drop
-        # the schema. Extra fields per entry are ignored downstream.
-        picks_raw = None
+        # Permissive: accept {"allocation": [...]}, bare list, or any
+        # single-list-value dict.
+        alloc_raw = None
         if isinstance(parsed, list):
-            picks_raw = parsed
+            alloc_raw = parsed
         elif isinstance(parsed, dict):
-            for candidate_key in ("picks", "items", "top", "top_items", "result"):
-                v = parsed.get(candidate_key)
+            for key in ("allocation", "picks", "items", "tokens", "result"):
+                v = parsed.get(key)
                 if isinstance(v, list):
-                    picks_raw = v
+                    alloc_raw = v
                     break
-            if picks_raw is None:
-                # last resort: take any list value from the dict
+            if alloc_raw is None:
                 list_values = [v for v in parsed.values() if isinstance(v, list)]
                 if len(list_values) == 1:
-                    picks_raw = list_values[0]
-
-        if not isinstance(picks_raw, list):
+                    alloc_raw = list_values[0]
+        if not isinstance(alloc_raw, list):
             raise RuntimeError(
-                f"LLM JSON has no picks list. Got: {parsed!r}"
+                f"LLM JSON has no allocation list. Got: {parsed!r}"
             )
 
-        # Validate, dedupe, restrict to candidate_set, cap at k.
-        # Each pick is a dict with item_id + size + confidence.
-        seen: set[tuple[int, str]] = set()
-        picks: list[dict] = []
-        for entry in picks_raw:
+        # Validate + merge duplicates (sum tokens if same key appears twice)
+        merged: dict[tuple[int, str], int] = {}
+        for entry in alloc_raw:
             if not isinstance(entry, dict):
                 continue
-            # Unwrap if the LLM nested the actual pick under a single key
-            # (qwen2.5:7b sometimes wraps each entry as {"item": {...}}).
             if "item_id" not in entry and len(entry) == 1:
                 inner = next(iter(entry.values()))
                 if isinstance(inner, dict) and "item_id" in inner:
                     entry = inner
             iid = entry.get("item_id")
             sz = entry.get("size")
+            tok = entry.get("tokens")
             if not isinstance(iid, int) or not isinstance(sz, str):
                 continue
-            key = (iid, sz)
-            if key in seen or key not in candidate_set:
-                continue
-            # Self-reported confidence: clamp + default if missing/invalid
-            raw_conf = entry.get("confidence", 0.5)
             try:
-                conf = max(0.0, min(1.0, float(raw_conf)))
+                tok = int(tok)
             except (TypeError, ValueError):
-                conf = 0.5
-            seen.add(key)
-            picks.append({
-                "item_id": iid,
-                "size": sz,
-                "confidence": round(conf, 4),
-            })
-            if len(picks) == k:
-                break
+                continue
+            if tok <= 0:
+                continue
+            key = (iid, sz)
+            if key not in candidate_set:
+                continue
+            merged[key] = merged.get(key, 0) + tok
 
-        if len(picks) < k:
-            raise RuntimeError(
-                f"LLM returned only {len(picks)}/{k} valid picks "
-                f"(after dedup + candidate-set validation). raw: {raw[:500]}"
+        total = sum(merged.values())
+        if total == 0:
+            # LLM returned no valid items (hallucinated IDs / wrong sizes).
+            # Fall back to a deterministic push_score-weighted allocation
+            # so the agent always returns something useful to the
+            # Coordinator. Log to stderr.
+            print(
+                f"warn: LLM allocation had no in-set entries; "
+                f"falling back to push_score-weighted distribution. "
+                f"raw: {raw[:200]}",
+                file=sys.stderr,
             )
+            merged = self._push_score_allocation(candidates, total_tokens)
+            total = sum(merged.values())
 
-        return picks
+        # Renormalize to exactly total_tokens if the LLM over/undershot.
+        if total != total_tokens:
+            scaled = {k: v * total_tokens / total for k, v in merged.items()}
+            merged = {k: max(1, int(round(v))) for k, v in scaled.items()}
+            diff = total_tokens - sum(merged.values())
+            if diff != 0:
+                # Adjust the largest entry by the residual; clamp at 1
+                top_key = max(merged, key=merged.get)
+                merged[top_key] = max(1, merged[top_key] + diff)
+                # If applying the diff still drifts (because of the clamp),
+                # repeat with the next-largest until balanced or give up.
+                # In practice with small total_tokens this rarely matters.
+                if sum(merged.values()) != total_tokens:
+                    # Fallback: trim/extend on the largest entry without clamping
+                    top_key = max(merged, key=merged.get)
+                    merged[top_key] += total_tokens - sum(merged.values())
+                    if merged[top_key] < 1:
+                        # Pathological — drop it
+                        del merged[top_key]
+
+        # Sort desc by tokens, then item_id asc
+        return sorted(
+            (
+                {"item_id": iid, "size": sz, "tokens": int(t)}
+                for (iid, sz), t in merged.items()
+            ),
+            key=lambda d: (-d["tokens"], d["item_id"]),
+        )
+
+    # ─── deterministic fallback allocation ───────────────────────────────
+
+    def _push_score_allocation(
+        self,
+        candidates: list[tuple[int, str]],
+        total_tokens: int,
+    ) -> dict[tuple[int, str], int]:
+        """Push-score weighted token distribution. Used as a deterministic
+        fallback when the LLM returns nothing usable.
+
+        Allocation is proportional to push_score, rounded to integers, with
+        residual added to the highest-push entry. Items with push_score == 0
+        receive 0 tokens.
+        """
+        scores = self.stats.get_push_scores(candidates, missing=0.0)
+        # Sort desc and keep only positive scores
+        positive = [(k, v) for k, v in scores.items() if v > 0]
+        if not positive:
+            # All zero (e.g. inactive rows) — give all tokens to the first candidate
+            return {candidates[0]: total_tokens}
+        positive.sort(key=lambda kv: (-kv[1], kv[0]))
+        total_score = sum(v for _, v in positive)
+        merged: dict[tuple[int, str], int] = {}
+        for key, score in positive:
+            tok = int(round(score / total_score * total_tokens))
+            if tok > 0:
+                merged[key] = tok
+        # Patch sum drift on the highest-score entry
+        diff = total_tokens - sum(merged.values())
+        if diff != 0:
+            top_key = positive[0][0]
+            merged[top_key] = max(1, merged.get(top_key, 0) + diff)
+        # If all entries rounded down to 0, slot 1 token onto the top one
+        if not merged:
+            merged[positive[0][0]] = total_tokens
+        return merged
 
     # ─── candidate context table for the LLM ────────────────────────────
 
@@ -478,6 +540,7 @@ class StockAgent:
                 "age_group": row["age_group"],
                 "occasion": row["occasion"],
                 "brand": row["brand"],
+                "body_type": row.get("body_type"),
                 "price": price_val,
                 "stock_count": int(row["stock_count"]),
                 "total_sold": int(row["total_sold"]),
@@ -497,7 +560,7 @@ Commands:
   query TOKEN [TOKEN ...]   set the structured query (tokens below)
   candidates [n]            fetch + show top-n (default 40) candidates with match_count
   rate                      show push_score for each cached candidate
-  pick [k]                  LLM picks top-k (default 10) from cached candidates
+  allocate [N]              LLM distributes N (default 10) tokens across cached candidates
   state                     print current query + cached count
   reload                    re-read DB into StockStats (after external sell/restock)
   help                      this help
@@ -624,17 +687,22 @@ def _print_rate(agent: StockAgent, cands: list[tuple[int, str]]) -> None:
         print(f"  ... ({len(sorted_ratings) - 20} more)")
 
 
-def _print_pick(agent: StockAgent, cands: list[tuple[int, str]], k: int) -> None:
-    print(f"\nLLM picking top {k} (model={agent.model}, temp={agent.llm_temperature})...")
-    picks = agent.pick_top(cands, k=k)
-    print(f"\nTop {k}:")
-    for rank, pick in enumerate(picks, 1):
-        iid, sz, conf = pick["item_id"], pick["size"], pick["confidence"]
+def _print_allocation(agent: StockAgent, cands: list[tuple[int, str]], total: int) -> None:
+    print(
+        f"\nLLM allocating {total} tokens "
+        f"(model={agent.model}, temp={agent.llm_temperature})..."
+    )
+    alloc = agent.allocate_tokens(cands, total_tokens=total)
+    summed = sum(p["tokens"] for p in alloc)
+    print(f"\nAllocation ({len(alloc)} items, total={summed}):")
+    for rank, p in enumerate(alloc, 1):
+        iid, sz, tok = p["item_id"], p["size"], p["tokens"]
         row = agent.stats.get_row(iid, sz)
+        share = tok / total
         print(
-            f"  {rank:>2}. ({iid:>5}, {sz:<3})  conf={conf:.4f}  "
-            f"push={row['push_score']:.3f}  stock={int(row['stock_count']):>3}  "
-            f"sold={int(row['total_sold']):>4}  age={row['age_days']:>6.1f}d  "
+            f"  {rank:>2}. ({iid:>5}, {sz:<3})  tokens={tok:>2}  "
+            f"share={share:.0%}  push={row['push_score']:.3f}  "
+            f"stock={int(row['stock_count']):>3}  age={row['age_days']:>6.1f}d  "
             f"season={row['season']:<10} color={row['color']:<10} type={row['type']}"
         )
 
@@ -691,12 +759,12 @@ def repl(agent: StockAgent) -> None:
                     print("no cached candidates; run `candidates` first")
                     continue
                 _print_rate(agent, cands)
-            elif cmd == "pick":
+            elif cmd == "allocate":
                 if not cands:
                     print("no cached candidates; run `candidates` first")
                     continue
-                k = int(args[0]) if args else 10
-                _print_pick(agent, cands, k)
+                total = int(args[0]) if args else 10
+                _print_allocation(agent, cands, total)
             else:
                 print(f"unknown command: {cmd}. type 'help'.")
         except Exception as exc:

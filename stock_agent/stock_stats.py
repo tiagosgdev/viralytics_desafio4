@@ -37,6 +37,7 @@ SELECT
   i.color, i.type, i.fit, i.season,
   i.style, i.pattern, i.material,
   i.gender, i.age_group, i.occasion, i.brand, i.price,
+  i.body_type,
   s.stock_count, s.total_sold, s.last_sold_at, s.active,
   (julianday('now') - julianday(i.created_at)) AS age_days,
   CASE WHEN s.last_sold_at IS NULL

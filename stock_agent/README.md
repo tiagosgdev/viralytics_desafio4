@@ -181,7 +181,7 @@ Standalone agent surface on top of `stock_stats`. Three responsibilities:
 
 Prereq: Ollama daemon up + `qwen2.5:7b-instruct-q3_K_M` pulled (see Prerequisites).
 
-**Latency:** `pick_top` takes ~60–100s on a local Apple Silicon laptop with the q3_K_M quantization. Fine for dev / pipeline wiring; in-store deployment will want a smaller model or remote inference.
+**Latency:** `allocate_tokens` takes ~40–100s on a local Apple Silicon laptop with the q3_K_M quantization. Fine for dev / pipeline wiring; in-store deployment will want a smaller model or remote inference.
 
 **Visual sanity:** see [`SANITY_PLOTS.md`](SANITY_PLOTS.md) for 10 distribution + push-score plots auto-generated from the seeded DB. Regenerate with `python3 stock_agent/sanity_plots.py`.
 
@@ -192,22 +192,30 @@ from stock_agent import StockAgent
 
 agent = StockAgent()
 forty   = agent.get_candidates({"color": "red", "size": "M"}, n=40)
-ratings = agent.rate(forty)                  # {(item_id, size): push_score}
-top10   = agent.pick_top(forty, k=10)        # LLM picks with confidence
-# top10 = [
-#   {"item_id": 5425, "size": "M", "confidence": 0.7234},
-#   {"item_id": 1503, "size": "L", "confidence": 0.6810},
-#   ...
+ratings = agent.rate(forty)                          # {(item_id, size): push_score}
+alloc   = agent.allocate_tokens(forty, total_tokens=10)  # LLM token auction
+# alloc = [
+#   {"item_id": 5425, "size": "M", "tokens": 4},
+#   {"item_id": 1503, "size": "L", "tokens": 3},
+#   {"item_id":  600, "size": "M", "tokens": 2},
+#   {"item_id": 8186, "size": "M", "tokens": 1},
 # ]
+# sum(tokens) == 10; items not listed implicitly have 0 tokens
 ```
 
-#### `pick_top` confidence + non-determinism
+#### Token auction (`allocate_tokens`)
 
-- Returns `list[dict]` with `item_id`, `size`, `confidence ∈ [0, 1]`.
-- Confidence is **LLM self-reported per item** — the LLM sees `push_score` in the candidate context table and is instructed to factor it in alongside season match, stock health, age, etc. No code-level blending.
-- Output enforced by an Ollama JSON Schema (`format=<schema>`) so the model can't drift into nested wrappers.
-- **Non-deterministic** — `temperature=0.5` (from `stock_config.json:llm.temperature`). Consecutive `pick_top` calls produce slightly different orderings + confidence values, even on the same candidate set.
-- For Phase-2 inter-agent negotiation, `confidence` maps to the agent's "certainty" axis (the C in {certainty, importance, final}).
+Phase-2 voting uses a **game-theoretic auction**: each of the 4 agents gets a budget of **10 tokens** to distribute across the 40 candidates per its own directives. The Coordinator then combines all 4 allocations weighted by per-agent vote weights to determine the winning items.
+
+For StockAgent:
+
+- LLM "stock manager" picks how to spread its 10 tokens — concentrate on one item, spread across many, anything in between.
+- Multiple tokens on one `(item_id, size)` = stronger preference. Items with 0 tokens just don't appear in the output.
+- Sum of `tokens` always equals `total_tokens` (defaults to 10). Parser normalizes if the LLM over/undershoots.
+- Output enforced by an Ollama JSON Schema (`format=<schema>`).
+- **Non-deterministic** — `temperature=0.5` (from `stock_config.json:llm.temperature`). Consecutive calls produce different allocations.
+- **Fallback** — if the LLM hallucinates item_ids not in the candidate set (occasionally happens with qwen2.5:7b), the agent silently falls back to a deterministic `push_score`-weighted allocation and warns on stderr. Coordinator always gets a valid sum-to-10 result.
+- Per-agent voting **weight** (multiplier applied to these tokens at aggregation time) lives at the Coordinator level, not in StockAgent.
 
 REPL:
 ```
@@ -219,12 +227,12 @@ python3 stock_agent/stock_agent.py
 | `query color=red type=trousers size=M` | Set the structured query (any subset of the keys below). |
 | `candidates [n]` | Fetch + show the 40 (or `n`) candidates with `match_count`. |
 | `rate` | Show push_score for each cached candidate. |
-| `pick [k]` | Have the LLM pick top-`k` (default 10) from cached candidates. |
+| `allocate [N]` | LLM distributes `N` (default 10) tokens across cached candidates. Multiple tokens per item OK. |
 | `state` | Print current query + cached count. |
 | `help` | Command reference. |
 | `exit` / `quit` | Leave REPL. |
 
-If Ollama is unreachable, `pick` raises `RuntimeError` with the cause; REPL keeps running so you can retry once the daemon is up.
+If Ollama is unreachable, `allocate` raises `RuntimeError` with the cause; REPL keeps running so you can retry once the daemon is up. If Ollama responds but hallucinates IDs, the agent prints a stderr warning and falls back to a `push_score`-weighted distribution.
 
 #### Allowed query keys
 
@@ -469,9 +477,9 @@ ratings = agent.rate(forty)
 top_by_push = sorted(ratings.items(), key=lambda kv: -kv[1])[:5]
 print("Top 5 by push_score:", top_by_push)
 
-# 3. Ask LLM to pick top 10
-picks = agent.pick_top(forty, k=10)
-print("LLM picks:", picks)
+# 3. Ask LLM to distribute 10 tokens across the 40
+alloc = agent.allocate_tokens(forty, total_tokens=10)
+print("LLM allocation (sum=10):", alloc)
 
 # Optional: refresh agent after external mutations
 agent.stats.reload()
