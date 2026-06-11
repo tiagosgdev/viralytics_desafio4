@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.TypedValue
 import android.view.Gravity
@@ -33,8 +34,21 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
-class MainActivity : AppCompatActivity() {
+// V2.8.0 UBTech Robot Imports
+import com.ubtrobot.Robot
+import com.ubtrobot.navigation.NavigationManager
+import com.ubtrobot.navigation.Location
+import com.ubtrobot.speech.SpeechManager
+import com.ubtrobot.navigation.Point
 
+import org.eclipse.paho.client.mqttv3.MqttClient
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions
+import org.eclipse.paho.client.mqttv3.MqttMessage
+import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+
+class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val httpClient = OkHttpClient()
 
@@ -44,6 +58,13 @@ class MainActivity : AppCompatActivity() {
     private var currentConversationState: JSONObject? = null
     private var currentIncludeFilters: JSONObject? = null
     private var currentTab: String = "scan"
+
+    private var mqttClient: MqttClient? = null
+
+    // Hardware Managers (V2.8.0 Architecture)
+    private var navigationManager: NavigationManager? = null
+    private var speechManager: SpeechManager? = null
+    private lateinit var textToSpeech: TextToSpeech
 
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -68,11 +89,25 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Initialize Hardware
+        initCruzrHardware()
+
+        // START THE NETWORK BRIDGE
+        startMqttListener()
+
         setStatus("Ready.")
         updateSessionLabel()
         renderDetections()
         renderRecommendations()
         switchTab("scan")
+
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                // Optional: Force English (or use Locale("pt", "BR") for Portuguese)
+                textToSpeech.language = java.util.Locale.US
+                android.util.Log.d("CruzrApp", "TTS Ready!")
+            }
+        }
 
         binding.captureButton.setOnClickListener {
             launchCamera()
@@ -297,7 +332,9 @@ class MainActivity : AppCompatActivity() {
             setStrokeColor(ContextCompat.getColor(context, R.color.brand_border))
             cardElevation = 0f
             setCardBackgroundColor(ContextCompat.getColor(context, R.color.white))
-            foreground = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                foreground = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
+            }
             isClickable = true
             isFocusable = true
             setOnClickListener { showRecommendationDetail(item) }
@@ -398,7 +435,11 @@ class MainActivity : AppCompatActivity() {
 
         MaterialAlertDialogBuilder(this)
             .setView(dialogView)
-            .setPositiveButton(android.R.string.ok, null)
+            .setPositiveButton("Take me there!") { _, _ ->
+                // Natively command the robot instead of making a network call
+                sendRobotNavigationCommand(item.category, item.reason)
+            }
+            .setNegativeButton("Close", null)
             .show()
     }
 
@@ -698,5 +739,153 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+    }
+
+    private fun startMqttListener() {
+        // 1. Extract the raw IP address from your existing server URL string
+        val rawUrl = loadServerUrl().replace("http://", "").replace("https://", "")
+        val ipAddress = rawUrl.split(":")[0]
+
+        val brokerUri = "tcp://$ipAddress:1883"
+        val clientId = "Cruzr_Kotlin_App"
+
+        try {
+            mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+            val options = MqttConnectOptions().apply {
+                isCleanSession = true
+                connectionTimeout = 10
+            }
+
+            // 2. Define what happens when a network message arrives
+            mqttClient?.setCallback(object : MqttCallback {
+                override fun connectionLost(cause: Throwable?) {
+                    runOnUiThread { setStatus("MQTT Connection Lost: ${cause?.message}") }
+                }
+
+                override fun messageArrived(topic: String?, message: MqttMessage?) {
+                    val payloadString = message?.toString() ?: return
+
+                    // When a message arrives, parse the JSON
+                    try {
+                        val json = JSONObject(payloadString)
+                        val action = json.optString("action")
+
+                        // If the PC Python script says "move_to_stand"...
+                        if (action == "move_to_stand") {
+                            val targetRack = json.optString("target", "unknown_rack")
+
+                            runOnUiThread {
+                                toast("Received PC Command: Go to $targetRack!")
+                            }
+
+                            // Trigger your existing hardware function!
+                            sendRobotNavigationCommand(targetRack, "AI recommendation received via network")
+                        }
+                        // NEW LOGIC: If the script says "speak"...
+                        else if (action == "speak") {
+                            val textToSay = json.optString("text", "Meow meow")
+
+                            runOnUiThread {
+                                setStatus("Speaking: $textToSay")
+                            }
+
+                            // Trigger the text-to-speech engine
+                            textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
+                override fun deliveryComplete(token: IMqttDeliveryToken?) {}
+            })
+
+            // 3. Connect and Subscribe to the topic
+            mqttClient?.connect(options)
+            mqttClient?.subscribe("cruzr/commands")
+            runOnUiThread { setStatus("MQTT Connected to $ipAddress") }
+
+        } catch (e: Exception) {
+            runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
+        }
+    }
+
+    // --- HARDWARE INTEGRATION METHODS ---
+    private fun initCruzrHardware() {
+        setStatus("Initializing V2.8.0 Hardware Managers...")
+
+        try {
+            // Fetch the active managers from the Robot's internal OS context
+            navigationManager = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
+
+            // SpeechManager usually uses a similar constant or the string "speech"
+            speechManager = Robot.globalContext().getSystemService("speech") as SpeechManager
+
+            runOnUiThread { setStatus("Hardware Managers active.") }
+        } catch (e: Exception) {
+            runOnUiThread { setStatus("Manager Init Failed: ${e.message}") }
+        }
+    }
+
+    private fun sendRobotNavigationCommand(targetItem: String, reason: String) {
+        runOnUiThread { setStatus("Commanding hardware...") }
+
+        val textToSpeak = if (reason.isNotBlank()) {
+            "I found a great match! $reason. Let me show you where it is."
+        } else {
+            "Let me show you where the $targetItem is."
+        }
+
+        try {
+            // 1. Trigger Speech
+            speechManager?.synthesize(textToSpeak)
+
+            // 2. Fetch the current map to find the destination
+            navigationManager?.currentNavMap?.done { navMap ->
+
+                // Get the list of markers using the exact method from the decompiled NavMap class
+                val markers = navMap.markerList
+
+                if (markers != null) {
+                    // Search the list using the Marker's TITLE property
+                    val targetMarker = markers.find { it.title.equals(targetItem, ignoreCase = true) }
+
+                    if (targetMarker != null) {
+                        // Because Marker extends Location, we pass it directly to navigate!
+                        navigationManager?.navigate(targetMarker)
+
+                        runOnUiThread {
+                            toast("Cruzr is moving to $targetItem!")
+                            setStatus("Navigating to location...")
+                        }
+                    } else {
+                        runOnUiThread {
+                            toast("'$targetItem' is not mapped on the robot.")
+                            setStatus("Target missing from map.")
+                        }
+                    }
+                }
+
+            }?.fail {
+                runOnUiThread {
+                    toast("Could not access the robot's map.")
+                    setStatus("Map access failed.")
+                }
+            }
+
+        } catch (exc: Exception) {
+            runOnUiThread {
+                toast("Hardware execution failure: ${exc.message}")
+                setStatus("Manager failed.")
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        if (::textToSpeech.isInitialized) {
+            textToSpeech.stop()
+            textToSpeech.shutdown()
+        }
+        super.onDestroy()
     }
 }

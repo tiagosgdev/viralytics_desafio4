@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <uses-permission android:name="com.ubtechinc.cruzr.coreservices.permission.ACCESS_ROBOT_API" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -11,16 +13,19 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.ViralyticsMobile"
         android:usesCleartextTraffic="true">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="sensorLandscape">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
 
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <meta-data
+            android:name="cruiser_appid"
+            android:value="103" /> <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:screenOrientation="sensorLandscape">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+    </activity>
     </application>
 
 </manifest>

@@ -294,3 +294,23 @@ All scan/chat/session requests carry a `persona` field (`cruella` or `edna`).
 - Voice transcription requires `ffmpeg` on PATH and `faster-whisper` installed.
 - The store catalogue at `data/mock_store_catalogue_template.json` can be replaced with real store data.
 - See `docs/organized/` for full research documentation including dataset analysis, experiment results, and architecture details.
+
+# Cruzr Robotics Bridge
+
+This folder contains the Edge Computing bridge that connects our multi-agent AI to the Cruzr robot. 
+It uses standard HTTP requests to receive commands and MQTT to trigger the robot's hardware.
+
+## Prerequisites (System Requirements)
+Before running these scripts, you must have the following installed on your machine:
+1. **WSL (Windows Subsystem for Linux):** Running Ubuntu.
+2. **Python 3:** Installed inside your WSL environment.
+3. **MQTT Explorer (Optional):** For debugging the raw ZBOS JSON payloads.
+
+## Python Dependencies
+Install the required Python libraries by running this from the root directory:
+`pip install -r requirements.txt`
+
+## How to Run
+Open two separate WSL terminals and run:
+1. API Bridge: `python src/robotics/api_bridge.py`
+2. Camera Streamer: `python src/robotics/camera_streamer.py`
