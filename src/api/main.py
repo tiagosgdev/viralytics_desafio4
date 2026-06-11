@@ -22,6 +22,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import cv2
@@ -35,12 +36,15 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.schemas import (
     AuthResponse,
+    BodyAnalysisResponse,
     ChatRequest,
     ChatResponse,
     ConversationRequest,
     DetectionResponse,
     HealthResponse,
     LoginRequest,
+    RecommendRequest,
+    RecommendResponse,
     RegisterRequest,
     SessionResponse,
     SessionStartRequest,
@@ -51,6 +55,7 @@ from src.api.search_service import UnifiedSearchService
 from src.detection.camera import CameraStream
 from src.detection.detector import BaseDetector, FashionDetector
 from src.detection.fashionnet_detector import FashionNetDetector
+from src.pose_analyzer import PoseAnalyzer
 from src.recommendations.engine import RecommendationEngine
 
 # ── App setup ──────────────────────────────────────────────────────────────
@@ -109,11 +114,16 @@ recommender: RecommendationEngine = None
 camera: CameraStream = None
 whisper_model = None
 search_service: UnifiedSearchService = None
+pose_analyzer: PoseAnalyzer | None = None
 detectors_by_persona: dict[str, BaseDetector] = {}
 cameras_by_persona: dict[str, CameraStream] = {}
 
+# Multi-agent recommendation system (lazy: None until first /api/recommend call
+# or until XMPP broker is reachable at startup)
+rec_system = None
 
-def _find_ffmpeg_exe() -> str | None:
+
+def _find_ffmpeg_exe() -> Optional[str]:
     exe = shutil.which("ffmpeg")
     if exe:
         return exe
@@ -132,7 +142,7 @@ def _find_ffmpeg_exe() -> str | None:
     return None
 
 
-def _find_fashionnet_weights() -> str | None:
+def _find_fashionnet_weights() -> Optional[str]:
     env = os.getenv("FASHIONNET_WEIGHTS")
     if env:
         full = PROJECT_ROOT / "models" / "weights" / env / "best.pt"
@@ -172,7 +182,7 @@ def _resolve_assistant_mode(payload: ConversationRequest) -> str:
 
 # ── User-profile helpers ───────────────────────────────────────────────────
 
-def _get_user_profile_from_db(user_id: int) -> dict | None:
+def _get_user_profile_from_db(user_id: int) -> Optional[dict]:
     """
     Fetch a user's preference profile from the SQLite DB.
     Returns None if the user doesn't exist or the DB is unreachable.
@@ -200,7 +210,7 @@ def _get_user_profile_from_db(user_id: int) -> dict | None:
     if row is None:
         return None
 
-    def _split(value: str | None) -> list[str]:
+    def _split(value: Optional[str]) -> list[str]:
         if not value:
             return []
         return [v.strip() for v in value.split(",") if v.strip()]
@@ -216,7 +226,7 @@ def _get_user_profile_from_db(user_id: int) -> dict | None:
     }
 
 
-def _get_user_profile(user_id: int | None) -> dict | None:
+def _get_user_profile(user_id: Optional[int]) -> Optional[dict]:
     """
     Resolve a user_id (already extracted + validated by JWT) to a DB profile.
     Returns None for guests or users with no profile row.
@@ -243,7 +253,7 @@ def _get_user_profile(user_id: int | None) -> dict | None:
 #     return _format_conversation_results(ranked_results)
 
 
-def _preload_search_embeddings_sync() -> str | None:
+def _preload_search_embeddings_sync() -> Optional[str]:
     global search_service
 
     if search_service is None:
@@ -272,7 +282,7 @@ def _preload_search_embeddings_sync() -> str | None:
 @app.on_event("startup")
 async def startup():
     global detector, recommender, camera, whisper_model, search_service
-    global detectors_by_persona, cameras_by_persona
+    global detectors_by_persona, cameras_by_persona, pose_analyzer
 
     weights = WEIGHTS_PATH
     print(f"\n🚀  Loading model from: {weights}")
@@ -295,6 +305,11 @@ async def startup():
 
     recommender = RecommendationEngine(top_k=5)
     search_service = UnifiedSearchService(recommender)
+    pose_analyzer = PoseAnalyzer()
+    if pose_analyzer.is_available():
+        print(f"Pose analyzer ready ({pose_analyzer.model_path})")
+    else:
+        print("Pose analyzer unavailable; body silhouette analysis will be skipped")
 
     preload_warning = await run_in_threadpool(_preload_search_embeddings_sync)
     if preload_warning:
@@ -307,6 +322,7 @@ async def startup():
             detector_instance,
             recommender,
             recommendation_resolver=_db_backed_recommendations_with_profile_sync,
+            body_analysis_resolver=_run_body_analysis if pose_analyzer.is_available() else None,
             source=0,
         )
         for key, detector_instance in detectors_by_persona.items()
@@ -340,14 +356,33 @@ async def startup():
             print(f"⚠️  Whisper not available: {e}")
 
     asyncio.create_task(_load_whisper())
+
+    # ── Multi-agent recommendation system ─────────────────────────────────
+    async def _start_rec_system():
+        global rec_system
+        try:
+            from multi_agent.run import RecommendationSystem
+            rec_system = RecommendationSystem()
+            await rec_system.start()
+            print("🤖  Multi-agent recommendation system online")
+        except Exception as exc:
+            print(f"⚠️  Multi-agent system unavailable (XMPP broker not running?): {exc}")
+            rec_system = None
+
+    asyncio.create_task(_start_rec_system())
     print("✅  API ready\n")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global cameras_by_persona
+    global cameras_by_persona, rec_system
     for camera_instance in cameras_by_persona.values():
         camera_instance.shutdown()
+    if rec_system is not None:
+        try:
+            await rec_system.stop()
+        except Exception as exc:
+            print(f"⚠️  Error stopping multi-agent system: {exc}")
 
 
 # ── Static / proxy routes ───────────────────────────────────────────────────
@@ -355,7 +390,7 @@ async def shutdown():
 _GOOGLE_IMAGE_HOSTS = {"drive.google.com", "drive.usercontent.google.com"}
 
 
-def _extract_google_drive_file_id(raw_url: str) -> str | None:
+def _extract_google_drive_file_id(raw_url: str) -> Optional[str]:
     parsed = urlparse(raw_url)
     host = parsed.netloc.lower()
     if host not in _GOOGLE_IMAGE_HOSTS:
@@ -387,6 +422,20 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health():
     return HealthResponse(status="ok", model_loaded=detector is not None)
+
+
+def _run_body_analysis(frame: np.ndarray, user_height_cm: float | None = None, gender: str = "") -> tuple[dict | None, str | None]:
+    """Run pose/silhouette analysis and return JSON plus optional JPEG overlay."""
+    if pose_analyzer is None:
+        return None, None
+
+    analysis = pose_analyzer.analyze(frame, draw_overlay=True, include_landmarks=True, user_height_cm=user_height_cm, gender=gender)
+    annotated_b64 = None
+    if analysis.annotated_image is not None:
+        ok, buf = cv2.imencode(".jpg", analysis.annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if ok:
+            annotated_b64 = base64.b64encode(buf).decode("utf-8")
+    return analysis.to_dict(include_landmarks=True), annotated_b64
 
 
 @app.get("/api/image-proxy")
@@ -428,20 +477,23 @@ async def image_proxy(url: str):
 @app.post("/api/session/start", response_model=SessionResponse)
 async def start_session(
     payload: SessionStartRequest,
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     persona = normalize_persona(payload.persona)
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
 
-    recs = await run_in_threadpool(
-        _db_backed_recommendations_with_profile_sync,
-        payload.detected_categories or [],
-        user_profile,                           # ← always pass, even if categories empty
-    )
-
-    # Fall back to whatever the frontend sent if the fetch returned nothing
-    if not recs:
-        recs = payload.recommendations or []
+    # If the caller already carries recommendations (from a prior detect/scan response),
+    # reuse them directly — avoids a redundant DB query for identical categories.
+    if payload.recommendations:
+        recs = payload.recommendations
+    else:
+        recs = await run_in_threadpool(
+            _db_backed_recommendations_with_profile_sync,
+            payload.detected_categories or [],
+            user_profile,
+        )
+        if not recs:
+            recs = []
 
     session = search_service.create_session(
         detected_categories=payload.detected_categories,
@@ -484,10 +536,8 @@ async def warmup_chat():
 
 def _db_backed_recommendations_with_profile_sync(
     detected_categories: list[str],
-    user_profile: dict | None = None,
+    user_profile: Optional[dict] = None,
 ) -> list[dict]:
-    print(f"DEBUG user_profile received: {user_profile}")  # ← add this
-
     try:
         from LNIAGIA.search_app import search_detected_items
     except Exception as exc:
@@ -538,10 +588,34 @@ def _db_backed_recommendations_with_profile_sync(
 
 # ── Core detection implementation ─────────────────────────────────────────────
 
+async def _run_multiagent_round(
+    detected_color: str,
+    detected_type: str,
+    detected_body_type: str,
+    user_gender: str,
+) -> list[dict] | None:
+    """Fire a multi-agent round and return results, or None on any failure."""
+    if rec_system is None or not rec_system.is_ready:
+        return None
+    try:
+        return await asyncio.wait_for(
+            rec_system.recommend(
+                detected_color     = detected_color,
+                detected_type      = detected_type,
+                detected_body_type = detected_body_type,
+                user_gender        = user_gender,
+            ),
+            timeout=120,
+        )
+    except Exception as exc:
+        print(f"⚠️  Multi-agent round failed: {exc}")
+        return None
+
+
 async def _detect_image_impl(
     file: UploadFile,
     persona: str = "cruella",
-    user_profile: dict | None = None,       # ← NEW
+    user_profile: Optional[dict] = None,
 ) -> DetectionResponse:
     """
     Shared implementation for image/mobile scan uploads.
@@ -562,25 +636,40 @@ async def _detect_image_impl(
 
     active_detector = _resolve_detector(persona)
     result = active_detector.detect(frame)
-    cats = list({d.class_name for d in result.detections})
+    cats = list({
+        d.class_name for d in result.detections
+        if not d.class_name.startswith("class_")
+    })
+    body_analysis: dict | None = None
+    body_annotated_frame: str | None = None
 
-    # ── CHANGED: pass user_profile into the recommendation fetch ──────────
+    if pose_analyzer is not None and pose_analyzer.is_available():
+        try:
+            body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy())
+        except Exception as exc:
+            print(f"Body analysis failed: {exc}")
+            body_analysis = {
+                "body_shape": "unknown",
+                "measurements": {"shoulder_width": 0.0, "hip_width": 0.0, "shoulder_hip_ratio": 0.0},
+                "confidence": 0.0,
+                "pose_validation": {"valid": False, "score": 0.0, "reasons": [str(exc)]},
+                "landmarks_detected": 0,
+                "silhouette": {"valid": False, "widths": {}, "scanlines": []},
+                "warnings": [f"Body analysis failed: {exc}"],
+                "landmarks": [],
+            }
+
     recs = await run_in_threadpool(
-        _db_backed_recommendations_with_profile_sync,
-        cats,
-        user_profile,   # ← was just cats before
+        _db_backed_recommendations_with_profile_sync, cats, user_profile
     )
-    
     if not isinstance(recs, list):
         recs = []
 
-    # Pass user_profile into create_session so it enriches base_filters
-    # and is persisted on the session for follow-up chat turns.
     session = search_service.create_session(
         cats,
         recs,
         persona=persona,
-        user_profile=user_profile,          # ← NEW
+        user_profile=user_profile,
     )
 
     # Encode annotated frame
@@ -595,12 +684,16 @@ async def _detect_image_impl(
                 "class_name": d.class_name,
                 "confidence": round(d.confidence, 3),
                 "bbox":       d.bbox,
+                "color":      d.color,            # RGB tuple
+                "color_name": d.color_name,
             }
             for d in result.detections
         ],
         recommendations=recs,
         inference_ms=round(result.inference_ms, 1),
         annotated_frame=b64_frame,
+        body_analysis=body_analysis,
+        body_annotated_frame=body_annotated_frame,
         session_id=session.id,
         persona=persona,
     )
@@ -610,7 +703,7 @@ async def _detect_image_impl(
 async def detect_image(
     persona: str = "cruella",
     file: UploadFile = File(...),
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     """
     Accepts an uploaded image, runs detection, returns detections + recommendations.
@@ -629,7 +722,7 @@ async def detect_image(
 async def mobile_scan(
     persona: str = "cruella",
     file: UploadFile = File(...),
-    user_id: int | None = Depends(get_optional_user_id),
+    user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     """
     Mobile-friendly alias for image scan uploads from native clients.
@@ -643,7 +736,46 @@ async def mobile_scan(
 
 # ── Conversation / chat endpoints ─────────────────────────────────────────────
 
-def _get_detected_type(session_id: str | None, detected_categories: list[str]) -> str | None:
+@app.post("/api/analyze/body", response_model=BodyAnalysisResponse)
+async def analyze_body(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded image and returns pose landmarks, normalized body
+    measurements, and a heuristic fashion body-shape classification.
+    """
+    if pose_analyzer is None or not pose_analyzer.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Pose analyzer is not available. Add a MediaPipe Pose Landmarker "
+                "model at models/weights/mediapipe/pose_landmarker_heavy.task "
+                "or set POSE_LANDMARKER_MODEL_PATH."
+            ),
+        )
+
+    contents = await file.read()
+    arr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+
+    analysis_dict, annotated_frame = await run_in_threadpool(_run_body_analysis, frame)
+    if analysis_dict is None:
+        raise HTTPException(status_code=500, detail="Body analysis returned no result")
+
+    return BodyAnalysisResponse(
+        measurements=analysis_dict["measurements"],
+        body_shape=analysis_dict["body_shape"],
+        landmarks_detected=analysis_dict["landmarks_detected"],
+        confidence=analysis_dict["confidence"],
+        pose_validation=analysis_dict.get("pose_validation", {}),
+        silhouette=analysis_dict.get("silhouette", {}),
+        warnings=analysis_dict.get("warnings", []),
+        landmarks=analysis_dict.get("landmarks", []),
+        annotated_frame=annotated_frame,
+    )
+
+
+def _get_detected_type(session_id: Optional[str], detected_categories: list[str]) -> Optional[str]:
     if detected_categories:
         return detected_categories[0]
     if session_id:
@@ -972,6 +1104,51 @@ def _hash_password(password: str) -> str:
 
 def _verify_password(password: str, hashed: str) -> bool:
     return _hash_password(password) == hashed
+
+
+# ── Multi-agent recommendation endpoint ───────────────────────────────────────
+
+@app.post("/api/recommend", response_model=RecommendResponse)
+async def recommend(payload: RecommendRequest):
+    """
+    Run a sealed-bid multi-agent recommendation round and return the top-10 items.
+
+    Inputs (all optional — omit any that are not yet detected):
+      detected_color, detected_type, detected_body_type  — from vision scan
+      user_answer    — free-text reply to the intent question
+      user_gender    — "male" | "female" | ""
+      user_height_cm — for size guidance (passed through, not used in ranking)
+
+    Returns a ranked list of up to 10 clothing items with per-agent scores and
+    weights so the frontend can explain *why* each item was recommended.
+
+    Requires the XMPP broker to be running: `docker compose up -d xmpp`
+    """
+    if rec_system is None or not rec_system.is_ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Multi-agent recommendation system is not available. "
+                "Start the XMPP broker with: docker compose up -d xmpp"
+            ),
+        )
+
+    try:
+        results = await rec_system.recommend(
+            detected_color     = payload.detected_color,
+            detected_type      = payload.detected_type,
+            detected_body_type = payload.detected_body_type,
+            user_answer        = payload.user_answer,
+            user_gender        = payload.user_gender,
+            user_height_cm     = payload.user_height_cm,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Recommendation round timed out.",
+        )
+
+    return RecommendResponse(recommendations=results)
 
 
 # ── WebSocket camera endpoint ─────────────────────────────────────────────────

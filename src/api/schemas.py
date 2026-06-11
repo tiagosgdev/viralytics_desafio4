@@ -18,8 +18,22 @@ class DetectionResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
     inference_ms:    float
     annotated_frame: Optional[str] = None   # base64 JPEG
+    body_analysis:   Optional[Dict[str, Any]] = None
+    body_annotated_frame: Optional[str] = None
     session_id:      Optional[str] = None
     persona:         Optional[str] = None
+
+
+class BodyAnalysisResponse(BaseModel):
+    body_shape: str
+    measurements: Dict[str, float]
+    confidence: float
+    pose_validation: Dict[str, Any]
+    landmarks_detected: int
+    silhouette: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    landmarks: List[Dict[str, Any]] = Field(default_factory=list)
+    annotated_frame: Optional[str] = None
 
 
 class SessionStartRequest(BaseModel):
@@ -98,3 +112,19 @@ class AuthResponse(BaseModel):
     message: Optional[str] = None
     user_id: Optional[str] = None
     token: Optional[str] = None
+
+
+# ── Multi-agent recommendation ────────────────────────────────────────────────
+
+class RecommendRequest(BaseModel):
+    detected_color:     str = ""
+    detected_type:      str = ""
+    detected_body_type: str = ""
+    user_answer:        str = ""
+    user_gender:        str = ""
+    user_height_cm:     Optional[float] = None
+
+
+class RecommendResponse(BaseModel):
+    recommendations: List[Dict[str, Any]]
+    round_id: Optional[str] = None

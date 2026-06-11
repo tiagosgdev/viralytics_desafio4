@@ -177,7 +177,13 @@ Standalone agent surface on top of `stock_stats`. Three responsibilities:
 2. **Rate** each candidate by its push_score (private rating, not a vote — "vote" is reserved for Phase 2 inter-agent negotiation).
 3. **Pick top 10** via an Ollama LLM "stock manager" persona that weighs old stock, current real-world season, push_score, and runout risk.
 
+**Where input comes from:** in the full system the query dict is produced by the conversation module (LNIAGIA, teammate) which parses the customer's natural-language utterance into structured slots. StockAgent itself does NOT do NL parsing — it expects clean keys/values. The REPL exists for solo dev/demo without the conversation module wired up.
+
 Prereq: Ollama daemon up + `qwen2.5:7b-instruct-q3_K_M` pulled (see Prerequisites).
+
+**Latency:** `pick_top` takes ~60–100s on a local Apple Silicon laptop with the q3_K_M quantization. Fine for dev / pipeline wiring; in-store deployment will want a smaller model or remote inference.
+
+**Visual sanity:** see [`SANITY_PLOTS.md`](SANITY_PLOTS.md) for 10 distribution + push-score plots auto-generated from the seeded DB. Regenerate with `python3 stock_agent/sanity_plots.py`.
 
 Programmatic:
 ```python
@@ -197,7 +203,7 @@ python3 stock_agent/stock_agent.py
 
 | Command | Action |
 |---|---|
-| `query color=red type=trousers size=M` | Set the structured query (any subset of color/type/fit/size). |
+| `query color=red type=trousers size=M` | Set the structured query (any subset of the keys below). |
 | `candidates [n]` | Fetch + show the 40 (or `n`) candidates with `match_count`. |
 | `rate` | Show push_score for each cached candidate. |
 | `pick [k]` | Have the LLM pick top-`k` (default 10) from cached candidates. |
@@ -207,9 +213,11 @@ python3 stock_agent/stock_agent.py
 
 If Ollama is unreachable, `pick` raises `RuntimeError` with the cause; REPL keeps running so you can retry once the daemon is up.
 
-#### Allowed query values
+#### Allowed query keys
 
-Pulled from `LNIAGIA/DB/models.py`. Anything else just won't match any rows (silent — `match_count` stays low).
+Pulled from `LNIAGIA/DB/models.py`. Unknown keys raise `ValueError`.
+
+**Equality keys** (each contributes to `match_count`; tier-based relaxation drops them one at a time):
 
 | Key | Allowed values |
 |---|---|
@@ -217,6 +225,112 @@ Pulled from `LNIAGIA/DB/models.py`. Anything else just won't match any rows (sil
 | `type` | `short_sleeve_top, long_sleeve_top, long_sleeve_outwear, vest, shorts, trousers, skirt, short_sleeve_dress, long_sleeve_dress, vest_dress, sling_dress` (underscores required) |
 | `fit` | `slim fit, regular, relaxed, oversized, tailored, loose, fitted, athletic, baggy, cropped` (spaces in `slim fit` need shell quoting) |
 | `size` | `XS, S, M, L, XL, XXL` (uppercase) |
+| `style` | `casual, formal, smart casual, sporty, bohemian, minimalist, streetwear, vintage, elegant, preppy` |
+| `pattern` | `plain, striped, checkered, plaid, floral, polka dot, geometric, abstract, animal print, camouflage, tie-dye, graphic, embroidered` |
+| `material` | `cotton, polyester, linen, silk, wool, denim, leather, suede, velvet, satin, chiffon, fleece, cashmere, nylon, rayon, spandex, organic cotton` |
+| `gender` | `male, female, unisex` |
+| `season` | `spring, summer, autumn, winter, all-season` |
+| `occasion` | `everyday, work, party, wedding, beach, sport, date night, travel, lounge, formal event` |
+| `brand` | Free-text. ~80 brands across budget/mid/premium/luxury/ultra_luxury tiers (see `BRAND_TIERS` in `models.py`). Examples: `Zara, H&M, Uniqlo, Levi's, Ralph Lauren, Gucci`. |
+| `age_group` | **Substring match (case-insensitive).** Stored as comma-separated string like `"adult, young adult"`. Query `age_group=adult` matches both `"adult"` and `"adult, young adult"`. Valid tokens: `baby, child, teenager, young adult, adult, senior`. |
+
+**Range keys** (hard filter — do NOT contribute to `match_count`; rows out of range are dropped before scoring):
+
+| Key | Type | Effect |
+|---|---|---|
+| `price_min` | float (EUR) | drop rows where `price < price_min` |
+| `price_max` | float (EUR) | drop rows where `price > price_max` |
+
+**Voting axes stay narrower.** `get_attribute_pressure()` and `get_stock_stats(by=...)` still operate only over the 4 PIVOT_KEYS (`color, type, fit, size`) — the extended keys exist purely for the retrieval phase.
+
+#### Query schema (canonical + shorthand)
+
+Two accepted shapes:
+
+**Canonical** — multi-value include + exclude. Mirrors the shape the
+LNIAGIA conversation module's LLM query parser already produces.
+
+Minimal example:
+
+```python
+{
+    "include": {"color": ["red", "green"], "type": ["trousers"]},
+    "exclude": {"color": ["black"], "size": ["XS"]},
+    "price_min": 20.0,
+    "price_max": 80.0,
+}
+```
+
+**Full reference — every legal field in one object** (you don't need to set them all; this just lists everything that's accepted):
+
+```python
+{
+    "include": {
+        "color":     ["red", "green"],          # equality, any-of
+        "type":      ["trousers"],              # equality
+        "fit":       ["slim fit", "regular"],   # equality
+        "size":      ["M", "L"],                # equality (XS/S/M/L/XL/XXL)
+        "style":     ["casual"],                # equality
+        "pattern":   ["plain"],                 # equality
+        "material":  ["denim", "cotton"],       # equality
+        "gender":    ["unisex"],                # equality (male/female/unisex)
+        "age_group": ["adult"],                 # SUBSTRING (case-insensitive)
+        "season":    ["summer"],                # equality
+        "occasion":  ["everyday"],              # equality
+        "brand":     ["Levi's"],                # equality (free-text)
+    },
+    "exclude": {
+        "color":     ["black"],
+        "type":      ["shorts"],
+        "fit":       ["fitted"],
+        "size":      ["XS", "XXL"],
+        "style":     ["formal"],
+        "pattern":   ["floral"],
+        "material":  ["leather"],
+        "gender":    ["male"],
+        "age_group": ["baby"],                  # SUBSTRING
+        "season":    ["winter"],
+        "occasion":  ["sport"],
+        "brand":     ["Shein"],
+    },
+    "price_min": 20.0,                          # float, EUR (hard filter)
+    "price_max": 80.0,                          # float, EUR (hard filter)
+}
+```
+
+Field-by-field semantics:
+- `include[k]` rows must satisfy "row[k] matches any value in list" — contributes 1 to `match_count` per key, never more (any-of, not sum).
+- `exclude[k]` rows whose `row[k]` matches any listed value are dropped before scoring.
+- `age_group` is substring-matched in BOTH include and exclude because the column stores comma-separated strings like `"adult, young adult"`.
+- `price_min` / `price_max` are hard numeric filters applied BEFORE scoring; rows with NaN price are excluded by the comparison.
+- Rules: each include/exclude list must be non-empty. At least one of `include` / `exclude` / `price_min` / `price_max` must be non-empty (else `ValueError`).
+
+- Both `include` and `exclude` are optional dicts; field values are lists of strings.
+- `include` values contribute 1 to `match_count` per key (any-of within a key).
+- `exclude` values are a hard filter — matching rows are dropped before scoring.
+- `price_min` / `price_max` stay at the top level (hard numeric filter).
+- At least one of `include` / `exclude` / `price_min` / `price_max` must be non-empty.
+
+**Shorthand** — flat dict, auto-wrapped into `{"include": ...}`. Used by the REPL when you don't pass `+/-` prefixes:
+
+```python
+{"color": "red", "type": "trousers"}                  # str values
+{"color": ["red", "green"], "type": "trousers"}       # mixed
+```
+
+Mixing both forms in one call (e.g. `{"include": {...}, "color": "red"}`) raises `ValueError`. Pick one.
+
+**REPL token syntax:**
+
+| Token | Meaning |
+|---|---|
+| `key=v` | include `key=v` |
+| `key=v1,v2` | include `key` with multiple values (OR) |
+| `+key=v` | explicit include (same as `key=v`) |
+| `-key=v` / `-key=v1,v2` | exclude values |
+| `price_min=20` / `price_max=80` | range (no prefix) |
+
+Same value in both `+key` and `-key` for the same key → error.
 
 #### Example sessions
 
@@ -234,6 +348,52 @@ stock> pick 10
 ```
 
 Note: shell escaping for the space — `slim\ fit` or quote the whole token: `query "fit=slim fit"`.
+
+**A2. Extended query — narrow with material + brand + price cap**
+
+```
+stock> query color=red type=trousers material=denim brand=Levi's price_max=80
+stock> candidates
+40 candidates (sorted by match_count DESC, item_id ASC):
+  ( 4321, M  ) match=4  stock= 18 sold= 110 ... color=red type=trousers material=denim brand=Levi's
+  ...
+stock> pick 10
+[~90s] Top 10: ...
+```
+
+Notes:
+- `match_count` ranges 0–4 here (color/type/material/brand). `price_max=80` is a hard filter, not in `match_count`.
+- `Levi's` apostrophe + spaces in brand names: shell-quote — `query "brand=Levi's"`.
+
+**A3. Multi-value include + exclude (canonical)**
+
+```
+stock> query color=red,green type=trousers -size=XS -size=XXL price_max=80
+query set: {
+  "include": {"color": ["red", "green"], "type": ["trousers"]},
+  "exclude": {"size": ["XS", "XXL"]},
+  "price_max": "80"
+}
+stock> candidates
+40 candidates (sorted by match_count DESC, item_id ASC):
+  ( ... , M  ) match=2  ... color=red type=trousers ...
+  ( ... , L  ) match=2  ... color=green type=trousers ...
+  ...
+```
+
+Notes:
+- `color=red,green` — comma splits values; row matches if color is red OR green (any-of, 1 per key in `match_count`).
+- `-size=XS -size=XXL` — exclude tokens merge (could also be `-size=XS,XXL`).
+- `price_max=80` is a hard filter, never in `match_count`.
+
+**A4. Pure exclude (no include)**
+
+```
+stock> query -color=black -color=brown -size=XS price_max=100
+stock> candidates
+```
+
+Returns 40 in-stock items ≤ €100 that aren't black/brown and aren't XS. `match_count` is 0 for every row (no include axis specified) — pure relaxation case where tiebreaker `item_id ASC` orders the list.
 
 **B. Partial query — only color + type**
 
@@ -426,3 +586,4 @@ EOF
 - Qdrant integration — kept untouched on purpose
 - pytest suite (smoke `__main__` + REPL is the only test layer for now)
 - Notebook with sanity plots (`stock_agent_plan.md` §5 step 8) — deferred to Demo Day prep
+- Type-specific narrow fields as query keys (`neckline`, `collar`, `sleeve_style`, `hem_style`, `closure`, `hood`, `insulation`, `waterproof`, `waist`, `rise`, `length`, `leg_style`, `dress_style`, pocket variants) — only valid per item type, so left out of the retrieval API. Customers can drill via dialogue (LLM picker has them in the candidate context if relevant)

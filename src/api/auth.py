@@ -101,7 +101,7 @@ def _decode_token(token: str) -> int:
         raise credentials_exc
 
 
-def _extract_bearer(authorization: str | None) -> str | None:
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
     """Pull the raw token string out of 'Authorization: Bearer <token>'."""
     if not authorization:
         return None
@@ -114,7 +114,7 @@ def _extract_bearer(authorization: str | None) -> str | None:
 # ── FastAPI dependencies ───────────────────────────────────────────────────────
 
 def get_current_user_id(
-    authorization: str | None = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
 ) -> int:
     """
     **Required** auth dependency.  Raises 401 if the header is absent or invalid.
@@ -132,7 +132,7 @@ def get_current_user_id(
 
 
 def get_optional_user_id(
-    authorization: str | None = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
 ) -> Optional[int]:
     """
     **Optional** auth dependency.  Returns the user_id if a valid token is

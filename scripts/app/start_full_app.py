@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -73,6 +74,11 @@ def parse_args() -> argparse.Namespace:
         "--auto-pull-model",
         action="store_true",
         help="Automatically pull the required Ollama model if it is missing",
+    )
+    parser.add_argument(
+        "--skip-xmpp",
+        action="store_true",
+        help="Skip starting the XMPP broker (multi-agent recommendations will be unavailable)",
     )
     parser.add_argument(
         "--refiner-model",
@@ -272,6 +278,76 @@ def ensure_vector_collection() -> None:
     )
 
 
+def _docker_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _xmpp_container_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", "viralytics_xmpp"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() == "true"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _wait_for_port(host: str, port: int, retries: int = 20, delay: float = 1.5) -> bool:
+    for i in range(retries):
+        try:
+            with socket.create_connection((host, port), timeout=2):
+                return True
+        except OSError:
+            if i < retries - 1:
+                print(".", end="", flush=True)
+                time.sleep(delay)
+    return False
+
+
+def ensure_xmpp_running() -> None:
+    if not _docker_available():
+        raise SystemExit(
+            "Docker is not running or not installed.\n"
+            "Start Docker Desktop, then retry.\n"
+            "Or skip with --skip-xmpp (multi-agent recommendations will be unavailable)."
+        )
+
+    if _xmpp_container_running():
+        print("XMPP broker (Prosody) is already running.")
+        return
+
+    print("Starting XMPP broker (Prosody)...")
+    result = subprocess.run(
+        ["docker", "compose", "up", "-d", "--build", "xmpp"],
+        cwd=str(REPO_ROOT),
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "Failed to start the XMPP broker.\n"
+            "Check: docker compose logs xmpp"
+        )
+
+    print("Waiting for XMPP port 5222", end="", flush=True)
+    if not _wait_for_port("127.0.0.1", 5222):
+        raise SystemExit(
+            "\nXMPP broker did not become ready in time.\n"
+            "Check: docker logs viralytics_xmpp"
+        )
+    print(" ready.")
+
+
 def build_env(args: argparse.Namespace, refiner_model: str, router_model: str) -> dict:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
@@ -357,6 +433,11 @@ def main() -> int:
         ensure_vector_collection()
     else:
         print("Skipping vector collection check.")
+
+    if not args.skip_xmpp:
+        ensure_xmpp_running()
+    else:
+        print("Skipping XMPP broker check.")
 
     env = build_env(args, refiner_model=refiner_model, router_model=router_model)
     return run_uvicorn(args, env)

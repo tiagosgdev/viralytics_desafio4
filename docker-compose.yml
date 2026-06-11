@@ -13,3 +13,21 @@ services:
     devices:
       - /dev/video0:/dev/video0    # webcam passthrough (Linux)
     restart: unless-stopped
+    depends_on:
+      - xmpp
+
+  # ── XMPP broker for the SPADE multi-agent system ──────────────────────────
+  xmpp:
+    build:
+      context: ./prosody_config   # Dockerfile lives here; generates self-signed TLS cert
+    container_name: viralytics_xmpp
+    ports:
+      - "5222:5222"   # XMPP client connections (agents connect here)
+      - "5280:5280"   # HTTP admin / BOSH (optional, useful for debugging)
+    volumes:
+      - ./prosody_config/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - prosody_data:/var/lib/prosody
+    restart: unless-stopped
+
+volumes:
+  prosody_data:

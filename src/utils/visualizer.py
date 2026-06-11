@@ -60,9 +60,21 @@ def annotate_for_display(frame: np.ndarray, result: DetectionResult) -> np.ndarr
         cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
 
         label = f"{det.class_name.replace('_',' ')}  {det.confidence:.0%}"
+        if getattr(det, "color_name", ""):
+            label += f" | {det.color_name.replace('_', ' ')}"
         (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-        cv2.rectangle(out, (x1, y1 - th - bl - 6), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(out, label, (x1+2, y1 - bl - 2),
+        label_x1 = min(x1, max(0, out.shape[1] - tw - 4))
+        label_x2 = min(out.shape[1] - 1, label_x1 + tw + 4)
+        if y1 - th - bl - 6 >= 0:
+            label_y1 = y1 - th - bl - 6
+            label_y2 = y1
+            text_y = y1 - bl - 2
+        else:
+            label_y1 = y1
+            label_y2 = min(out.shape[0] - 1, y1 + th + bl + 6)
+            text_y = min(out.shape[0] - 2, y1 + th + 2)
+        cv2.rectangle(out, (label_x1, label_y1), (label_x2, label_y2), color, -1)
+        cv2.putText(out, label, (label_x1 + 2, text_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 1, cv2.LINE_AA)
 
     return out

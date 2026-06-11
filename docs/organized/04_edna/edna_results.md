@@ -14,7 +14,7 @@ conf=0.25 and NMS IoU=0.45, unless otherwise noted.
 | fashionnet_balanced_v1 | 0.193 | -- | 0.336 | 0.387 | 0.359 | Ablation-winning config |
 | edna_1.2m | 0.260 | 0.268 | 0.347 | 0.492 | 0.407 | scale=m, +aug, +multi_cell |
 | edna_1.3m | 0.203 | 0.210 | 0.433 | 0.357 | 0.392 | +cos_lr, +EMA, +mosaic, +IoU-obj |
-| edna_1.4m | 0.263 | 0.266 | 0.477 | 0.415 | 0.444 | +2K bg images, reverted IoU-obj |
+| edna_1.4m | 0.263 | 0.266 | **0.477** | 0.415 | 0.444 | +2K bg images, reverted IoU-obj |
 | **edna_1.5m** | **0.261** | **0.272** | 0.430 | **0.448** | **0.439** | focal_bce .mean(), 1K bg images |
 
 For comparison: **YOLOv8M on balanced dataset: 0.592 mAP@50** (pretrained, 50 epochs).

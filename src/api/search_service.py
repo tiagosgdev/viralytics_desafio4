@@ -273,7 +273,7 @@ class UnifiedSearchService:
         detected_categories: List[str],
         recommendations: Optional[List[dict]] = None,
         persona: str = "cruella",
-        user_profile: dict | None = None,
+        user_profile: Optional[dict] = None,
     ) -> SearchSession:
         persona = normalize_persona(persona)
         detected_categories = _dedupe(detected_categories)

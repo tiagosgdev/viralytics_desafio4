@@ -2,13 +2,14 @@
 
 ## System Overview
 
-This repository implements a fashion object detection and recommendation system, combining:
+This repository implements a fashion outfit detection and recommendation system, combining:
 
-1. A computer-vision pipeline for clothing detection (both YOLOv8 fine-tuning and a custom detector)
-2. A rule-based recommendation engine for complementary garments
-3. A web application layer (FastAPI + browser frontend)
-4. A natural-language clothing search subsystem (LNIAGIA)
-5. Training, evaluation, and dataset preparation tooling
+1. A computer-vision pipeline for clothing detection (YOLOv8 fine-tuning and a custom detector)
+2. A pose-estimation pipeline for body shape analysis (MediaPipe)
+3. A **multi-agent sealed-bid recommendation system** (SPADE over XMPP)
+4. A semantic search subsystem for natural-language refinement (LNIAGIA)
+5. A web application layer (FastAPI + browser frontend)
+6. Training, evaluation, and dataset preparation tooling
 
 ---
 
@@ -20,32 +21,104 @@ The deployable prototype that serves the end-user experience.
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/api/main.py` | FastAPI app: HTTP/WebSocket endpoints, model loading, inference orchestration |
-| `src/api/schemas.py` | Pydantic response models |
-| `src/detection/detector.py` | Detection abstraction: `BaseDetector`, `FashionDetector` (YOLOv8 wrapper) |
-| `src/detection/yolo_world.py` | Zero-shot YOLO-World backend via CLIP embeddings |
-| `src/detection/camera.py` | Real-time camera session with multi-frame confidence accumulation |
-| `src/recommendations/engine.py` | Rule-based complementary garment recommender |
+| `src/api/main.py` | FastAPI app: HTTP/WebSocket endpoints, model loading, inference, agent startup |
+| `src/api/schemas.py` | Pydantic request/response models |
+| `src/api/auth.py` | JWT authentication |
+| `src/api/search_service.py` | Search session lifecycle management |
+| `src/detection/detector.py` | `BaseDetector` + `FashionDetector` (YOLOv8 wrapper); `CATEGORY_NAMES` map (class ID 0–12) |
+| `src/detection/fashionnet_detector.py` | FashionNet/edna inference wrapper |
+| `src/detection/camera.py` | Multi-frame WebSocket camera session with confidence accumulation |
 | `frontend/index.html` | Single-file browser UI (HTML + CSS + JS) |
+| `frontend/static/css/style.css` | UI styles including agent status indicator |
 
 **Design decisions:**
-- The detector is loaded once at startup and shared across requests (expensive to reload).
-- `DETECTOR_BACKEND` abstracts over FashionDetector vs YOLOWorldDetector, making the app inference-backend-agnostic.
-- Camera sessions average confidence across frames to reduce flicker and temporary misdetections.
-- The recommender uses symbolic rules (`OUTFIT_RULES` mapping detected categories to complementary ones) rather than learned embeddings. This is appropriate for a prototype with no interaction history.
+- The detector is loaded once at startup and shared across requests.
+- `CATEGORY_NAMES` maps class IDs 0–12 to fashion labels. Any detection with an unmapped class ID gets a `class_N` fallback name and is filtered out before reaching the recommendation pipeline.
+- Camera sessions average confidence across frames to reduce flicker.
+- On scan completion the frontend immediately shows DB recommendations, then fires a background `POST /api/recommend` call. When the agent round completes (~20–30 s), the agent recommendations replace the initial results.
 
-### 2. Custom Detector (FashionNet / edna)
+### 2. Multi-Agent Recommendation System
 
-A single-shot anchor-free detector built from scratch in pure PyTorch.
+A SPADE 3.x multi-agent system running over XMPP (Prosody broker in Docker).
+
+#### Agents
+
+| Agent | JID | Role |
+|-------|-----|------|
+| `OrchestratorAgent` | `orchestrator@localhost` | Coordinates rounds, aggregates results |
+| `FeatureWeightAgent` | `weights@localhost` | Computes feature importances + DB filters |
+| `BodyRecommenderAgent` | `body@localhost` | Scores by body-shape compatibility |
+| `ClothingRecommenderAgent` | `clothing@localhost` | Scores by garment-type / intent match |
+| `ColourRecommenderAgent` | `colour@localhost` | Scores by colour harmony |
+| `StockRecommenderAgent` | `stock@localhost` | Scores by inventory health (push_score) |
+
+All extend `BaseRecommenderAgent` (thin wrapper over `spade.Agent` that disables TLS cert verification for the dev Prosody cert).
+
+#### Communication Protocol
+
+Messages use **FIPA-ACL performatives** (`REQUEST`, `INFORM`, `CFP`, `PROPOSE`) carried over XMPP. The negotiation pattern is a **sealed-bid Contract Net Protocol** — agents receive candidate items simultaneously and respond independently with no cross-talk.
+
+```
+orchestrator → weights     REQUEST   context: {detected_type, detected_color, detected_body_type, …}
+weights      → orchestrator INFORM   {query, filters: {include, exclude}, weights: {color, type, bodyType}}
+orchestrator → DB           (sync)   StockAgent.get_candidates() → 40 candidates
+orchestrator → body         CFP      {candidates[40], weights_result, context}   ┐ sealed bid
+orchestrator → clothing     CFP      (same, simultaneously)                       │ no cross-talk
+orchestrator → colour       CFP      (same)                                       │
+orchestrator → stock        CFP      (same)                                      ┘
+body         → orchestrator PROPOSE  {agent_id, scores: {"itemId:size": 0.0–1.0}}
+clothing     → orchestrator PROPOSE  (same)
+colour       → orchestrator PROPOSE  (same)
+stock        → orchestrator PROPOSE  (same)
+→ weighted Borda count → top-10 → asyncio.Future resolved
+```
+
+Every message carries a `conv_id` (UUID hex) so concurrent rounds are never mixed up.
+
+#### Aggregation (`aggregator.py`)
+
+Weighted Borda count:
+1. Each agent ranks 40 candidates by its score (sealed — agents don't see each other's rankings)
+2. Borda points: rank-1 item gets N pts, rank-N gets 1 pt
+3. Each agent's vector is scaled by its weight
+4. Vectors summed → composite score → top-10
+
+Weight distribution:
+- `stock` receives a fixed 20% (inventory health signal)
+- Remaining 80% split among `body`/`clothing`/`colour` proportionally to `FeatureWeightAgent` importances
+
+**Fault tolerance:** if any scorer agent fails to respond before `COLLECT_TIMEOUT_S` (60 s), its weight is pooled and redistributed proportionally among the agents that did respond. The round completes with a reduced agent set.
+
+#### Shared History (`history.py`)
+
+A process-level singleton (`RoundHistory`) shared by all agents. Records every round through its lifecycle: `queued → running → complete / failed / stale`. Used for two purposes:
+
+1. **Queue staleness check (orchestrator):** rounds that have been waiting in the queue longer than `QUEUE_TTL_S` (60 s) are dropped with `fut.set_result([])`. Prevents stale scans from being processed after the user has moved on.
+
+2. **Agent context on comeback (scorer agents):** each scorer agent's `setup()` calls `history.agent_context_summary(agent_id)` to log what happened while it was offline — how many rounds ran, which it missed, and whether its absence triggered weight redistribution.
+
+#### `RecommendationSystem` (`run.py`)
+
+Public lifecycle wrapper used by FastAPI:
+- `start()` — starts all 6 agents, registers with XMPP broker
+- `recommend(…)` — creates `asyncio.Future`, calls `trigger_round()`, awaits result with 90 s timeout
+- `stop()` — graceful shutdown
+- `is_ready` — guards `/api/recommend`; returns 503 if False
+
+Rounds are serialised through `OrchestratorBehaviour`'s `asyncio.Queue` — concurrent calls queue safely.
+
+### 3. Custom Detector (FashionNet / edna)
+
+A single-shot anchor-free detector built from scratch in PyTorch.
 
 | Module | Responsibility |
 |--------|---------------|
 | `src/custom_model/model.py` | Architecture: ConvBnReLU, ResBlock, CSPBlock, Backbone, FPN Neck, DetectionHead |
 | `src/custom_model/loss.py` | CIoU box loss, focal BCE objectness, BCE class loss, multi-scale target assignment |
-| `src/custom_model/dataset.py` | YOLO-format dataset adapter with Albumentations augmentation pipeline |
+| `src/custom_model/dataset.py` | YOLO-format dataset adapter with Albumentations augmentation |
 | `src/custom_model/postprocess.py` | Grid decoding, NMS, confidence filtering |
 
-**Architecture:** Input (3x640x640) -> Backbone (4 downsampling stages producing P3/P4/P5 at strides 8/16/32) -> Neck (bidirectional FPN with upsample + concat + fuse) -> Head (per-scale predictions: objectness + class + bbox). Three model scales:
+Architecture: Input (3×640×640) → Backbone (4 downsampling stages, P3/P4/P5 at strides 8/16/32) → Neck (bidirectional FPN) → Head (objectness + class + bbox per scale).
 
 | Scale | Parameters | Channel widths |
 |-------|-----------|---------------|
@@ -53,50 +126,56 @@ A single-shot anchor-free detector built from scratch in pure PyTorch.
 | m | ~25M | 96-192-384-768 |
 | l | ~43M | 128-256-512-1024 |
 
-**Why custom vs off-the-shelf YOLO?** The project goal was to understand and build a detection pipeline end-to-end -- loss functions, target assignment, post-processing, evaluation -- rather than consuming Ultralytics as a black box. YOLOv8 serves as the performance ceiling and comparison baseline.
+### 4. Pose Analysis
 
-### 3. Data Pipeline
-
-| Module | Responsibility |
-|--------|---------------|
-| `scripts/sample_dataset.py` | Stratified sampling from DeepFashion2 using pre-built CSV metadata |
-| `scripts/analyze_raw_dataset.py` | Exploratory data analysis: class balance, box sizes, occlusion |
-| `src/detection/converter.py` | DeepFashion2 annotation format to YOLO label format |
-
-### 4. Training and Evaluation
+MediaPipe Pose Landmarker is used to estimate body shape from the camera frame.
 
 | Module | Responsibility |
 |--------|---------------|
-| `scripts/train.py` | YOLOv8 fine-tuning via Ultralytics API |
-| `scripts/train_custom.py` | FashionNet training loop with full experiment configuration |
-| `scripts/evaluate.py` | YOLOv8 evaluation via Ultralytics validation |
-| `scripts/evaluate_custom.py` | FashionNet/edna evaluation with custom metrics |
-| `scripts/compare_models.py` | Side-by-side model comparison (metrics, speed, size) |
-| `src/utils/metrics.py` | IoU, AP, confusion matrix, matching -- implemented from first principles |
+| `src/detection/pose_analyzer.py` | Extracts shoulder/hip widths, computes ratio, classifies body shape |
 
-`train_custom.py` exposes all experiment knobs as CLI flags: loss weights, augmentation
-intensity, multi-cell assignment, dropout, optimizer choice, learning rate schedule, EMA,
-mosaic augmentation, and model scale. This makes it an experiment harness, not just a
-training loop.
+Body shapes classified: hourglass, pear, triangle, rectangle, inverted_triangle, apple, trapezoid, oval. Used as `detected_body_type` input to the agent round.
 
-### 5. LNIAGIA Search Subsystem
+### 5. Stock Agent (`stock_agent/`)
 
-A separate subsystem for natural-language clothing search.
+SQLite-backed inventory database with scoring logic.
 
 | Module | Responsibility |
 |--------|---------------|
-| `LNIAGIA/search_app.py` | CLI search frontend |
-| `LNIAGIA/llm_query_parser.py` | LLM-based query parsing (Ollama + qwen2.5:3b) |
-| `LNIAGIA/DB/models.py` | Domain schema, controlled vocabularies, generation constraints |
-| `LNIAGIA/DB/SQLLite/DBManager.py` | SQLite for structured item storage |
+| `stock_agent/stock_agent.py` | `get_candidates(filters, n)` — retrieves N candidate items matching DB filters |
+| `stock_agent/stock_stats.py` | `get_push_scores(pairs)` — precomputed push_score (stock age, sales velocity, stock count) |
+
+`push_score` is a composite signal indicating how urgently the store wants to move a given item. Normalised to [0, 1] across the 40 candidates for each round.
+
+### 6. LNIAGIA Search Subsystem
+
+Semantic natural-language clothing search used by Cruella.
+
+| Module | Responsibility |
+|--------|---------------|
+| `LNIAGIA/search_app.py` | Entry point, `search_detected_items()` called by FastAPI |
+| `LNIAGIA/feature_weighting.py` | `analyze_intent()` — converts context to DB filters + feature importances |
+| `LNIAGIA/llm_query_parser.py` | LLM-based query parsing (Ollama + qwen2.5) |
+| `LNIAGIA/DB/SQLLite/DBManager.py` | Structured item storage (clothing.db) |
 | `LNIAGIA/DB/vector/VectorDBManager.py` | Qdrant vector search with BGE embeddings |
-| `LNIAGIA/DB/vector/description_generator.py` | Structured item to natural-language text |
-| `LNIAGIA/DB/vector/nl_mappings.py` | Symbolic values to rich text for better embeddings |
+| `LNIAGIA/DB/vector/description_generator.py` | Item struct → natural-language text for embedding |
 
-**Design:** Hybrid retrieval combining structured SQL filters with semantic vector search.
-The LLM translates natural-language queries ("find me a red summer dress under 50 euros")
-into structured filters, which are then applied as Qdrant metadata constraints alongside
-embedding-based similarity search.
+Hybrid retrieval: SQL metadata filters + semantic vector similarity. The LLM (via `analyze_intent`) translates visual context into structured filters; these are applied as Qdrant metadata constraints.
+
+### 7. Data Pipeline
+
+| Module | Responsibility |
+|--------|---------------|
+| `scripts/data_prep/sample_balanced.py` | Stratified sampling from DeepFashion2 CSV metadata |
+| `scripts/data_prep/analyze_raw_dataset.py` | EDA: class balance, box sizes, occlusion stats |
+
+### 8. Training and Evaluation
+
+| Module | Responsibility |
+|--------|---------------|
+| `scripts/training/train_custom.py` | FashionNet training loop with full experiment configuration |
+| `scripts/evaluation/evaluate_custom.py` | FashionNet/edna evaluation with custom metrics |
+| `src/utils/metrics.py` | IoU, AP, confusion matrix — implemented from first principles |
 
 ---
 
@@ -105,28 +184,42 @@ embedding-based similarity search.
 | Technology | Rationale |
 |------------|-----------|
 | PyTorch | Standard framework for custom model research |
-| Ultralytics YOLO | Strong baseline with minimal code; easy model comparison |
+| Ultralytics YOLOv8 | Strong baseline; minimal code; easy comparison |
 | FastAPI | Async networking, schema-driven APIs, WebSocket support |
-| OpenCV + NumPy | Standard CV pipeline tooling |
-| Qdrant | Local vector DB with metadata filtering, no external service needed |
+| SPADE 3.x | Python FIPA-compliant multi-agent framework over XMPP |
+| Prosody (Docker) | Lightweight XMPP broker; custom Dockerfile bypasses `setpriv` on WSL2 |
+| slixmpp | SPADE's underlying XMPP client; STARTTLS with `verify_security=False` for self-signed cert |
+| asyncio.Queue | Serialises concurrent recommend() calls through a single CyclicBehaviour |
+| MediaPipe | Reliable on-device pose estimation; heavy task model for accurate landmark detection |
+| Qdrant | Local vector DB with metadata filtering, no external service required |
 | sentence-transformers (BGE) | Strong general-purpose retrieval embeddings |
-| Ollama + qwen2.5:3b | Local LLM for query parsing, no API key required |
+| Ollama + qwen2.5 | Local LLM for query parsing, no API key required |
 | Albumentations | Correct bounding box transformation during augmentation |
+| OpenCV + NumPy | Standard CV pipeline tooling |
 
 ---
 
 ## Main Application Flow
 
 ```
-Browser -> FastAPI (/api/detect/image or /ws/camera)
-  -> Detector (FashionDetector or YOLOWorldDetector)
-    -> Inference + post-processing
-    -> Detection results (class, bbox, confidence)
-  -> RecommendationEngine
-    -> Rule-based complementary category lookup
-    -> Catalogue item sampling
-  -> JSON/WebSocket response with detections + recommendations
+Browser (WebSocket /ws/camera)
+  → Camera captures frames → multi-frame confidence accumulation
+  → Detector (YOLOv8 / FashionNet) → clothing class detections
+  → PoseAnalyzer (MediaPipe) → body shape classification
+  → DB search (LNIAGIA/search_app) → immediate recommendations sent to browser
+  → triggerAgentRecommendations() called in browser JS (non-blocking)
+      → POST /api/recommend
+          → RecommendationSystem.recommend()
+              → OrchestratorAgent.trigger_round()         (queued)
+              → history.record_enqueued() + staleness check
+              → REQUEST → FeatureWeightAgent → INFORM weights+filters
+              → StockAgent.get_candidates() → 40 items
+              → CFP → body, clothing, colour, stock (sealed bid)
+              → PROPOSE × 4 → weighted Borda count → top-10
+              → history.record_complete()
+          → JSON response to browser
+      → renderRecs() replaces DB recs with agent recs
 ```
 
-The camera path (`/ws/camera`) implements a state machine (CAPTURING -> ANALYSING -> RESULTS)
-with multi-frame accumulation during capture for robust detection.
+**Fault path:** if a scorer agent is down, `_collect_proposals` times out for that agent. The orchestrator detects the missing agent, logs a warning in the XMPP trace, redistributes its weight to the remaining agents, and the round completes normally. On restart the missing agent reads `history.agent_context_summary()` to understand what it missed.
+```

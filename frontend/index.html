@@ -61,10 +61,22 @@
       <img id="feed" alt="Camera feed">
       <div id="flash"></div>
       <div id="frozen-label"><i class="fas fa-camera"></i> OUTFIT CAPTURED</div>
+      <div class="person-guide" id="person-guide" hidden>
+        <svg viewBox="0 0 80 210" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="40" cy="16" rx="12" ry="14"/>
+          <line x1="40" y1="30" x2="40" y2="40"/>
+          <path d="M 14 54 C 14 40 66 40 66 54"/>
+          <path d="M 14 54 L 16 104 L 64 104 L 66 54"/>
+          <path d="M 14 54 L 4 86 L 8 106"/>
+          <path d="M 66 54 L 76 86 L 72 106"/>
+          <path d="M 28 104 L 24 158 L 22 196"/>
+          <path d="M 52 104 L 56 158 L 58 196"/>
+        </svg>
+      </div>
       <div class="idle" id="idle">
         <div class="idle-icon"><i class="fas fa-shirt"></i></div>
         <div class="idle-title">READY TO SCAN</div>
-        <div class="idle-sub">Press "Start Scan" to detect your outfit</div>
+        <div class="idle-sub">Stand in front of the camera to begin</div>
       </div>
     </div>
 
@@ -95,8 +107,25 @@
       <div class="psec">
         <div class="plbl">Scan Controls</div>
         <div class="steps"><div class="step" id="s1"></div><div class="step" id="s2"></div><div class="step" id="s3"></div></div>
-        <div class="phase-lbl" id="plbl">Press start to begin</div>
-        <button id="btn-start" onclick="startScan()"><i class="fas fa-play"></i> Start Scan</button>
+        <div class="phase-lbl" id="plbl">Stand in frame to begin</div>
+        <button id="btn-start" hidden onclick="startScan()"><i class="fas fa-play"></i> Start Scan</button>
+        <div class="scan-auto-hint" id="scan-auto-hint">
+          <span class="hint-icon"><i class="fas fa-person-walking"></i></span>
+          <span id="scan-hint-text">Stand in front of the camera</span>
+        </div>
+        <div class="conf-row">
+          <label for="height-input">YOUR HEIGHT</label>
+          <input type="number" id="height-input" min="100" max="250" placeholder="e.g. 175">
+          <span class="conf-val">cm</span>
+        </div>
+        <div class="conf-row">
+          <label for="gender-select">GENDER</label>
+          <select id="gender-select" style="flex:1;background:var(--surface-2);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:0.8rem;">
+            <option value="">—</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </div>
         <div class="actions" id="actions">
           <button class="abtn abtn-retry" onclick="sendCmd('retry')"><i class="fas fa-rotate-right"></i> Retry Scan</button>
           <button class="abtn abtn-more" onclick="sendCmd('more_recs')"><i class="fas fa-sparkles"></i> More Suggestions</button>
@@ -114,9 +143,17 @@
         <div class="tags" id="tags"><span class="notag">Nothing detected yet</span></div>
       </div>
 
+      <div class="psec">
+        <div class="plbl">Body Analysis</div>
+        <div class="body-summary" id="body-summary">
+          <div class="ph">Skeleton overlay, measurements, and body shape will appear here after a scan.</div>
+        </div>
+      </div>
+
       <div class="recs-hdr">
         <div class="recs-headline">
           <div class="plbl">Store Recommendations</div>
+          <div id="agent-status" class="agent-status" hidden></div>
           <div class="recs-actions">
             <button class="recs-scroll-btn" id="recs-scroll-left" type="button" onclick="scrollRecommendations(-1)" disabled aria-label="Scroll recommendations left">
               <i class="fas fa-chevron-left"></i>
@@ -420,8 +457,51 @@ const EMOJI = {
   sling_dress: '<i class="fas fa-dress"></i>'
 };
 
+// Convert an RGB array/tuple ([R,G,B]) to a hex color string for CSS.
+function rgbToHex(rgb) {
+  if (!rgb || !Array.isArray(rgb) || rgb.length < 3) return '#888';
+  const r = Number(rgb[0]);
+  const g = Number(rgb[1]);
+  const b = Number(rgb[2]);
+  if ([r, g, b].some((v) => Number.isNaN(v))) return '#888';
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+// Common color name -> hex map used for recommendation swatches.
+const NAME_TO_HEX = {
+  black: '#000000',
+  white: '#ffffff',
+  gray: '#808080',
+  light_gray: '#c8c8c8',
+  red: '#dc143c',
+  maroon: '#800000',
+  pink: '#ff69b4',
+  orange: '#ffa500',
+  yellow: '#ffd700',
+  beige: '#f5f5dc',
+  brown: '#964b00',
+  olive: '#808000',
+  green: '#228b22',
+  teal: '#008080',
+  cyan: '#00ffff',
+  blue: '#1e90ff',
+  navy: '#000080',
+  purple: '#800080',
+  lavender: '#e6e6fa',
+  mauve: '#e0b0ff',
+  mint: '#98ff98',
+  coral: '#ff7f50',
+  gold: '#d4af37',
+  burgundy: '#800020',
+  cream: '#fffdd0'
+};
+
 let ws = null;
 let selectedPersona = null;
+let userHeightCm = null;
+let autoScanFrames = 0;
+let autoScanTimeout = null;
+const AUTO_SCAN_FRAMES_REQUIRED = 8;
 let frozen = false;
 let currentSessionId = null;
 let currentDetectedCategories = [];
@@ -437,6 +517,10 @@ let recommendationDetailIndex = 0;
 let hasChatIntroLoaded = false;
 let introRequestInFlight = false;
 let introRequestToken = 0;
+let agentRoundGeneration = 0;
+let currentDetectedBodyType = '';
+let currentDetectedClothingType = '';
+let currentDetectedColor = '';
 
 const feed = document.getElementById('feed');
 const landingScreen = document.getElementById('landing-screen');
@@ -453,6 +537,10 @@ const plbl = document.getElementById('plbl');
 const btnStart = document.getElementById('btn-start');
 const actions = document.getElementById('actions');
 const tagsEl = document.getElementById('tags');
+const personGuide = document.getElementById('person-guide');
+const scanAutoHint = document.getElementById('scan-auto-hint');
+const scanHintText = document.getElementById('scan-hint-text');
+const bodySummaryEl = document.getElementById('body-summary');
 const recsEl = document.getElementById('recs');
 const flashEl = document.getElementById('flash');
 const frozenLbl = document.getElementById('frozen-label');
@@ -518,9 +606,19 @@ function connectCamera() {
         setSt('idle', 'Camera ready');
       }
       if (pendingStart) {
-        ws.send(JSON.stringify({ cmd: 'start' }));
+        ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
         pendingStart = false;
         beginCaptureUi();
+      } else if (msg.pose_available === false) {
+        btnStart.hidden = false;
+        personGuide.hidden = true;
+        scanAutoHint.style.display = 'none';
+        setSt('idle', 'Camera ready');
+      } else {
+        btnStart.hidden = true;
+        scanAutoHint.style.display = '';
+        personGuide.hidden = false;
+        setSt('idle', 'Stand in frame to begin');
       }
       return;
     }
@@ -574,10 +672,26 @@ function disconnectCamera() {
   setSt('idle', 'Camera paused');
 }
 
+function triggerAutoScan() {
+  autoScanTimeout = null;
+  if (!cameraReady || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (actions.classList.contains('show')) return;
+  const heightVal = parseInt(document.getElementById('height-input').value, 10);
+  userHeightCm = (heightVal >= 100 && heightVal <= 250) ? heightVal : null;
+  ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
+  beginCaptureUi();
+}
+
 function beginCaptureUi() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   feed.style.display = 'block';
   idle.classList.add('hidden');
   cam.classList.add('active');
+  cam.classList.remove('person-detected', 'person-ready');
+  personGuide.hidden = true;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
+  autoScanFrames = 0;
   btnStart.disabled = true;
   actions.classList.remove('show');
   setSteps('capturing');
@@ -592,6 +706,38 @@ function handleCameraMessage(msg) {
         feed.src = 'data:image/jpeg;base64,' + msg.frame;
         idle.classList.add('hidden');
         cam.classList.remove('active');
+
+        if (msg.person_in_frame) {
+          autoScanFrames++;
+          cam.classList.add('person-detected');
+          cam.classList.remove('person-ready');
+          scanAutoHint.classList.add('person-detected');
+          scanAutoHint.classList.remove('person-ready');
+          const remaining = AUTO_SCAN_FRAMES_REQUIRED - autoScanFrames;
+          if (remaining <= 0 && !autoScanTimeout) {
+            cam.classList.remove('person-detected');
+            cam.classList.add('person-ready');
+            scanAutoHint.classList.remove('person-detected');
+            scanAutoHint.classList.add('person-ready');
+            scanHintText.textContent = 'Starting scan...';
+            autoScanFrames = 0;
+            // 500ms delay gives the analysis one full refresh cycle (200ms) to confirm
+            // the person is still in frame before committing to the scan.
+            autoScanTimeout = setTimeout(triggerAutoScan, 500);
+          } else if (remaining > 0) {
+            scanHintText.textContent = 'Hold still… (' + remaining + ')';
+          }
+        } else {
+          // Reset immediately — any single false frame cancels the countdown entirely.
+          if (autoScanTimeout) {
+            clearTimeout(autoScanTimeout);
+            autoScanTimeout = null;
+          }
+          autoScanFrames = 0;
+          cam.classList.remove('person-detected', 'person-ready');
+          scanAutoHint.classList.remove('person-detected', 'person-ready');
+          scanHintText.textContent = 'Stand in front of the camera';
+        }
       }
       return;
     }
@@ -617,19 +763,28 @@ function handleCameraMessage(msg) {
     hideFrozenLabel();
     chatConversationState = null;
     currentActiveFilters = {};
-    if (msg.annotated_frame) {
+    if (msg.body_annotated_frame) {
+      feed.style.display = 'block';
+      feed.src = 'data:image/jpeg;base64,' + msg.body_annotated_frame;
+    } else if (msg.annotated_frame) {
       feed.style.display = 'block';
       feed.src = 'data:image/jpeg;base64,' + msg.annotated_frame;
     }
     setSt('live', 'Done');
     setSteps('results');
     renderTags(msg.detections || []);
-    renderRecs(msg.recommendations || [], { autoOpen: !hasShownInitialRecommendationsModal });
+    renderBodyAnalysis(msg.body_analysis || null);
+    renderRecs(msg.recommendations || [], { autoOpen: false });
     currentDetectedCategories = msg.dominant || (msg.detections || []).map((d) => d.class_name);
     currentRecommendations = msg.recommendations || [];
     initializeSearchSession(currentDetectedCategories, currentRecommendations);
     actions.classList.add('show');
     plbl.textContent = 'Choose an action below';
+    // Trigger multi-agent round asynchronously (non-blocking)
+    currentDetectedClothingType = (msg.detections || [])[0]?.class_name || '';
+    currentDetectedBodyType = msg.body_analysis?.body_shape || '';
+    currentDetectedColor = msg.dominant_color?.name || (msg.detections || [])[0]?.color_name || '';
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -649,6 +804,12 @@ function startScan() {
   currentActiveFilters = {};
   hasShownInitialRecommendationsModal = false;
   recommendationDetailIndex = 0;
+  agentRoundGeneration++; // invalidate any in-flight agent round
+  currentDetectedBodyType = '';
+  currentDetectedClothingType = '';
+  currentDetectedColor = '';
+  const agentEl = document.getElementById('agent-status');
+  if (agentEl) agentEl.hidden = true;
   toggleRecommendationsModal(false);
   hideFrozenLabel();
   pendingStart = true;
@@ -657,7 +818,7 @@ function startScan() {
     return;
   }
   if (cameraReady && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ cmd: 'start' }));
+    ws.send(JSON.stringify({ cmd: 'start', user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
     pendingStart = false;
     beginCaptureUi();
   } else {
@@ -671,7 +832,7 @@ function sendCmd(cmd) {
     return;
   }
 
-  ws.send(JSON.stringify({ cmd }));
+  ws.send(JSON.stringify({ cmd, user_height_cm: userHeightCm, user_gender: document.getElementById('gender-select').value || '' }));
 
   if (cmd === 'retry') {
     frozen = false;
@@ -687,6 +848,7 @@ function sendCmd(cmd) {
     hideFrozenLabel();
     actions.classList.remove('show');
     tagsEl.innerHTML = '<span class="notag">Scanning...</span>';
+    bodySummaryEl.innerHTML = '<div class="ph">Analysing pose and measurements...</div>';
     recsEl.innerHTML = '<div class="ph">Scanning your outfit...</div>';
     recsScrollLeftBtn.disabled = true;
     recsScrollRightBtn.disabled = true;
@@ -713,13 +875,150 @@ function renderTags(dets) {
   });
 
   tagsEl.innerHTML = Object.values(seen).map((d) => {
-    const col = COLORS[d.class_name] || '#888';
+    // Prefer the detected color (d.color is expected as [R,G,B] or an RGB tuple). Fallback to category palette.
+    const detectedHex = d.color ? rgbToHex(d.color) : null;
+    const paletteHex = COLORS[d.class_name] || '#888';
+    const swatch = detectedHex || paletteHex;
     const lbl = d.class_name.replace(/_/g, ' ');
     const conf = Math.round(d.confidence * 100);
-    return '<div class="tag"><div class="tdot" style="background:' + col + '"></div><span>' + lbl + '</span><span class="tconf">' + conf + '%</span></div>';
+    const colorName = d.color_name ? String(d.color_name) : '';
+    const rgbText = d.color && Array.isArray(d.color) ? ('RGB(' + [d.color[0], d.color[1], d.color[2]].join(',') + ')') : '';
+    // Title includes friendly name and technical RGB for accessibility / hover
+    const titleParts = [];
+    if (colorName) titleParts.push(colorName);
+    if (rgbText) titleParts.push(rgbText);
+    const titleAttr = titleParts.length ? (' title="' + escAttr(titleParts.join(' — ')) + '"') : '';
+    return '<div class="tag"' + titleAttr + '>' +
+      '<div class="tdot" style="background:' + swatch + '"></div>' +
+      '<span class="tlabel">' + lbl + '<small class="color-name">' + (colorName ? esc(colorName) : '') + '</small></span>' +
+      '<span class="tconf">' + conf + '%</span>' +
+    '</div>';
   }).join('');
 
   animateStagger('#tags', '.tag');
+}
+
+function renderBodyAnalysis(analysis) {
+  if (!analysis || !analysis.landmarks_detected) {
+    bodySummaryEl.innerHTML = '<div class="ph">No reliable body landmarks detected. Try a full-body, front-facing scan with more space around you.</div>';
+    return;
+  }
+
+  const measurements = analysis.measurements || {};
+  const warnings = Array.isArray(analysis.warnings) ? analysis.warnings : [];
+  const poseValidation = analysis.pose_validation || {};
+  const silhouetteWidths = (analysis.silhouette && analysis.silhouette.widths) || {};
+  const bodyShape = String(analysis.body_shape || 'unknown').replace(/_/g, ' ');
+  const confidence = Math.round((Number(analysis.confidence || 0)) * 100);
+  const poseScore = Math.round((Number(poseValidation.score || 0)) * 100);
+  const landmarkCount = Number(analysis.landmarks_detected || 0);
+
+  const hasCm = measurements.shoulder_width_cm != null;
+  const metricRow = (label, raw, cm) => {
+    const display = (hasCm && cm != null && Number(cm) > 0)
+      ? Number(cm).toFixed(1) + ' cm'
+      : Number(raw || 0).toFixed(2);
+    return '<div class="body-metric"><span>' + label + '</span><strong>' + display + '</strong></div>';
+  };
+  const ratioRow = (label, value) =>
+    '<div class="body-metric"><span>' + label + '</span><strong>' + Number(value || 0).toFixed(2) + '</strong></div>';
+
+  bodySummaryEl.innerHTML =
+    '<div class="body-chip-row">' +
+      '<div class="body-chip"><span>Shape: </span><strong>' + esc(bodyShape) + '</strong></div>' +
+      '<div class="body-chip"><span>Confidence: </span><strong>' + confidence + '%</strong></div>' +
+      '<div class="body-chip"><span>Landmarks: </span><strong>' + landmarkCount + '</strong></div>' +
+      '<div class="body-chip"><span>Pose: </span><strong>' + poseScore + '%</strong></div>' +
+    '</div>' +
+    '<div class="body-metrics-grid">' +
+      metricRow('Shoulders: ', measurements.shoulder_width, measurements.shoulder_width_cm) +
+      metricRow('Hips: ', measurements.hip_width, measurements.hip_width_cm) +
+      metricRow('Waist: ', measurements.waist_width, measurements.waist_width_cm) +
+      ratioRow('S/H Ratio: ', measurements.shoulder_hip_ratio) +
+      ratioRow('Sil Chest: ', silhouetteWidths.chest_width) +
+      ratioRow('Sil Thigh: ', silhouetteWidths.thigh_width) +
+    '</div>' +
+    (hasCm && measurements.torso_length_cm ? '<div class="body-chip-row" style="margin-top:6px"><div class="body-chip"><span>Torso: </span><strong>' + Number(measurements.torso_length_cm).toFixed(1) + ' cm</strong></div></div>' : '') +
+    (warnings.length ? '<div class="body-warning">' + esc(warnings[0]) + '</div>' : '');
+}
+
+function formatAgentRec(item) {
+  const typeName = (item.type || '').replace(/_/g, ' ');
+  const brandName = item.brand || '';
+  const scores = item.agent_scores || {};
+  return {
+    id:       String(item.item_id || ''),
+    name:     [brandName, typeName].filter(Boolean).join(' ').trim() || `Item ${item.item_id}`,
+    category: item.type || '',
+    price:    item.price != null ? `EUR ${Number(item.price).toFixed(2)}` : 'N/A',
+    image_url: null,
+    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}`,
+    score:    Math.round((1 - (item.rank - 1) / 10) * 100) / 100,
+    brand:    item.brand || null,
+    metadata: Object.fromEntries(
+      ['color','style','pattern','material','fit','season','occasion','gender','age_group','size']
+        .filter(k => item[k] != null)
+        .map(k => [k, item[k]])
+    ),
+  };
+}
+
+async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor) {
+  const myGen = ++agentRoundGeneration;
+  const agentEl = document.getElementById('agent-status');
+
+  if (agentEl) {
+    agentEl.hidden = false;
+    agentEl.className = 'agent-status loading';
+    agentEl.textContent = '⏳ Agents computing…';
+  }
+
+  const genderEl = document.getElementById('gender-select');
+  const payload = {
+    detected_type:      detectedType      || '',
+    detected_body_type: detectedBodyType  || '',
+    detected_color:     detectedColor     || '',
+    user_gender:        genderEl ? (genderEl.value || '') : '',
+  };
+
+  try {
+    const resp = await fetch('/api/recommend', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+
+    if (myGen !== agentRoundGeneration) return; // stale round
+
+    if (resp.status === 503 || resp.status === 504) {
+      // MA not available — silently hide
+      if (agentEl) agentEl.hidden = true;
+      return;
+    }
+
+    if (!resp.ok) {
+      if (agentEl) { agentEl.className = 'agent-status error'; agentEl.textContent = '⚠ Agent round failed'; }
+      return;
+    }
+
+    const data = await resp.json();
+    if (myGen !== agentRoundGeneration) return; // stale round
+
+    const agentRecs = (data.recommendations || []).map(formatAgentRec);
+    if (agentRecs.length) {
+      renderRecs(agentRecs, { autoOpen: false });
+      currentRecommendations = agentRecs;
+    }
+
+    if (agentEl) {
+      agentEl.className = 'agent-status done';
+      agentEl.textContent = '✓ Agent recommendations';
+    }
+  } catch (err) {
+    if (myGen !== agentRoundGeneration) return;
+    console.warn('Agent round error:', err);
+    if (agentEl) { agentEl.className = 'agent-status error'; agentEl.textContent = '⚠ Agent unavailable'; }
+  }
 }
 
 function renderRecs(recs, options = {}) {
@@ -857,6 +1156,30 @@ function openRecommendationDetail(index, openModal = false) {
     '<h3>' + esc(rec.name) + '</h3>' +
     '<div class="rec-detail-category">' + esc((rec.category || 'item').replace(/_/g, ' ')) + '</div>' +
     '<div class="rec-detail-price">' + esc(rec.price) + '</div>' +
+    // Color palette block (if available)
+    (function(){
+      let hex = '';
+      let cname = '';
+      let rgbText = '';
+      if (rec && rec.color) {
+        try { hex = rgbToHex(rec.color); rgbText = 'RGB(' + [rec.color[0],rec.color[1],rec.color[2]].join(',') + ')'; } catch(e){}
+      }
+      if (!hex && rec && rec.metadata && rec.metadata.color) {
+        const nm = String(rec.metadata.color).toLowerCase();
+        hex = NAME_TO_HEX[nm] || '';
+      }
+      if (rec && rec.color_name) cname = String(rec.color_name);
+      if (!cname && rec && rec.metadata && rec.metadata.color) cname = String(rec.metadata.color);
+      if (hex || cname) {
+        return '<div class="rec-color-palette"' + (cname?(' title="'+escAttr(cname + (rgbText?(' — '+rgbText):''))+'"'):'') + '>' +
+          (hex?('<div class="rec-color-swatch" style="background:'+hex+'" aria-hidden="true"></div>'):'') +
+          '<div class="rec-color-meta">' +
+            (cname?('<div class="rec-color-name">'+esc(cname)+'</div>'):'') +
+            (rgbText?('<div class="rec-color-rgb">'+esc(rgbText)+'</div>'):'') +
+          '</div></div>';
+      }
+      return '';
+    })() +
     '</div></div>' +
     (overviewRows ? '<div class="rec-detail-section"><div class="rec-detail-label">Store details</div><div class="rec-detail-grid">' + overviewRows + '</div></div>' : '') +
     '<div class="rec-detail-section"><div class="rec-detail-label">Why it fits</div><p>' + esc(rec.reason || 'Recommended from your search context.') + '</p></div>' +
@@ -1133,18 +1456,23 @@ function setSt(state, text) {
 }
 
 function resetIdle() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   frozen = false;
   pendingStart = false;
+  autoScanFrames = 0;
   hideFrozenLabel();
   feed.style.display = 'block';
   idle.classList.add('hidden');
-  cam.classList.remove('active');
+  cam.classList.remove('active', 'person-detected', 'person-ready');
+  personGuide.hidden = false;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
   btnStart.disabled = false;
   actions.classList.remove('show');
   s1.className = 'step';
   s2.className = 'step';
   s3.className = 'step';
-  plbl.textContent = 'Press start to begin';
+  plbl.textContent = 'Stand in frame to begin';
   setSt('idle', 'Ready');
 }
 
@@ -1202,12 +1530,26 @@ function buildRecommendationThumb(rec, baseClass) {
   const imageUrl = toRenderableImageUrl(rawImageUrl);
   const classes = imageUrl ? (baseClass + ' thumb-media has-image') : (baseClass + ' thumb-media');
 
+  // Determine swatch: prefer rec.color (RGB array), then metadata.color (name), then empty
+  let swatchHex = '';
+  if (rec && rec.color) {
+    try {
+      swatchHex = rgbToHex(rec.color);
+    } catch (e) { swatchHex = ''; }
+  } else if (rec && rec.metadata && rec.metadata.color) {
+    const nm = String(rec.metadata.color).toLowerCase();
+    swatchHex = NAME_TO_HEX[nm] || '';
+  }
+
+  const swatchHtml = swatchHex ? ('<div class="thumb-swatch" aria-hidden="true" style="background:' + swatchHex + '"></div>') : '';
+
   if (!imageUrl) {
-    return '<div class="' + classes + '"><div class="thumb-fallback">' + icon + '</div></div>';
+    return '<div class="' + classes + '">' + swatchHtml + '<div class="thumb-fallback">' + icon + '</div></div>';
   }
 
   return (
     '<div class="' + classes + '">' +
+    swatchHtml +
     '<img class="thumb-img" src="' + escAttr(imageUrl) + '" alt="' + escAttr(rec.name || 'Clothing item') + '" loading="lazy" onerror="this.parentNode.classList.remove(\'has-image\'); this.remove();">' +
     '<div class="thumb-fallback">' + icon + '</div>' +
     '</div>'
@@ -1663,7 +2005,13 @@ function returnToPersonaSelection() {
 }
 
 function resetPersonaState() {
+  if (autoScanTimeout) { clearTimeout(autoScanTimeout); autoScanTimeout = null; }
   disconnectCamera();
+  autoScanFrames = 0;
+  cam.classList.remove('person-detected', 'person-ready');
+  personGuide.hidden = true;
+  scanAutoHint.classList.remove('person-detected', 'person-ready');
+  scanHintText.textContent = 'Stand in front of the camera';
   currentSessionId = null;
   currentDetectedCategories = [];
   currentRecommendations = [];
