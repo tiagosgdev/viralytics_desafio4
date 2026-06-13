@@ -43,6 +43,7 @@
       <button class="persona-reset-btn" id="persona-reset-btn" type="button" onclick="returnToPersonaSelection()" hidden>
         <i class="fas fa-arrows-rotate"></i> Switch Stylist
       </button>
+      <button class="login-btn" id="tts-toggle-btn" type="button" onclick="toggleTts()" title="Voice on" aria-label="Toggle voice"><i class="fas fa-volume-up"></i></button>
       <div class="view-toggle">
         <button class="vtab active" id="tab-cam" onclick="switchView('camera')"><i class="fas fa-camera"></i> Camera</button>
         <button class="vtab" id="tab-chat" onclick="switchView('chat')"><i class="fas fa-message"></i> Chat</button>
@@ -498,6 +499,8 @@ const NAME_TO_HEX = {
 
 let ws = null;
 let selectedPersona = null;
+let ttsEnabled = window.localStorage.getItem('fashionSenseTts') !== 'off';
+let currentTtsAudio = null;
 let userHeightCm = null;
 let autoScanFrames = 0;
 let autoScanTimeout = null;
@@ -1595,6 +1598,7 @@ function requestPersonaIntro() {
     : 'Darling, I am Cruella, your fashion accomplice. Tell me what power look you want.';
 
   addChatBubble(reply, 'bot');
+  speakText(reply);
   chatHistory.push({ role: 'assistant', content: reply });
   hasChatIntroLoaded = true;
 }
@@ -1609,6 +1613,67 @@ function addChatBubble(text, sender) {
   chatMsgs.appendChild(bubble);
   chatMsgs.scrollTop = chatMsgs.scrollHeight;
   return bubble;
+}
+
+// ── Text-to-speech (spoken personas) ─────────────────────────────────────────
+// Sends the persona's reply to the backend /api/tts and plays the returned
+// audio. Best-effort: any failure is swallowed so chat never breaks.
+function speakText(text) {
+  if (!ttsEnabled || !text || !selectedPersona) return;
+  stopSpeaking();
+  fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text, persona: selectedPersona })
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error('TTS HTTP ' + response.status);
+      return response.blob();
+    })
+    .then((blob) => {
+      if (!ttsEnabled) return;
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentTtsAudio = audio;
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        if (currentTtsAudio === audio) currentTtsAudio = null;
+      };
+      audio.onended = cleanup;
+      audio.onerror = cleanup;
+      audio.play().catch(() => {});
+    })
+    .catch(() => {});
+}
+
+function stopSpeaking() {
+  if (currentTtsAudio) {
+    try { currentTtsAudio.pause(); } catch (_) {}
+    currentTtsAudio = null;
+  }
+}
+
+function updateTtsToggleUI() {
+  const btn = document.getElementById('tts-toggle-btn');
+  if (!btn) return;
+  btn.innerHTML = ttsEnabled
+    ? '<i class="fas fa-volume-up"></i>'
+    : '<i class="fas fa-volume-mute"></i>';
+  btn.title = ttsEnabled ? 'Voice on' : 'Voice off';
+  btn.classList.toggle('muted', !ttsEnabled);
+}
+
+function toggleTts() {
+  ttsEnabled = !ttsEnabled;
+  window.localStorage.setItem('fashionSenseTts', ttsEnabled ? 'on' : 'off');
+  if (!ttsEnabled) stopSpeaking();
+  updateTtsToggleUI();
+}
+
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', updateTtsToggleUI);
+} else {
+  updateTtsToggleUI();
 }
 
 function addTypingIndicator() {
@@ -1710,6 +1775,7 @@ function sendChat() {
         currentActiveFilters = data.state.filters;
       }
       addChatBubble(reply, 'bot');
+      speakText(reply);
       chatHistory.push({ role: 'assistant', content: reply });
       if (Array.isArray(data.results) && data.results.length) renderRecs(data.results);
     })
@@ -1909,6 +1975,7 @@ async function toggleVoice() {
                   currentActiveFilters = chatData.state.filters;
                 }
                 addChatBubble(reply, 'bot');
+                speakText(reply);
                 chatHistory.push({ role: 'assistant', content: reply });
                 if (Array.isArray(chatData.results) && chatData.results.length) renderRecs(chatData.results);
               })

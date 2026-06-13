@@ -13,6 +13,7 @@ FashionSense is a fashion outfit detection and recommendation system. It detects
 - Python 3.10+
 - **Docker Desktop** (required for the XMPP broker used by the multi-agent system)
 - `ffmpeg` installed and on PATH (voice transcription)
+- `espeak-ng` installed (voice output / text-to-speech) — Windows: `winget install eSpeak-NG.eSpeak-NG`
 - Ollama running locally (Cruella's LLM backend)
 - CUDA GPU recommended for training; CPU and Apple MPS also supported
 
@@ -296,6 +297,7 @@ viralytics_desafio4/
 - After installing dependencies, run `python -m spacy download en_core_web_sm` for the semantic search to work.
 - Cruella requires Ollama with a compatible model (e.g. `qwen2.5:7b-instruct-q3_K_M`).
 - Voice transcription requires `ffmpeg` on PATH.
+- Voice output (text-to-speech) uses Kokoro on CPU and needs the `espeak-ng` binary on PATH (Windows: `winget install eSpeak-NG.eSpeak-NG`). It loads lazily at startup; without it the app still runs and replies simply aren't spoken. Each persona's voice is configured in `src/api/personas.py`.
 - See `docs/organized/` for full research documentation.
 
 # Cruzr Robotics Bridge

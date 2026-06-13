@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Base64
@@ -33,6 +34,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 
 // V2.8.0 UBTech Robot Imports
 import com.ubtrobot.Robot
@@ -51,6 +53,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val httpClient = OkHttpClient()
+    private var mediaPlayer: MediaPlayer? = null
 
     private var currentSessionId: String? = null
     private val detectedCategories = mutableListOf<String>()
@@ -136,6 +139,12 @@ class MainActivity : AppCompatActivity() {
         binding.tabRefineButton.setOnClickListener {
             switchTab("refine")
         }
+    }
+
+    override fun onDestroy() {
+        mediaPlayer?.release()
+        mediaPlayer = null
+        super.onDestroy()
     }
 
     private fun launchCamera() {
@@ -241,13 +250,17 @@ class MainActivity : AppCompatActivity() {
                     currentIncludeFilters = extractIncludeFilters(json)
                     updateRecommendations(parseRecommendations(json.optJSONArray("results")))
 
+                    val reply = json.optString("reply", "No reply returned.")
+                    val persona = json.optString("persona", "cruella")
+
                     runOnUiThread {
                         switchTab("refine")
                         val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
                         updateSessionLabel(mode)
-                        binding.chatReplyText.text = json.optString("reply", "No reply returned.")
+                        binding.chatReplyText.text = reply
                         setStatus("Refinement complete.")
                         binding.chatInput.text?.clear()
+                        speak(reply, persona)
                     }
                 }
             } catch (exc: Exception) {
@@ -257,6 +270,57 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun speak(text: String, persona: String) {
+        if (text.isBlank()) return
+        val baseUrl = normalizedBaseUrl() ?: return
+        val payload = JSONObject().apply {
+            put("text", text)
+            put("persona", persona)
+        }
+        val request = Request.Builder()
+            .url("$baseUrl/api/tts")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        Thread {
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use
+                    val bytes = response.body?.bytes() ?: return@use
+                    val tmp = File.createTempFile("tts_", ".wav", cacheDir)
+                    tmp.writeBytes(bytes)
+                    runOnUiThread { playAudio(tmp) }
+                }
+            } catch (_: Exception) {
+                // Voice output is best-effort; never disrupt the chat flow.
+            }
+        }.start()
+    }
+
+    private fun playAudio(file: File) {
+        try {
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnCompletionListener { player ->
+                    player.release()
+                    if (mediaPlayer === player) mediaPlayer = null
+                    file.delete()
+                }
+                setOnErrorListener { player, _, _ ->
+                    player.release()
+                    if (mediaPlayer === player) mediaPlayer = null
+                    file.delete()
+                    true
+                }
+                prepare()
+                start()
+            }
+        } catch (_: Exception) {
+            file.delete()
+        }
     }
 
     private fun updateDetections(detections: JSONArray?) {

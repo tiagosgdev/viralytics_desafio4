@@ -96,6 +96,11 @@ class ChatResponse(BaseModel):
     warning: Optional[str] = None
 
 
+class TtsRequest(BaseModel):
+    text: str
+    persona: str = "cruella"
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str

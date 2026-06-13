@@ -48,6 +48,7 @@ from src.api.schemas import (
     RegisterRequest,
     SessionResponse,
     SessionStartRequest,
+    TtsRequest,
 )
 from src.api.auth import create_access_token, get_optional_user_id
 from src.api.personas import PERSONA_CONFIGS, normalize_persona
@@ -356,6 +357,25 @@ async def startup():
             print(f"⚠️  Whisper not available: {e}")
 
     asyncio.create_task(_load_whisper())
+
+    # ── Text-to-speech (Kokoro) ───────────────────────────────────────────
+    async def _load_tts():
+        try:
+            from src.api import tts_service
+
+            loop = asyncio.get_event_loop()
+            print("🔊  Loading Kokoro TTS model (may download on first run)...")
+            await asyncio.wait_for(
+                loop.run_in_executor(None, tts_service.preload),
+                timeout=180,
+            )
+            print("🔊  Kokoro text-to-speech loaded")
+        except asyncio.TimeoutError:
+            print("⚠️  TTS loading timed out — voice output disabled")
+        except Exception as e:
+            print(f"⚠️  TTS not available (is espeak-ng installed?): {e}")
+
+    asyncio.create_task(_load_tts())
 
     # ── Multi-agent recommendation system ─────────────────────────────────
     async def _start_rec_system():
@@ -986,6 +1006,32 @@ async def transcribe_audio(audio: UploadFile = File(...)):
             os.unlink(wav_path)
 
     return {"text": text}
+
+
+# ── Voice synthesis (text-to-speech) ─────────────────────────────────────────────
+
+@app.post("/api/tts")
+async def synthesize_speech(payload: TtsRequest):
+    """Render the persona's reply as speech. Returns a WAV (24 kHz) audio body."""
+    from src.api import tts_service
+
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    if not tts_service.is_ready():
+        detail = tts_service.last_error() or "TTS model not loaded"
+        raise HTTPException(status_code=503, detail=detail)
+
+    try:
+        audio = await run_in_threadpool(tts_service.synthesize, text, payload.persona)
+    except Exception as exc:
+        print(f"🔊  TTS synthesis failed: {exc}")
+        raise HTTPException(status_code=500, detail="Speech synthesis failed")
+
+    if not audio:
+        raise HTTPException(status_code=500, detail="Speech synthesis produced no audio")
+
+    return Response(content=audio, media_type="audio/wav")
 
 
 # ── Chat endpoint ────────────────────────────────────────────────────────────────
