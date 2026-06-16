@@ -72,6 +72,8 @@ Open `http://127.0.0.1:8000` in a browser.
 | `-SkipVectorCheck` | Skip vector DB check |
 | `-SkipXmpp` | Skip XMPP Docker container (disables multi-agent recommendations) |
 | `-AutoPullModel` | Automatically pull required Ollama model if missing |
+| `-ModelWeights <folder>` | YOLO weights folder under `models/weights/` (e.g. `yolov8m_balanced_1002`). Without it, falls back to base COCO `yolov8n.pt`. |
+| `-EdnaWeights <folder>` | FashionNet/Edna weights folder under `models/weights/` (e.g. `edna_1.5m`). Without it, Edna reuses Cruella's YOLO backend. |
 
 **Android app:**
 

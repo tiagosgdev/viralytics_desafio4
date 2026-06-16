@@ -1616,37 +1616,87 @@ function addChatBubble(text, sender) {
 }
 
 // ── Text-to-speech (spoken personas) ─────────────────────────────────────────
-// Sends the persona's reply to the backend /api/tts and plays the returned
-// audio. Best-effort: any failure is swallowed so chat never breaks.
-function speakText(text) {
-  if (!ttsEnabled || !text || !selectedPersona) return;
-  stopSpeaking();
-  fetch('/api/tts', {
+// Streams the persona's reply sentence-by-sentence: the first sentence plays as
+// soon as it is synthesised while later ones are fetched one ahead, so the voice
+// starts in ~1-2s regardless of reply length. Best-effort: failures are
+// swallowed so chat never breaks.
+let ttsSession = 0;   // bumped on every new utterance / stop to invalidate old runs
+let ttsAbort = null;  // AbortController for in-flight /api/tts fetches
+
+function splitSentences(text) {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const raw = clean.match(/[^.!?…]+[.!?…]+["')\]]*|\S.*$/g) || [clean];
+  const out = [];
+  raw.forEach((piece) => {
+    const s = piece.trim();
+    if (!s) return;
+    // Merge very short fragments into the previous chunk to avoid choppy clips.
+    if (out.length && (s.length < 12 || out[out.length - 1].length < 12)) {
+      out[out.length - 1] += ' ' + s;
+    } else {
+      out.push(s);
+    }
+  });
+  return out.length ? out : [clean];
+}
+
+function fetchSentenceAudio(sentence, signal) {
+  return fetch('/api/tts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: text, persona: selectedPersona })
+    body: JSON.stringify({ text: sentence, persona: selectedPersona }),
+    signal: signal
   })
     .then((response) => {
       if (!response.ok) throw new Error('TTS HTTP ' + response.status);
       return response.blob();
     })
-    .then((blob) => {
-      if (!ttsEnabled) return;
-      const url = URL.createObjectURL(blob);
+    .then((blob) => URL.createObjectURL(blob));
+}
+
+function speakText(text) {
+  if (!ttsEnabled || !text || !selectedPersona) return;
+  stopSpeaking();
+  const session = ttsSession;
+  const sentences = splitSentences(text);
+  if (!sentences.length) return;
+
+  ttsAbort = new AbortController();
+  const signal = ttsAbort.signal;
+  const fetches = new Array(sentences.length).fill(null);
+
+  function prefetch(i) {
+    if (i < 0 || i >= sentences.length || fetches[i]) return;
+    fetches[i] = fetchSentenceAudio(sentences[i], signal).catch(() => null);
+  }
+
+  function playFrom(i) {
+    if (session !== ttsSession) return;
+    if (i >= sentences.length) { ttsAbort = null; return; }
+    prefetch(i);
+    prefetch(i + 1);   // keep one sentence ahead so playback stays gapless
+    fetches[i].then((url) => {
+      if (session !== ttsSession) { if (url) URL.revokeObjectURL(url); return; }
+      if (!url) { playFrom(i + 1); return; }   // skip a failed sentence
       const audio = new Audio(url);
       currentTtsAudio = audio;
-      const cleanup = () => {
+      const advance = () => {
         URL.revokeObjectURL(url);
-        if (currentTtsAudio === audio) currentTtsAudio = null;
+        if (session === ttsSession) playFrom(i + 1);
       };
-      audio.onended = cleanup;
-      audio.onerror = cleanup;
+      audio.onended = advance;
+      audio.onerror = advance;
       audio.play().catch(() => {});
-    })
-    .catch(() => {});
+    });
+  }
+
+  playFrom(0);
 }
 
 function stopSpeaking() {
+  ttsSession += 1;
+  if (ttsAbort) { try { ttsAbort.abort(); } catch (_) {} ttsAbort = null; }
   if (currentTtsAudio) {
     try { currentTtsAudio.pause(); } catch (_) {}
     currentTtsAudio = null;

@@ -115,7 +115,7 @@ def _load_model():
     model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     # Warm-up encode so first real query is fast
     model.encode(["warm-up"], show_progress_bar=False)
-    dim = model.get_embedding_dimension()
+    dim = model.get_sentence_embedding_dimension()
     print(f"  Model ready  —  dimension: {dim}")
     return model
 

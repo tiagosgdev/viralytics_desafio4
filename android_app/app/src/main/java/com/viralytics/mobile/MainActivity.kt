@@ -54,6 +54,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val httpClient = OkHttpClient()
     private var mediaPlayer: MediaPlayer? = null
+    private var ttsSession = 0
+    private val ttsQueue = java.util.concurrent.ConcurrentLinkedQueue<File>()
 
     private var currentSessionId: String? = null
     private val detectedCategories = mutableListOf<String>()
@@ -139,12 +141,6 @@ class MainActivity : AppCompatActivity() {
         binding.tabRefineButton.setOnClickListener {
             switchTab("refine")
         }
-    }
-
-    override fun onDestroy() {
-        mediaPlayer?.release()
-        mediaPlayer = null
-        super.onDestroy()
     }
 
     private fun launchCamera() {
@@ -275,44 +271,68 @@ class MainActivity : AppCompatActivity() {
     private fun speak(text: String, persona: String) {
         if (text.isBlank()) return
         val baseUrl = normalizedBaseUrl() ?: return
-        val payload = JSONObject().apply {
-            put("text", text)
-            put("persona", persona)
-        }
-        val request = Request.Builder()
-            .url("$baseUrl/api/tts")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+        stopSpeaking()
+        val session = ++ttsSession
+        val sentences = splitSentences(text)
+        if (sentences.isEmpty()) return
 
+        // Fetch sentences in order on a background thread (synthesis is faster
+        // than playback, so the queue stays ahead) and play them back gaplessly.
         Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use
-                    val bytes = response.body?.bytes() ?: return@use
-                    val tmp = File.createTempFile("tts_", ".wav", cacheDir)
-                    tmp.writeBytes(bytes)
-                    runOnUiThread { playAudio(tmp) }
+            for (sentence in sentences) {
+                if (session != ttsSession) break
+                try {
+                    val payload = JSONObject().apply {
+                        put("text", sentence)
+                        put("persona", persona)
+                    }
+                    val request = Request.Builder()
+                        .url("$baseUrl/api/tts")
+                        .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                        .build()
+                    httpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) return@use
+                        val bytes = response.body?.bytes() ?: return@use
+                        if (session != ttsSession) return@use
+                        val tmp = File.createTempFile("tts_", ".wav", cacheDir)
+                        tmp.writeBytes(bytes)
+                        ttsQueue.add(tmp)
+                        runOnUiThread { if (session == ttsSession) playNextIfIdle(session) }
+                    }
+                } catch (_: Exception) {
+                    // Skip this sentence; keep going with the rest.
                 }
-            } catch (_: Exception) {
-                // Voice output is best-effort; never disrupt the chat flow.
             }
         }.start()
     }
 
-    private fun playAudio(file: File) {
+    private fun playNextIfIdle(session: Int) {
+        if (session != ttsSession) return
+        if (mediaPlayer != null) return            // a clip is playing; its completion pulls the next
+        val file = ttsQueue.poll() ?: return
+        playAudio(file, session)
+    }
+
+    private fun playAudio(file: File, session: Int) {
+        if (session != ttsSession) { file.delete(); return }
         try {
-            mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 setOnCompletionListener { player ->
                     player.release()
                     if (mediaPlayer === player) mediaPlayer = null
                     file.delete()
+                    if (session == ttsSession) {
+                        ttsQueue.poll()?.let { playAudio(it, session) }
+                    }
                 }
                 setOnErrorListener { player, _, _ ->
                     player.release()
                     if (mediaPlayer === player) mediaPlayer = null
                     file.delete()
+                    if (session == ttsSession) {
+                        ttsQueue.poll()?.let { playAudio(it, session) }
+                    }
                     true
                 }
                 prepare()
@@ -320,7 +340,41 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {
             file.delete()
+            mediaPlayer = null
         }
+    }
+
+    private fun stopSpeaking() {
+        ttsSession++
+        mediaPlayer?.let {
+            try { it.stop() } catch (_: Exception) {}
+            it.release()
+        }
+        mediaPlayer = null
+        while (true) {
+            val f = ttsQueue.poll() ?: break
+            f.delete()
+        }
+    }
+
+    private fun splitSentences(text: String): List<String> {
+        val clean = text.replace(Regex("\\s+"), " ").trim()
+        if (clean.isEmpty()) return emptyList()
+        val matches = Regex("[^.!?…]+[.!?…]+[\"')\\]]*|\\S.*$")
+            .findAll(clean)
+            .map { it.value.trim() }
+            .filter { it.isNotEmpty() }
+            .toMutableList()
+        if (matches.isEmpty()) return listOf(clean)
+        val out = mutableListOf<String>()
+        for (s in matches) {
+            if (out.isNotEmpty() && (s.length < 12 || out.last().length < 12)) {
+                out[out.size - 1] = out.last() + " " + s
+            } else {
+                out.add(s)
+            }
+        }
+        return out
     }
 
     private fun updateDetections(detections: JSONArray?) {
@@ -946,6 +1000,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopSpeaking()
         if (::textToSpeech.isInitialized) {
             textToSpeech.stop()
             textToSpeech.shutdown()

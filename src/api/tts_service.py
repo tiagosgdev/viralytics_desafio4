@@ -120,8 +120,12 @@ def preload() -> None:
         lang_codes = {cfg.voice_id[0] for cfg in PERSONA_CONFIGS.values()}
         for lang_code in sorted(lang_codes):
             _get_pipeline(lang_code)
-        # Warm-up synth (also forces the model weights to download now).
-        synthesize("Ready.", "cruella")
+        # Warm-up synth for EVERY persona — forces the model weights to download
+        # and caches each voice + its G2P backend, so the first real request of
+        # each persona is fast. (The first-ever use of a new accent/voice can
+        # otherwise take ~15-20s while its pronunciation data is prepared.)
+        for persona_key in PERSONA_CONFIGS:
+            synthesize("Ready.", persona_key)
         _ready = True
         _error = None
     except Exception as exc:
