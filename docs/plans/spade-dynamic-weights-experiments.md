@@ -156,19 +156,32 @@ single round.
    hidden goal. Comparison tables + plots per experiment (follow `stock_agent/sanity_plots.py`
    precedent) → `multi_agent/experiments/results/<name>/`.
 
-## Part F — Per-agent memory (course requirement)
+## Part F — Per-agent memory (course requirement, feedback-enabled)
 
-Each scorer agent gets its **own** memory, duplicating the round info it participated in —
-even though it overlaps the shared `RoundHistory`. Professor wants explicit agent autonomy.
+Each scorer agent gets its **own** memory store, recording each round from its own
+perspective. Professor wants explicit agent autonomy; we make it meaningful by closing the
+feedback loop (which also serves as the RL feedback channel, `rl_proposal.md` §3.2).
 
-- Generalise the SQLite-persistence logic in `history.py` into a reusable
-  `multi_agent/memory.py` `AgentMemory(agent_id)`, persisting to its own file
-  `multi_agent/memory/<agent>.db` (or one DB, per-agent table).
-- Each agent instantiates its own `AgentMemory` in `setup()` and writes a record per round
-  from *its* perspective (context it saw, its top scores, the weight it received, and the
-  episode's 1–5 review once available).
-- Keep the orchestrator's shared `RoundHistory` as the global/round-level view. Document
-  the duplication as intentional.
+1. **`multi_agent/memory.py` `AgentMemory(agent_id)`** — generalise the SQLite-persistence
+   logic from `history.py`. Each agent owns its own file `multi_agent/memory/<agent>.db`.
+   Per-round record (from the agent's own view):
+   `conv_id/episode_id, context, my_top_scores, my_weight, my_picks_in_final_top10,
+   episode_review(1–5)`.
+2. **Feedback broadcast (new message).** Add a feedback performative to
+   `multi_agent/messages.py` (e.g. `make_feedback`). At round end the orchestrator sends
+   each scorer agent: its assigned `weight`, which of its picks landed in the final top-10,
+   and (at episode end, when known) the 1–5 review. The orchestrator already holds all of
+   this in `_build_result` (`orchestrator.py:331`).
+3. **Each agent records autonomously.** Scorer agents add a small feedback behaviour
+   (template on the feedback performative) that writes the round to *its own* `AgentMemory`.
+   On `setup()`, an agent loads its own memory for the comeback summary — replacing the
+   current shared `history.agent_context_summary(...)` call.
+4. **Keep the shared `RoundHistory`** as the global/round-level log (queue staleness, etc.).
+   The per-agent duplication is intentional and documented.
+
+> This makes each agent's memory a genuine log of *its own* decisions and how they fared —
+> and emits exactly the `(context, action, reward)` linkage the RL bandit will later consume,
+> per agent, matching the Borda credit-assignment design in `rl_proposal.md` §2.3.
 
 ---
 
@@ -176,7 +189,8 @@ even though it overlaps the shared `RoundHistory`. Professor wants explicit agen
 
 - Modify: `multi_agent/aggregator.py`, `multi_agent/config.py`,
   `multi_agent/agents/{orchestrator,weight_agent,colour_agent,body_agent,clothing_agent,stock_agent}.py`,
-  `multi_agent/run.py`, `LNIAGIA/query_parsing/feature_weighting.py` (add stock emphasis).
+  `multi_agent/run.py`, `multi_agent/messages.py` (feedback performative),
+  `LNIAGIA/query_parsing/feature_weighting.py` (add stock emphasis).
 - New: `multi_agent/retrieval.py`, `multi_agent/strategies/` (registry + 4 modules),
   `multi_agent/memory.py`, `multi_agent/experiments/`
   (customers.json, shopper.py, spec.py, run_experiment.py, store.py, metrics.py, report.py).
@@ -209,8 +223,9 @@ even though it overlaps the shared `RoundHistory`. Professor wants explicit agen
    `borda_aggregate`. `AgentMemory` round-trips per-agent records. Run `pytest tests/`.
 2. **Registry:** every configured strategy resolves and returns scores in [0,1].
 3. **Live round:** `docker compose up -d xmpp` then `python -m multi_agent.run`; confirm a
-   top-10 resolves, `agent_weights` includes a conversation-derived stock weight, and each
-   agent wrote to its own memory DB.
+   top-10 resolves, `agent_weights` includes a conversation-derived stock weight, the
+   orchestrator broadcasts feedback, and each agent wrote a record (with its weight +
+   picks-in-top-10) to its **own** `multi_agent/memory/<agent>.db`.
 4. **Harness episode:** run one customer × OFAT sweep; confirm `results.db` is populated
    (experiments/episodes/turns/turn_items), the `rl_dataset` JSONL exports
    `(context, action, chat history, 1–5 reward)`, a report renders, and re-running with the
