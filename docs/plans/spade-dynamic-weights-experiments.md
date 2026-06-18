@@ -25,12 +25,12 @@ The SPADE multi-agent recommender (`multi_agent/`) works but is rigid:
    already exists (`analyze_intent`, consumed by `weight_agent`); just extend it with a
    stock dimension and have SPADE use all four (Part A).
 2. Make each agent's scoring a swappable **"personality"** with configurable params (Part B).
-3. Give **each agent its own memory** (Part F) — duplicated per-agent stores; a course
-   requirement (agent autonomy), even though it overlaps the shared history.
+3. Give **each agent its own (write-only) memory** (Part F) — duplicated per-agent stores;
+   a course requirement (agent autonomy), even though nothing reads them for decisions.
 4. Build an **episodic, factorial experiment harness** (Part E): a fixed bank of LLM-played
    customers × combinations of agent personalities, each run as a full multi-turn
-   conversation ending in a simulated **1–5 review** — which doubles as the reward signal
-   the RL branch needs (`docs/.../07_reinforcement_learning/rl_proposal.md` §3.1).
+   conversation ending in a simulated **1–5 review** — the harness's primary comparison
+   metric. (RL, a separate voting agent built by a colleague, is out of scope here.)
 
 ---
 
@@ -147,41 +147,35 @@ single round.
    - `episodes(episode_id, experiment_id, customer_id, combo_json, seed, n_turns, final_review, abandoned)`
    - `turns(turn_id, episode_id, idx, shopper_msg, intent_json, weights_json)`
    - `turn_items(turn_id, rank, item_id, size, final_score, agent_scores_json, item_attrs_json)`
-   - **`rl_dataset` export (JSONL)**: one row per episode =
-     `(context, chosen personalities/action, full chat history, 1–5 reward)` — exactly the
-     contextual-bandit training tuple the RL branch needs. The experiment output *is* the
-     RL dataset.
+   - **episode export (JSONL)**: one row per episode =
+     `(context, chosen personalities, full chat history, 1–5 review)` — the comparison
+     record. (Naturally reusable later by the RL work, but that's not a deliverable here.)
 6. **`metrics.py` + `report.py`** — primary metric = **mean 1–5 review** per personality
    combo; secondary = turns-to-satisfaction, abandonment rate, convergence toward the
    hidden goal. Comparison tables + plots per experiment (follow `stock_agent/sanity_plots.py`
    precedent) → `multi_agent/experiments/results/<name>/`.
 
-## Part F — Per-agent memory (course requirement, feedback-enabled)
+## Part F — Per-agent memory (course requirement, write-only)
 
-Each scorer agent gets its **own** memory store, recording each round from its own
-perspective. Professor wants explicit agent autonomy; we make it meaningful by closing the
-feedback loop (which also serves as the RL feedback channel, `rl_proposal.md` §3.2).
+Each scorer agent gets its **own** memory store. The professor wants explicit agent
+autonomy, but **nothing in this design reads these stores to make a decision**: the scorers
+are deterministic, and the planned RL agent (a *separate* voting agent built by a colleague)
+reads the **shared** history, not per-agent memories. So this is a deliberately minimal,
+write-only log — included to satisfy the requirement, not because anything consumes it.
 
 1. **`multi_agent/memory.py` `AgentMemory(agent_id)`** — generalise the SQLite-persistence
    logic from `history.py`. Each agent owns its own file `multi_agent/memory/<agent>.db`.
-   Per-round record (from the agent's own view):
-   `conv_id/episode_id, context, my_top_scores, my_weight, my_picks_in_final_top10,
-   episode_review(1–5)`.
-2. **Feedback broadcast (new message).** Add a feedback performative to
-   `multi_agent/messages.py` (e.g. `make_feedback`). At round end the orchestrator sends
-   each scorer agent: its assigned `weight`, which of its picks landed in the final top-10,
-   and (at episode end, when known) the 1–5 review. The orchestrator already holds all of
-   this in `_build_result` (`orchestrator.py:331`).
-3. **Each agent records autonomously.** Scorer agents add a small feedback behaviour
-   (template on the feedback performative) that writes the round to *its own* `AgentMemory`.
-   On `setup()`, an agent loads its own memory for the comeback summary — replacing the
-   current shared `history.agent_context_summary(...)` call.
-4. **Keep the shared `RoundHistory`** as the global/round-level log (queue staleness, etc.).
-   The per-agent duplication is intentional and documented.
+   Per-round record, fully self-contained at PROPOSE time (no orchestrator feedback needed):
+   `conv_id/episode_id, timestamp, context_seen, my_top_scores`.
+2. **Each agent writes its own record** right after sending its PROPOSE. On `setup()` it may
+   load its own store for the comeback log (replacing the shared
+   `history.agent_context_summary(...)` call) — logging only, never decisions.
+3. **Keep the shared `RoundHistory`** as the global/round-level log. The per-agent
+   duplication is intentional and documented as a course requirement.
 
-> This makes each agent's memory a genuine log of *its own* decisions and how they fared —
-> and emits exactly the `(context, action, reward)` linkage the RL bandit will later consume,
-> per agent, matching the Borda credit-assignment design in `rl_proposal.md` §2.3.
+> No feedback broadcast and no reward in these stores. The 1–5 review lives in the
+> experiment store (Part E); anything RL-related (a new voting agent reading the shared
+> history) is **out of scope here** — the colleague owns it.
 
 ---
 
@@ -189,8 +183,7 @@ feedback loop (which also serves as the RL feedback channel, `rl_proposal.md` §
 
 - Modify: `multi_agent/aggregator.py`, `multi_agent/config.py`,
   `multi_agent/agents/{orchestrator,weight_agent,colour_agent,body_agent,clothing_agent,stock_agent}.py`,
-  `multi_agent/run.py`, `multi_agent/messages.py` (feedback performative),
-  `LNIAGIA/query_parsing/feature_weighting.py` (add stock emphasis).
+  `multi_agent/run.py`, `LNIAGIA/query_parsing/feature_weighting.py` (add stock emphasis).
 - New: `multi_agent/retrieval.py`, `multi_agent/strategies/` (registry + 4 modules),
   `multi_agent/memory.py`, `multi_agent/experiments/`
   (customers.json, shopper.py, spec.py, run_experiment.py, store.py, metrics.py, report.py).
@@ -203,8 +196,9 @@ feedback loop (which also serves as the RL feedback channel, `rl_proposal.md` §
   already consumed by `weight_agent`. No coordination needed beyond extending it with the
   stock dimension. If the colleague's chat layer forwards `analyze_intent` output, consume
   that directly; otherwise keep deriving it in `weight_agent`.
-- **RL branch:** not in this branch. We only *produce* the reward (1–5) and the `rl_dataset`
-  export; consuming it (bandit updates) is the RL branch's job.
+- **RL is out of scope:** a colleague is building the RL agent as a *separate* voting agent
+  that reads the **shared** history. This plan touches none of it; per-agent memories are
+  not for RL (they're the course-requirement write-only logs).
 - Everything here is internal to this repo — no hard external blockers. Natural order:
   Part A (stock dim + 4-way weights) and Parts B (strategies), D (retrieval),
   F (per-agent memory) first; then the episodic harness (Part E) on top.
@@ -223,9 +217,9 @@ feedback loop (which also serves as the RL feedback channel, `rl_proposal.md` §
    `borda_aggregate`. `AgentMemory` round-trips per-agent records. Run `pytest tests/`.
 2. **Registry:** every configured strategy resolves and returns scores in [0,1].
 3. **Live round:** `docker compose up -d xmpp` then `python -m multi_agent.run`; confirm a
-   top-10 resolves, `agent_weights` includes a conversation-derived stock weight, the
-   orchestrator broadcasts feedback, and each agent wrote a record (with its weight +
-   picks-in-top-10) to its **own** `multi_agent/memory/<agent>.db`.
+   top-10 resolves, `agent_weights` includes a conversation-derived stock weight, and each
+   agent wrote a write-only record (context + its top scores) to its **own**
+   `multi_agent/memory/<agent>.db`.
 4. **Harness episode:** run one customer × OFAT sweep; confirm `results.db` is populated
    (experiments/episodes/turns/turn_items), the `rl_dataset` JSONL exports
    `(context, action, chat history, 1–5 reward)`, a report renders, and re-running with the
