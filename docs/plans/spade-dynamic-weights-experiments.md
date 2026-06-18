@@ -203,6 +203,14 @@ write-only log — included to satisfy the requirement, not because anything con
   Part A (stock dim + 4-way weights) and Parts B (strategies), D (retrieval),
   F (per-agent memory) first; then the episodic harness (Part E) on top.
 
+## Follow-ups to verify later
+
+- **Legacy stock fallback in `build_agent_weights`** (Part A, done): the backward-compat
+  branch that synthesises a `stock` importance for callers sending only 3 emphases is only
+  reachable by deprecated callers. Once the chat agent always forwards intent (so every live
+  path emits `stock`), re-verify the branch is unreachable and remove it. Marked with a
+  `TODO(part-A follow-up)` in `aggregator.py`.
+
 ## Backward compatibility
 
 - `borda_aggregate` untouched; with default strategies + fallback weights + confidence

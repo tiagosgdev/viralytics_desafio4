@@ -115,7 +115,12 @@ def build_agent_weights(
     raw = {agent_id: _read(feature_id) for feature_id, agent_id in feature_to_agent}
 
     # Backward-compat: an older caller may send only color/type/bodyType and no
-    # `stock` emphasis. If there is a real signal but stock is missing, synthesise
+    # `stock` emphasis.
+    # TODO(part-A follow-up): once every caller always emits a `stock` importance
+    # (weight_agent paths + orchestrator fallback already do; verify once the chat
+    # agent forwards intent too), this branch is dead code — re-verify it is
+    # unreachable and remove it. Until then it only affects deprecated callers.
+    # If there is a real signal but stock is missing, synthesise
     # a stock importance from `stock_weight`. NOTE: `stock_weight` is a *fraction*
     # (0.20 = 20% of the final budget) while the other emphases are *importances*
     # on a 0–100 scale, so we convert: to give stock a `frac` share of the total,
