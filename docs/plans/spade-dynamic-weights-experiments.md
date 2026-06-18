@@ -21,8 +21,9 @@ The SPADE multi-agent recommender (`multi_agent/`) works but is rigid:
 
 **Goals:**
 1. Make all four agent weights conversation-driven, including stock — so the *same*
-   weighted-Borda formula yields a different blend per shopper intent. The intent comes
-   from the **existing chat LLM agent**, not a new LLM (Part A).
+   weighted-Borda formula yields a different blend per shopper intent. The feature-weighting
+   already exists (`analyze_intent`, consumed by `weight_agent`); just extend it with a
+   stock dimension and have SPADE use all four (Part A).
 2. Make each agent's scoring a swappable **"personality"** with configurable params (Part B).
 3. Give **each agent its own memory** (Part F) — duplicated per-agent stores; a course
    requirement (agent autonomy), even though it overlaps the shared history.
@@ -54,25 +55,29 @@ cached so episodes are reproducible/replayable.
 
 ---
 
-## Part A — Conversation-driven weights (intent from the existing chat agent)
+## Part A — Conversation-driven weights (already wired; extend to 4 agents)
 
-1. **Intent is produced by the current chat LLM agent**, not a new SPADE LLM. The
-   conversational parser (`src/api/search_service.py` →
-   `LNIAGIA/query_parsing/llm_query_parser.py`) already interprets the user's messages
-   each turn. Extend its output contract to also emit a per-feature **emphasis** for
-   `color / type / bodyType / stock` (importances summing to 100) alongside the existing
-   filters. Define this as a small shared schema (the **seam** with the colleague's chat
-   work).
-2. **`FeatureWeightAgent` becomes a deterministic consumer** (`weight_agent.py`): it
-   receives the chat agent's intent emphases + the detection **confidences** (see Part C)
-   and normalises them to four agent weights — no Ollama call inside the round. The old
-   `analyze_intent` path is kept only as a **fallback** when no chat-intent is present.
-3. **Rewrite `build_agent_weights` (`aggregator.py:58`)** to derive all four weights from
-   the four emphases (normalise to sum 1.0), optionally damped by detection confidence
-   (Part C). Remove the fixed `STOCK_WEIGHT` budget-split; keep the missing-agent
-   redistribution. `STOCK_WEIGHT`/`USER_WEIGHT` survive only as fallback importances.
-4. Orchestrator (`orchestrator.py:155`) keeps calling `build_agent_weights`; the call
+The feature-weighting already exists: `analyze_intent` (`feature_weighting.py`) is one LLM
+call that returns `weights: {color, type, bodyType}` (importances summing to 100) + filters,
+and `weight_agent.py` already consumes it and feeds `build_agent_weights`. So the
+chat-intent → weights path is in place; only two small changes are needed plus confidence.
+
+1. **Add a `stock` emphasis** to `analyze_intent` — extend its system prompt + output so it
+   also scores stock/inventory intent (cues like "popular", "on sale", "what's trending",
+   "clearance" raise it; "I specifically want X" lowers it). Keep all importances > 0 and
+   renormalise to sum 100. Add a default `stock` importance to `weight_agent.py`'s
+   `_rule_based_weights` / `_FALLBACK_WEIGHTS` for the no-answer fast path.
+2. **Rewrite `build_agent_weights` (`aggregator.py:58`)** to derive all four weights from the
+   four emphases (normalise to sum 1.0), optionally damped by detection confidence (Part C).
+   Remove the fixed `STOCK_WEIGHT` budget-split; keep the missing-agent redistribution.
+   `STOCK_WEIGHT`/`USER_WEIGHT` survive only as fallback importances.
+3. Orchestrator (`orchestrator.py:155`) keeps calling `build_agent_weights`; the call
    simplifies (no separate stock budget passed).
+
+> If the colleague's chat layer already calls `analyze_intent` and forwards its output,
+> `weight_agent` can consume that directly instead of re-deriving — same shape either way.
+> Multi-turn refinement just means each chat turn supplies a fresh `user_answer`, so the
+> emphases (and therefore the weights) update turn to turn for free.
 
 ## Part B — Pluggable agent "personalities" (strategies)
 
@@ -171,8 +176,7 @@ even though it overlaps the shared `RoundHistory`. Professor wants explicit agen
 
 - Modify: `multi_agent/aggregator.py`, `multi_agent/config.py`,
   `multi_agent/agents/{orchestrator,weight_agent,colour_agent,body_agent,clothing_agent,stock_agent}.py`,
-  `multi_agent/run.py`; chat-intent seam in `src/api/search_service.py` /
-  `LNIAGIA/query_parsing/llm_query_parser.py` (coordinate with colleague).
+  `multi_agent/run.py`, `LNIAGIA/query_parsing/feature_weighting.py` (add stock emphasis).
 - New: `multi_agent/retrieval.py`, `multi_agent/strategies/` (registry + 4 modules),
   `multi_agent/memory.py`, `multi_agent/experiments/`
   (customers.json, shopper.py, spec.py, run_experiment.py, store.py, metrics.py, report.py).
@@ -181,12 +185,15 @@ even though it overlaps the shared `RoundHistory`. Professor wants explicit agen
 
 ## Dependencies & sequencing
 
-- **Chat-intent seam (Part A.1):** owned by the colleague's chat agent. Define the schema
-  now; until it lands, the `analyze_intent` fallback keeps the round working.
+- **Part A is unblocked:** feature-weighting (`analyze_intent`) already exists and is
+  already consumed by `weight_agent`. No coordination needed beyond extending it with the
+  stock dimension. If the colleague's chat layer forwards `analyze_intent` output, consume
+  that directly; otherwise keep deriving it in `weight_agent`.
 - **RL branch:** not in this branch. We only *produce* the reward (1–5) and the `rl_dataset`
   export; consuming it (bandit updates) is the RL branch's job.
-- Independent-of-dependencies work to start first: Parts B (strategies), D (retrieval),
-  F (per-agent memory), and the strategy-level harness plumbing.
+- Everything here is internal to this repo — no hard external blockers. Natural order:
+  Part A (stock dim + 4-way weights) and Parts B (strategies), D (retrieval),
+  F (per-agent memory) first; then the episodic harness (Part E) on top.
 
 ## Backward compatibility
 
