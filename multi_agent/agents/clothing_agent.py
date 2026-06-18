@@ -15,55 +15,12 @@ import logging
 from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
+from multi_agent import config
 from multi_agent.agents.base import BaseRecommenderAgent
 from multi_agent.messages import parse, make_propose, comm_log, CFP
+from multi_agent.strategies.registry import get_strategy
 
 logger = logging.getLogger(__name__)
-
-
-def _item_key(item_id: int, size: str) -> str:
-    return f"{item_id}:{size}"
-
-
-# Axes to skip in clothing scoring — body_type is handled with a proper
-# per-item DB lookup by BodyRecommenderAgent; penalising clothing candidates
-# for a field that isn't in their CFP payload deflates all scores uniformly.
-_SKIP_AXES: frozenset[str] = frozenset({"body_type"})
-
-
-def _score_candidates(
-    candidates_info: list[dict],
-    filters: dict,
-) -> dict[str, float]:
-    """
-    Match-count score: how many include axes does each item satisfy?
-    Normalised by the number of active filter axes so the result is in [0, 1].
-    """
-    raw_include: dict[str, list[str]] = (
-        (filters.get("filters") or {}).get("include") or {}
-    )
-    # Drop axes this agent doesn't evaluate (body_type → BodyRecommenderAgent).
-    include = {k: v for k, v in raw_include.items() if k not in _SKIP_AXES}
-
-    # No meaningful filters → uniform score of 0.5
-    if not include:
-        return {_item_key(c["item_id"], c["size"]): 0.5 for c in candidates_info}
-
-    n_axes = len(include)
-    scores: dict[str, float] = {}
-
-    for c in candidates_info:
-        hits = 0
-        for key, values in include.items():
-            item_val = str(c.get(key) or "")
-            if key == "age_group":
-                if any(v.lower() in item_val.lower() for v in values):
-                    hits += 1
-            elif item_val in values:
-                hits += 1
-        scores[_item_key(c["item_id"], c["size"])] = round(hits / n_axes, 6)
-
-    return scores
 
 
 class ClothingScoreBehaviour(CyclicBehaviour):
@@ -75,12 +32,17 @@ class ClothingScoreBehaviour(CyclicBehaviour):
         data            = parse(msg)
         conv_id         = data.get("conv_id", "")
         candidates_info = data.get("candidates", [])
+        context         = data.get("context", {})
         weights_result  = data.get("weights_result", {})
+
+        strategy_name = config.AGENT_STRATEGIES["clothing"]
+        score_fn, params = get_strategy("clothing", strategy_name)
+        params.update(config.AGENT_STRATEGY_PARAMS.get("clothing", {}))
 
         loop = asyncio.get_event_loop()
         scores = await loop.run_in_executor(
             None,
-            lambda: _score_candidates(candidates_info, weights_result),
+            lambda: score_fn(candidates_info, context, weights_result, params),
         )
 
         propose = make_propose(
