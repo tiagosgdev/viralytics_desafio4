@@ -31,7 +31,6 @@ from multi_agent.aggregator import borda_aggregate, build_agent_weights
 from multi_agent.config import (
     COLLECT_TIMEOUT_S,
     JIDS,
-    N_CANDIDATES,
     QUEUE_MAX_SIZE,
     SCORER_NAMES,
     STOCK_WEIGHT,
@@ -48,6 +47,7 @@ from multi_agent.messages import (
     make_request,
     parse,
 )
+from multi_agent.retrieval import get_candidates
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _STOCK_DIR = _REPO_ROOT / "stock_agent"
@@ -124,7 +124,8 @@ class OrchestratorBehaviour(CyclicBehaviour):
             # ── 2. Retrieve 40 candidates (blocking DB call → executor) ───
             loop = asyncio.get_event_loop()
             candidates_info: list[dict] = await loop.run_in_executor(
-                None, lambda: self._get_candidates(weights_result, context)
+                None,
+                lambda: get_candidates(self.agent._stock_agent, weights_result, context),
             )
             if not candidates_info:
                 logger.warning(f"[{conv_id}] No candidates; resolving with empty list.")
@@ -226,51 +227,6 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 "stock":    {"importance": 15},
             },
         }
-
-    def _get_candidates(self, weights_result: dict, context: dict) -> list[dict]:
-        query_filters: dict = dict(weights_result.get("filters") or {})
-
-        # Inject user gender as a soft include so gender-appropriate items rank first
-        gender = str(context.get("user_gender") or "").strip().lower()
-        if gender in ("male", "female"):
-            inc = dict(query_filters.get("include") or {})
-            if "gender" not in inc:
-                inc["gender"] = [gender, "unisex"]
-                query_filters = {**query_filters, "include": inc}
-
-        stock_agent = self.agent._stock_agent
-
-        # get_candidates raises if the query is completely empty
-        try:
-            pairs = stock_agent.get_candidates(query_filters, n=N_CANDIDATES)
-        except Exception:
-            pairs = stock_agent.stats.get_overstock_items(top_k=N_CANDIDATES)
-
-        info: list[dict] = []
-        for iid, sz in pairs:
-            try:
-                row = stock_agent.stats.get_row(iid, sz)
-            except KeyError:
-                continue
-            info.append({
-                "item_id":    int(iid),
-                "size":       sz,
-                "color":      row.get("color", ""),
-                "type":       row.get("type", ""),
-                "fit":        row.get("fit", ""),
-                "season":     row.get("season", ""),
-                "style":      row.get("style", ""),
-                "pattern":    row.get("pattern", ""),
-                "material":   row.get("material", ""),
-                "gender":     row.get("gender", ""),
-                "age_group":  row.get("age_group", ""),
-                "occasion":   row.get("occasion", ""),
-                "brand":      row.get("brand", ""),
-                "price":      row.get("price"),
-                "stock_count": int(row.get("stock_count", 0)),
-                "push_score": float(row.get("push_score", 0.0)),
-            })
-        return info
 
     async def _broadcast_cfp(
         self,
