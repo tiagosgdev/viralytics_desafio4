@@ -152,6 +152,10 @@ class OrchestratorBehaviour(CyclicBehaviour):
                          f"missing agents {missing} — redistributing weights")
 
             # ── 5. Weighted Borda count (with redistribution if agents missing) ──
+            # All four weights (colour/clothing/body/stock) derive from the four
+            # conversation-driven emphases in `weights_result["weights"]`
+            # (which now includes a `stock` importance). STOCK_WEIGHT is only a
+            # fallback importance for callers that omit the stock emphasis.
             agent_weights = build_agent_weights(
                 weights_result.get("weights", {}),
                 STOCK_WEIGHT,
@@ -209,14 +213,17 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 if "weights" in data:
                     return data
 
-        logger.warning(f"[{conv_id}] Weight timeout — using equal fallback.")
+        logger.warning(f"[{conv_id}] Weight timeout — using fallback weights.")
+        # Mirror weight_agent._FALLBACK_WEIGHTS so stock keeps a fair share even
+        # on a timeout (all four importances present and > 0, summing to 100).
         return {
             "query":   "",
             "filters": {"include": {}, "exclude": {}},
             "weights": {
-                "color":    {"importance": 33},
-                "type":     {"importance": 34},
-                "bodyType": {"importance": 33},
+                "color":    {"importance": 30},
+                "type":     {"importance": 30},
+                "bodyType": {"importance": 25},
+                "stock":    {"importance": 15},
             },
         }
 

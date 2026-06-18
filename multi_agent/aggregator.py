@@ -10,9 +10,13 @@ Protocol:
   5. Top-k items by composite score are returned.
 
 The weight split:
-  - Stock agent receives a fixed `stock_weight` (default 0.20) for inventory health.
-  - The remaining budget (0.80) is distributed among body/clothing/colour agents
-    in proportion to the feature importances returned by FeatureWeightAgent.
+  - ALL FOUR agent weights are conversation-driven: colour/clothing/body/stock
+    each get a share proportional to the corresponding emphasis returned by
+    FeatureWeightAgent (color/type/bodyType/stock importances).  The four
+    importances are normalised to sum to 1.0 → that is each agent's weight.
+  - There is no fixed stock budget any more; a strong "popular / on sale /
+    trending" intent can push the stock weight up, a very specific request
+    can push it down.
 """
 
 from __future__ import annotations
@@ -63,40 +67,74 @@ def build_agent_weights(
     """
     Convert FeatureWeightAgent output to per-agent budget.
 
-    feature_weights : {"color": {"importance": N}, "type": {...}, "bodyType": {...}}
+    All four agent weights are conversation-driven: each derives from one of
+    four emphases returned by FeatureWeightAgent. The feature-id → agent-id
+    mapping is:
+
+        color    → "colour"
+        type     → "clothing"
+        bodyType → "body"
+        stock    → "stock"
+
+    feature_weights : {"color":    {"importance": N},
+                       "type":     {"importance": N},
+                       "bodyType": {"importance": N},
+                       "stock":    {"importance": N}}
+                      The four importances are normalised to sum to 1.0 →
+                      that becomes each agent's weight. A missing key (e.g. an
+                      older caller without a `stock` emphasis) falls back to
+                      `stock_weight` for stock and 0 for the others, so the
+                      function never crashes.
+    stock_weight    : fallback stock *share* (fraction, 0.20 = 20%) used only when
+                      the `feature_weights` dict carries no `stock` emphasis. It is
+                      converted to a comparable importance internally; it is no
+                      longer a fixed budget carve-out.
     present_agents  : set of agent ids that actually responded this round.
                       When an agent is absent its weight is redistributed
                       proportionally among the agents that did respond.
                       Pass None (default) to assume all four agents are present.
-
-    The stock agent gets a fixed `stock_weight` (inventory health signal).
-    The remaining 1 - stock_weight is split among body/clothing/colour agents
-    in proportion to the feature importances (which sum to 100).
     """
-    try:
-        total = sum(
-            float(v["importance"])
-            for v in feature_weights.values()
-            if isinstance(v, dict) and "importance" in v
-        )
-    except (TypeError, KeyError):
-        total = 0.0
+    # feature-id → agent-id mapping (ordering fixed for the equal-split fallback).
+    feature_to_agent = (
+        ("color",    "colour"),
+        ("type",     "clothing"),
+        ("bodyType", "body"),
+        ("stock",    "stock"),
+    )
 
-    user_budget = 1.0 - stock_weight
+    def _read(feature_id: str) -> float | None:
+        """Return the importance for a feature, or None when it is absent."""
+        block = feature_weights.get(feature_id) if isinstance(feature_weights, dict) else None
+        if isinstance(block, dict) and "importance" in block:
+            try:
+                return max(0.0, float(block["importance"]))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    raw = {agent_id: _read(feature_id) for feature_id, agent_id in feature_to_agent}
+
+    # Backward-compat: an older caller may send only color/type/bodyType and no
+    # `stock` emphasis. If there is a real signal but stock is missing, synthesise
+    # a stock importance from `stock_weight`. NOTE: `stock_weight` is a *fraction*
+    # (0.20 = 20% of the final budget) while the other emphases are *importances*
+    # on a 0–100 scale, so we convert: to give stock a `frac` share of the total,
+    # its importance must be frac/(1-frac) × (sum of the other importances).
+    has_signal = any(v and v > 0 for v in raw.values())
+    if has_signal and (raw["stock"] is None):
+        others = sum(v for k, v in raw.items() if k != "stock" and v)
+        frac   = min(max(float(stock_weight), 0.0), 0.95)
+        raw["stock"] = (frac / (1.0 - frac)) * others if others > 0 else 0.0
+
+    importances = {agent_id: (raw[agent_id] or 0.0) for _, agent_id in feature_to_agent}
+    total = sum(importances.values())
 
     if total <= 0:
-        share = user_budget / 3.0
-        full = {"colour": share, "clothing": share, "body": share, "stock": stock_weight}
+        # No usable emphases at all → equal four-way split.
+        share = 1.0 / len(feature_to_agent)
+        full = {agent_id: share for _, agent_id in feature_to_agent}
     else:
-        color_imp = float((feature_weights.get("color")    or {}).get("importance", 0) or 0)
-        type_imp  = float((feature_weights.get("type")     or {}).get("importance", 0) or 0)
-        body_imp  = float((feature_weights.get("bodyType") or {}).get("importance", 0) or 0)
-        full = {
-            "colour":   color_imp / total * user_budget,
-            "clothing": type_imp  / total * user_budget,
-            "body":     body_imp  / total * user_budget,
-            "stock":    stock_weight,
-        }
+        full = {agent_id: imp / total for agent_id, imp in importances.items()}
 
     if present_agents is None:
         return full

@@ -23,9 +23,13 @@ SCORER_NAMES: list[str] = ["body", "clothing", "colour", "stock"]
 N_CANDIDATES      = 40    # items retrieved from DB before the debate round
 TOP_K             = 10    # final recommendations returned to the user
 
-# Budget split between inventory health and user-preference signals
-STOCK_WEIGHT      = 0.20  # fixed weight for the StockAgent (inventory pressure)
-USER_WEIGHT       = 0.80  # split among body/clothing/colour by feature importances
+# Fallback emphases (NOT a hard budget split any more). All four agent weights
+# are now conversation-driven: build_agent_weights normalises the four emphases
+# (color/type/bodyType/stock) returned by FeatureWeightAgent. STOCK_WEIGHT is
+# only used as a FALLBACK stock importance when a caller omits the `stock`
+# emphasis; USER_WEIGHT is kept for backward-compatibility / reference only.
+STOCK_WEIGHT      = 0.20  # fallback stock importance (when no stock emphasis supplied)
+USER_WEIGHT       = 0.80  # legacy reference; no longer a fixed user-preference budget
 
 # Timeouts (seconds)
 WEIGHTS_TIMEOUT_S = 120   # max wait for FeatureWeightAgent INFORM reply

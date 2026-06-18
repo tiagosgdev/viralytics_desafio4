@@ -6,9 +6,9 @@ Receives a REQUEST from the Orchestrator containing the round context
 feature_weighting.analyze_intent() in a thread pool, and sends an INFORM
 back with the resulting weights + DB filters.
 
-The weights (color / type / bodyType importances summing to 100) are used
-by the Orchestrator to split the user-preference budget among the three
-user-facing scorer agents.
+The weights (color / type / bodyType / stock importances summing to 100) are
+used by the Orchestrator to derive the four scorer-agent weights — each agent
+(colour / clothing / body / stock) gets a share proportional to its emphasis.
 """
 
 import asyncio
@@ -34,10 +34,15 @@ from query_parsing.feature_weighting import analyze_intent  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# Default four-way emphasis used whenever no LLM signal is available. The three
+# user-facing features sit slightly above stock (the shopper's explicit garment /
+# colour / fit intent should usually outweigh a generic inventory push), and all
+# four are > 0 and sum to 100 so build_agent_weights normalises them cleanly.
 _FALLBACK_WEIGHTS = {
-    "color":    {"importance": 33},
-    "type":     {"importance": 34},
-    "bodyType": {"importance": 33},
+    "color":    {"importance": 30},
+    "type":     {"importance": 30},
+    "bodyType": {"importance": 25},
+    "stock":    {"importance": 15},
 }
 
 
@@ -66,9 +71,10 @@ def _rule_based_weights(ctx: dict) -> dict:
         "query":   query,
         "filters": {"include": include, "exclude": {}},
         "weights": {
-            "color":    {"importance": 33},
-            "type":     {"importance": 34},
-            "bodyType": {"importance": 33},
+            "color":    {"importance": 30},
+            "type":     {"importance": 30},
+            "bodyType": {"importance": 25},
+            "stock":    {"importance": 15},
         },
     }
 
@@ -122,7 +128,8 @@ class WeightBehaviour(CyclicBehaviour):
             "weights", "orchestrator", "INFORM", conv_id,
             f"color={w.get('color',{}).get('importance')}%  "
             f"type={w.get('type',{}).get('importance')}%  "
-            f"body={w.get('bodyType',{}).get('importance')}%",
+            f"body={w.get('bodyType',{}).get('importance')}%  "
+            f"stock={w.get('stock',{}).get('importance')}%",
         )
         logger.info(f"[{conv_id}] Weights sent: {w}")
 

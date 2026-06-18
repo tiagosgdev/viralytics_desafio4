@@ -161,9 +161,9 @@ SCAN FILTER RULES (in addition to ALL rules above):
     infer excludes from preferences alone.
 - All other fields follow the normal include/exclude rules above.
 
-WEIGHTS — also score the importance of the three scan features:
-- color, type, bodyType (body shape).
-- Each importance is a number greater than 0; the three MUST sum to 100.
+WEIGHTS — also score the importance of FOUR scan features:
+- color, type, bodyType (body shape), and stock (inventory / popularity intent).
+- Each importance is a number greater than 0; the FOUR MUST sum to 100.
 - Higher importance = the user emphasised that feature more.
 - Explicit mentions outweigh implicit / contextual hints.
 - A contradiction (user wants a different value) scores HIGH because the
@@ -171,6 +171,12 @@ WEIGHTS — also score the importance of the three scan features:
 - A feature the user never mentions still gets some importance — never 0.
 - If the user talks about fit ("fit", "fits", "fitting", "fits me well"),
     give EXTRA importance to bodyType.
+- stock: how much the shopper cares about inventory / popularity rather than a
+    specific exact item. RAISE it when they say things like "popular", "what's
+    trending", "best sellers", "on sale", "clearance", "whatever's in stock".
+    LOWER it when the shopper is very specific about an exact item (precise
+    color + type + shape) — they want THAT piece, not whatever is trending.
+    When the answer gives no signal either way, keep stock small but > 0.
 
 VALID VALUES (use ONLY these exact strings):
 - color:    {color_values}
@@ -182,51 +188,66 @@ These examples show ONLY the weights block for clarity; still return the
 full scan output schema below.
 
 Example A — user_answer: "I am looking for a t-shirt"
-    Mentions type only. Color and body type are not mentioned.
+    Mentions type only. Color and body type are not mentioned. No stock cue.
     {{
-        "color":    {{"value": "red", "importance": 12}},
-        "type":     {{"value": "short_sleeve_top", "importance": 76}},
-        "bodyType": {{"value": "hourglass", "importance": 12}}
+        "color":    {{"value": "red", "importance": 10}},
+        "type":     {{"value": "short_sleeve_top", "importance": 70}},
+        "bodyType": {{"value": "hourglass", "importance": 10}},
+        "stock":    {{"importance": 10}}
     }}
 
 Example B — user_answer: "I want a red casual t-shirt"
     Mentions color + type. "casual" is style and is ignored. Body type not mentioned.
     {{
-        "color":    {{"value": "red", "importance": 47}},
-        "type":     {{"value": "short_sleeve_top", "importance": 47}},
-        "bodyType": {{"value": "hourglass", "importance": 6}}
+        "color":    {{"value": "red", "importance": 43}},
+        "type":     {{"value": "short_sleeve_top", "importance": 43}},
+        "bodyType": {{"value": "hourglass", "importance": 6}},
+        "stock":    {{"importance": 8}}
     }}
 
 Example C — user_answer: "I want something for the summer"
     Summer softly hints at short-sleeve tops. No explicit feature mention.
     {{
-        "color":    {{"value": "red", "importance": 28}},
-        "type":     {{"value": "short_sleeve_top", "importance": 44}},
-        "bodyType": {{"value": "hourglass", "importance": 28}}
+        "color":    {{"value": "red", "importance": 25}},
+        "type":     {{"value": "short_sleeve_top", "importance": 40}},
+        "bodyType": {{"value": "hourglass", "importance": 25}},
+        "stock":    {{"importance": 10}}
     }}
 
 Example D — user_answer: "I am looking for a green t-shirt"
     Contradicts color (red -> green) AND confirms type. Body type not mentioned.
     {{
-        "color":    {{"value": "green", "importance": 47}},
-        "type":     {{"value": "short_sleeve_top", "importance": 47}},
-        "bodyType": {{"value": "hourglass", "importance": 6}}
+        "color":    {{"value": "green", "importance": 43}},
+        "type":     {{"value": "short_sleeve_top", "importance": 43}},
+        "bodyType": {{"value": "hourglass", "importance": 6}},
+        "stock":    {{"importance": 8}}
     }}
 
 Example E — user_answer: "Something for a pear shape in blue"
     Contradicts color (red -> blue) AND body type (hourglass -> pear). Type not mentioned.
     {{
-        "color":    {{"value": "blue", "importance": 45}},
+        "color":    {{"value": "blue", "importance": 42}},
         "type":     {{"value": "short_sleeve_top", "importance": 10}},
-        "bodyType": {{"value": "pear", "importance": 45}}
+        "bodyType": {{"value": "pear", "importance": 42}},
+        "stock":    {{"importance": 6}}
     }}
 
 Example F — user_answer: "Something that fits me well"
     Mentions fit, which hints at body type being more important. No explicit feature mention.
     {{
-        "color":    {{"value": "blue", "importance": 20}},
-        "type":     {{"value": "short_sleeve_top", "importance": 20}},
-        "bodyType": {{"value": "pear", "importance": 60}}
+        "color":    {{"value": "blue", "importance": 18}},
+        "type":     {{"value": "short_sleeve_top", "importance": 18}},
+        "bodyType": {{"value": "pear", "importance": 56}},
+        "stock":    {{"importance": 8}}
+    }}
+
+Example G — user_answer: "Just show me what's popular and on sale"
+    Strong stock / popularity intent; no specific feature emphasised.
+    {{
+        "color":    {{"value": "blue", "importance": 12}},
+        "type":     {{"value": "short_sleeve_top", "importance": 12}},
+        "bodyType": {{"value": "pear", "importance": 12}},
+        "stock":    {{"importance": 64}}
     }}
 
 FINAL SCAN OUTPUT — return ONLY this JSON object (no markdown, no prose):
@@ -239,7 +260,8 @@ FINAL SCAN OUTPUT — return ONLY this JSON object (no markdown, no prose):
     "weights": {{
         "color":    {{"importance": <number>}},
         "type":     {{"importance": <number>}},
-        "bodyType": {{"importance": <number>}}
+        "bodyType": {{"importance": <number>}},
+        "stock":    {{"importance": <number>}}
     }}
 }}
 """
@@ -449,10 +471,11 @@ def _normalize_scan_weights(
     color_state: str = "neutral",
 ) -> dict[str, dict[str, Any]]:
     """
-    Build the {color/type/bodyType: {value, importance}} block.
+    Build the {color/type/bodyType/stock: {value, importance}} block.
 
-    Importance numbers come from the LLM; VALUES come from `values`
-    (derived from the final filters + vision) so they cannot diverge.
+    Importance numbers come from the LLM; the color/type/bodyType VALUES come
+    from `values` (derived from the final filters + vision) so they cannot
+    diverge. `stock` has no closed-set value, so its value is None.
 
     `color_state` (from _reconcile_color_negation) overrides the color
     importance deterministically:
@@ -463,12 +486,12 @@ def _normalize_scan_weights(
 
     Pinned color is held fixed; the remaining budget (100 - pinned) is
     split across the other features in proportion to their LLM numbers.
-    Guarantees: every importance > 0 and the three sum to 100.0.
+    Guarantees: every importance > 0 and the FOUR sum to 100.0.
     """
     if not isinstance(raw_weights, dict):
         raw_weights = {}
 
-    features = ("color", "type", "bodyType")
+    features = ("color", "type", "bodyType", "stock")
     raw_importances: dict[str, float] = {}
     for feature in features:
         block = raw_weights.get(feature)
@@ -505,7 +528,7 @@ def _normalize_scan_weights(
             pct = round(remaining / len(unpinned), 2)
         else:
             pct = round((raw_importances[feature] / unpinned_total) * remaining, 2)
-        result[feature] = {"value": values[feature], "importance": pct}
+        result[feature] = {"value": values.get(feature), "importance": pct}
 
     # Absorb rounding drift into the dominant UNPINNED feature (never the
     # pinned color, whose low value is intentional).
@@ -536,7 +559,8 @@ def analyze_intent(
           "weights": {
             "color":    {"value": "<valid color>",     "importance": <float>},
             "type":     {"value": "<valid type>",       "importance": <float>},
-            "bodyType": {"value": "<valid body type>",  "importance": <float>}
+            "bodyType": {"value": "<valid body type>",  "importance": <float>},
+            "stock":    {"value": None,                 "importance": <float>}
           }
         }
 
@@ -545,9 +569,10 @@ def analyze_intent(
         - detected type + body_type are always present in include
           (body_type is a HARD Qdrant filter) unless the shopper
           explicitly replaced them
-        - every weight importance > 0 and the three sum to 100.0
-        - each weight VALUE is read back from the final filters / vision,
-          so weights and filters are always consistent
+        - every weight importance > 0 and the FOUR sum to 100.0
+        - each color/type/bodyType VALUE is read back from the final filters /
+          vision, so weights and filters are always consistent; stock has no
+          closed-set value so its value is None
     """
     model = model or OLLAMA_REFINER_MODEL
     system_prompt = _build_intent_system_prompt()
@@ -625,6 +650,7 @@ def analyze_intent(
         "color": _first(include.get("color")) or detected_color,
         "type": _first(include.get("type")) or detected_type,
         "bodyType": _first(include.get("body_type")) or detected_body_type,
+        "stock": None,   # inventory/popularity emphasis has no closed-set value
     }
     weights = _normalize_scan_weights(
         parsed.get("weights"), values, user_answer, color_state
@@ -684,7 +710,7 @@ if __name__ == "__main__":
     print(f"    {json.dumps(scan['filters'], ensure_ascii=False)}")
 
     print("\n  Weights:")
-    for feature in ("color", "type", "bodyType"):
+    for feature in ("color", "type", "bodyType", "stock"):
         data = weights[feature]
         print(f"    {feature:9s}: {str(data['value']):25s} - {data['importance']}%")
     print(f"\n  Sum: {sum(r['importance'] for r in weights.values())}%")
