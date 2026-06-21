@@ -41,6 +41,8 @@ from src.api.schemas import (
     ChatResponse,
     ConversationRequest,
     DetectionResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
     LoginRequest,
     RecommendRequest,
@@ -598,7 +600,7 @@ async def _run_multiagent_round(
     if rec_system is None or not rec_system.is_ready:
         return None
     try:
-        return await asyncio.wait_for(
+        _round_id, results = await asyncio.wait_for(
             rec_system.recommend(
                 detected_color     = detected_color,
                 detected_type      = detected_type,
@@ -607,6 +609,7 @@ async def _run_multiagent_round(
             ),
             timeout=120,
         )
+        return results
     except Exception as exc:
         print(f"⚠️  Multi-agent round failed: {exc}")
         return None
@@ -1134,7 +1137,7 @@ async def recommend(payload: RecommendRequest):
         )
 
     try:
-        results = await rec_system.recommend(
+        round_id, results = await rec_system.recommend(
             detected_color     = payload.detected_color,
             detected_type      = payload.detected_type,
             detected_body_type = payload.detected_body_type,
@@ -1148,7 +1151,38 @@ async def recommend(payload: RecommendRequest):
             detail="Recommendation round timed out.",
         )
 
-    return RecommendResponse(recommendations=results)
+    return RecommendResponse(recommendations=results, round_id=round_id)
+
+
+# ── Recommendation feedback (RL emoji rating) ──────────────────────────────────
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+async def feedback(payload: FeedbackRequest):
+    """
+    Record a user's 1–5 emoji satisfaction rating for one recommended item and
+    let the RL agent learn from it.  `round_id` comes from the /api/recommend
+    response; `item_id`/`size` identify the rated item; rating 3 is neutral.
+
+    Returns ok=False (200) when the multi-agent system is unavailable or the
+    round/item is unknown — the frontend treats feedback as best-effort and never
+    blocks the user on it.
+    """
+    if rec_system is None or not rec_system.is_ready:
+        return FeedbackResponse(ok=False, reason="Multi-agent system is not available.")
+
+    result = await run_in_threadpool(
+        rec_system.submit_feedback,
+        round_id = payload.round_id,
+        item_id  = payload.item_id,
+        size     = payload.size,
+        rating   = payload.rating,
+    )
+    return FeedbackResponse(
+        ok      = bool(result.get("ok")),
+        applied = bool(result.get("applied")),
+        reason  = result.get("reason"),
+        policy  = result.get("policy"),
+    )
 
 
 # ── WebSocket camera endpoint ─────────────────────────────────────────────────
