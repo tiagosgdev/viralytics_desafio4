@@ -11,8 +11,11 @@ Protocol:
 
 The weight split:
   - Stock agent receives a fixed `stock_weight` (default 0.20) for inventory health.
-  - The remaining budget (0.80) is distributed among body/clothing/colour agents
-    in proportion to the feature importances returned by FeatureWeightAgent.
+  - RL agent receives a fixed `rl_weight` (default 0.15 when enabled) for its
+    learned signal; 0 omits it entirely (legacy behaviour).
+  - The remaining budget (1 - stock_weight - rl_weight) is distributed among
+    body/clothing/colour agents in proportion to the feature importances
+    returned by FeatureWeightAgent.
 """
 
 from __future__ import annotations
@@ -58,6 +61,7 @@ def borda_aggregate(
 def build_agent_weights(
     feature_weights: dict,
     stock_weight: float = 0.20,
+    rl_weight: float = 0.0,
     present_agents: frozenset[str] | None = None,
 ) -> dict[str, float]:
     """
@@ -67,11 +71,13 @@ def build_agent_weights(
     present_agents  : set of agent ids that actually responded this round.
                       When an agent is absent its weight is redistributed
                       proportionally among the agents that did respond.
-                      Pass None (default) to assume all four agents are present.
+                      Pass None (default) to assume all expected agents are present.
 
-    The stock agent gets a fixed `stock_weight` (inventory health signal).
-    The remaining 1 - stock_weight is split among body/clothing/colour agents
-    in proportion to the feature importances (which sum to 100).
+    Fixed-slice agents get a constant weight regardless of feature importances:
+      - stock agent → `stock_weight`   (inventory health signal)
+      - RL agent    → `rl_weight`       (learned signal; 0 disables / omits it)
+    The remaining budget (1 - stock_weight - rl_weight) is split among
+    body/clothing/colour in proportion to the feature importances (which sum to 100).
     """
     try:
         total = sum(
@@ -82,11 +88,11 @@ def build_agent_weights(
     except (TypeError, KeyError):
         total = 0.0
 
-    user_budget = 1.0 - stock_weight
+    user_budget = max(0.0, 1.0 - stock_weight - rl_weight)
 
     if total <= 0:
         share = user_budget / 3.0
-        full = {"colour": share, "clothing": share, "body": share, "stock": stock_weight}
+        full = {"colour": share, "clothing": share, "body": share}
     else:
         color_imp = float((feature_weights.get("color")    or {}).get("importance", 0) or 0)
         type_imp  = float((feature_weights.get("type")     or {}).get("importance", 0) or 0)
@@ -95,8 +101,14 @@ def build_agent_weights(
             "colour":   color_imp / total * user_budget,
             "clothing": type_imp  / total * user_budget,
             "body":     body_imp  / total * user_budget,
-            "stock":    stock_weight,
         }
+
+    # Fixed-slice agents are only included when they carry a positive weight, so a
+    # disabled RL agent (rl_weight=0) never appears and the legacy split is exact.
+    if stock_weight > 0:
+        full["stock"] = stock_weight
+    if rl_weight > 0:
+        full["rl"] = rl_weight
 
     if present_agents is None:
         return full

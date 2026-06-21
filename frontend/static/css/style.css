@@ -1786,6 +1786,49 @@ body[data-persona='cruella'] .rec-detail-row {
   line-height: 1.7;
 }
 
+/* ========== RL EMOJI FEEDBACK ========== */
+
+.rec-feedback .emoji-row {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.55rem 0 0.4rem;
+  flex-wrap: wrap;
+}
+
+.emoji-btn {
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 0.3rem 0.45rem;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  filter: grayscale(0.6);
+  opacity: 0.75;
+  transition: transform 0.12s ease, filter 0.12s ease, opacity 0.12s ease,
+              border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.emoji-btn:hover {
+  transform: translateY(-2px) scale(1.08);
+  filter: grayscale(0);
+  opacity: 1;
+}
+
+.emoji-btn.selected {
+  filter: grayscale(0);
+  opacity: 1;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.emoji-status {
+  font-size: 0.82rem;
+  color: var(--accent-strong);
+  min-height: 1.1em;
+}
+
 /* ========== NOTIFICATION MODALS ========== */
 
 .notification-modal-shell {
