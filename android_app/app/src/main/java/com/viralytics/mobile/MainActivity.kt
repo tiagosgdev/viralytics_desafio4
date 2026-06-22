@@ -2,11 +2,15 @@ package com.viralytics.mobile
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.TypedValue
@@ -37,9 +41,18 @@ import java.io.ByteArrayOutputStream
 // V2.8.0 UBTech Robot Imports
 import com.ubtrobot.Robot
 import com.ubtrobot.navigation.NavigationManager
+import com.ubtrobot.navigation.NavigationOption
 import com.ubtrobot.navigation.Location
 import com.ubtrobot.speech.SpeechManager
 import com.ubtrobot.navigation.Point
+import com.ubtrobot.navigation.NavigationException
+import android.net.Uri
+import com.ubtrobot.motion.MotionManager
+import com.ubtrobot.motion.PerformingOption
+import com.ubtrobot.sensor.SensorManager as CruzrSensorManager
+import com.ubtrobot.sensor.SensorListener
+import com.ubtrobot.sensor.SensorEvent
+import com.ubtrobot.sensor.SensorDevice
 
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
@@ -51,6 +64,15 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val httpClient = OkHttpClient()
+
+    // --- VERSION TRACKER ---
+    private val APP_VERSION = "v2.3"
+
+    // --- NAVIGATION CONFIG ---
+    private val TRACK_MODE = false
+    private val NAV_MAX_SPEED = 0.5f
+    private val NAV_RETRY_COUNT = 2
+    private val NAV_RETRY_INTERVAL = 2000
 
     private var currentSessionId: String? = null
     private val detectedCategories = mutableListOf<String>()
@@ -64,7 +86,16 @@ class MainActivity : AppCompatActivity() {
     // Hardware Managers (V2.8.0 Architecture)
     private var navigationManager: NavigationManager? = null
     private var speechManager: SpeechManager? = null
+    private var motionManager: MotionManager? = null
+    private var cruzrSensorManager: CruzrSensorManager? = null
     private lateinit var textToSpeech: TextToSpeech
+
+    // Greeting flow state — guards against duplicate door triggers
+    @Volatile private var isBusy = false
+    @Volatile private var isAtEntrance = false
+    private var humanDetectListener: SensorListener? = null
+    @Volatile private var pendingGreetText  = "Welcome! I'm Cruzr, your personal fashion assistant. Come closer and let me help you find the perfect outfit!"
+    @Volatile private var pendingGreetGesture = "wave"
 
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -86,55 +117,49 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
 
-        // Initialize Hardware
-        initCruzrHardware()
+        try {
+            binding = ActivityMainBinding.inflate(layoutInflater)
+            setContentView(binding.root)
 
-        // START THE NETWORK BRIDGE
-        startMqttListener()
-
-        setStatus("Ready.")
-        updateSessionLabel()
-        renderDetections()
-        renderRecommendations()
-        switchTab("scan")
-
-        textToSpeech = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                // Optional: Force English (or use Locale("pt", "BR") for Portuguese)
-                textToSpeech.language = java.util.Locale.US
-                android.util.Log.d("CruzrApp", "TTS Ready!")
+            try {
+                Robot.initialize(applicationContext)
+            } catch (e: Exception) {
+                android.util.Log.e("CruzrApp", "Robot SDK Offline: ${e.message}")
+                Toast.makeText(this, "Robot OS Offline: ${e.message}", Toast.LENGTH_LONG).show()
+            } catch (e: Error) {
+                Toast.makeText(this, "Fatal Hardware Error.", Toast.LENGTH_LONG).show()
             }
-        }
 
-        binding.captureButton.setOnClickListener {
-            launchCamera()
-        }
-
-        binding.sendChatButton.setOnClickListener {
-            sendChat()
-        }
-
-        binding.recommendationsLeftButton.setOnClickListener {
-            scrollRecommendations(-1)
-        }
-
-        binding.recommendationsRightButton.setOnClickListener {
-            scrollRecommendations(1)
-        }
-
-        binding.connectionSettingsButton.setOnClickListener {
-            showConnectionSettingsDialog()
-        }
-
-        binding.tabScanButton.setOnClickListener {
+            initCruzrHardware()
+            setStatus("Connecting to MQTT…")
+            startMqttListener()
+            updateSessionLabel()
+            renderDetections()
+            renderRecommendations()
             switchTab("scan")
-        }
 
-        binding.tabRefineButton.setOnClickListener {
-            switchTab("refine")
+            textToSpeech = TextToSpeech(this) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    textToSpeech.language = java.util.Locale.US
+                }
+            }
+
+            binding.captureButton.setOnClickListener { launchCamera() }
+            binding.sendChatButton.setOnClickListener { sendChat() }
+            binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
+            binding.recommendationsRightButton.setOnClickListener { scrollRecommendations(1) }
+            binding.connectionSettingsButton.setOnClickListener { showConnectionSettingsDialog() }
+            binding.tabScanButton.setOnClickListener { switchTab("scan") }
+            binding.tabRefineButton.setOnClickListener { switchTab("refine") }
+
+        } catch (e: Throwable) {
+            if (::binding.isInitialized) {
+                binding.statusText.text = "APP CRASHED ON STARTUP"
+                binding.chatReplyText.text = "CRASH LOG:\n${e.stackTraceToString()}"
+            } else {
+                Toast.makeText(this, "CRASH: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -436,7 +461,6 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setPositiveButton("Take me there!") { _, _ ->
-                // Natively command the robot instead of making a network call
                 sendRobotNavigationCommand(item.category, item.reason)
             }
             .setNegativeButton("Close", null)
@@ -584,7 +608,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(message: String) {
-        binding.statusText.text = "Status: $message"
+        binding.statusText.text = "[$APP_VERSION] Status: $message"
     }
 
     private fun updateSessionLabel(mode: String? = null) {
@@ -742,55 +766,152 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMqttListener() {
-        // 1. Extract the raw IP address from your existing server URL string
-        val rawUrl = loadServerUrl().replace("http://", "").replace("https://", "")
-        val ipAddress = rawUrl.split(":")[0]
-
-        val brokerUri = "tcp://$ipAddress:1883"
-        val clientId = "Cruzr_Kotlin_App"
+        // MQTT runs on a background thread — MqttClient.connect() is blocking and
+        // throws NetworkOnMainThreadException if called from the UI thread.
+        Thread {
+        // MQTT broker is always test.mosquitto.org — independent of the HTTP API server URL
+        // (the connection settings dialog controls the FastAPI server, not the MQTT broker)
+        val brokerUri = "ssl://test.mosquitto.org:8883"
+        val clientId = "Cruzr_${(1000..9999).random()}"
 
         try {
             mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+
+            // test.mosquitto.org uses a custom CA not in Android's trust store.
+            // Since this is a public broker (no auth, anyone can subscribe), we use
+            // TLS for wire encryption but skip cert verification — same as the Python side.
+            val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            })
+            val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
+            sslCtx.init(null, trustAll, java.security.SecureRandom())
+
             val options = MqttConnectOptions().apply {
                 isCleanSession = true
                 connectionTimeout = 10
+                isAutomaticReconnect = true
+                socketFactory = sslCtx.socketFactory
             }
 
-            // 2. Define what happens when a network message arrives
             mqttClient?.setCallback(object : MqttCallback {
                 override fun connectionLost(cause: Throwable?) {
-                    runOnUiThread { setStatus("MQTT Connection Lost: ${cause?.message}") }
+                    runOnUiThread { setStatus("MQTT lost — reconnecting…") }
                 }
 
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
                     val payloadString = message?.toString() ?: return
 
-                    // When a message arrives, parse the JSON
                     try {
                         val json = JSONObject(payloadString)
                         val action = json.optString("action")
 
-                        // If the PC Python script says "move_to_stand"...
-                        if (action == "move_to_stand") {
-                            val targetRack = json.optString("target", "unknown_rack")
-
-                            runOnUiThread {
-                                toast("Received PC Command: Go to $targetRack!")
+                        when (action) {
+                            "move_to_stand" -> {
+                                val target = json.optString("target", "unknown_rack")
+                                runOnUiThread { toast("PC: navigate to $target") }
+                                sendRobotNavigationCommand(target, "AI recommendation received via network")
+                            }
+                            "move_to_coords" -> {
+                                val x = json.optDouble("x", 0.0).toFloat()
+                                val y = json.optDouble("y", 0.0).toFloat()
+                                val theta = json.optDouble("theta", 0.0).toFloat()
+                                runOnUiThread { toast("PC: navigate to coords $x, $y") }
+                                sendRawCoordinateCommand(x, y, theta)
+                            }
+                            "speak" -> {
+                                val text = json.optString("text", "")
+                                runOnUiThread { setStatus("Speaking: $text") }
+                                speakText(text)
+                            }
+                            "guide_user" -> {
+                                val target = json.optString("target", "")
+                                val introText = json.optString("intro_text", "")
+                                runOnUiThread { setStatus("Guide: going to '$target'") }
+                                speakText(introText)
+                                sendRobotNavigationCommand(target, "", skipIntroSpeech = true)
+                            }
+                            "stop_navigation" -> {
+                                runOnUiThread { setStatus("Stop requested (unsupported by SDK)") }
+                                publishStatus("error", JSONObject().put("message", "stop_navigation not supported by SDK v2.8.0"))
+                            }
+                            "locate_self" -> {
+                                val nav = navigationManager
+                                if (nav == null) {
+                                    publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
+                                } else if (nav.isSelfLocated) {
+                                    val payload = JSONObject().put("self_located", true).put("note", "already located")
+                                    try {
+                                        val loc = nav.currentLocation
+                                        payload.put("x", loc.position.x)
+                                        payload.put("y", loc.position.y)
+                                        payload.put("theta", loc.rotation)
+                                    } catch (e: Exception) {}
+                                    publishStatus("status_report", payload)
+                                } else {
+                                    runOnUiThread { setStatus("Locating self…") }
+                                    publishStatus("localization_started", null)
+                                    nav.locateSelf()
+                                        .done {
+                                            runOnUiThread { setStatus("Self-located.") }
+                                            val payload = JSONObject()
+                                            try {
+                                                val loc = nav.currentLocation
+                                                payload.put("x", loc.position.x)
+                                                payload.put("y", loc.position.y)
+                                                payload.put("theta", loc.rotation)
+                                            } catch (e: Exception) {}
+                                            publishStatus("localization_success", payload)
+                                        }
+                                        .fail { error ->
+                                            val errMsg = error?.message ?: "unknown"
+                                            runOnUiThread { setStatus("Localization failed: $errMsg") }
+                                            publishStatus("localization_failed", JSONObject().put("error_message", errMsg))
+                                        }
+                                }
+                            }
+                            "get_status" -> {
+                                val nav = navigationManager
+                                val payload = JSONObject().apply {
+                                    put("nav_manager_online", nav != null)
+                                    if (nav != null) {
+                                        put("self_located", nav.isSelfLocated)
+                                        try {
+                                            val loc = nav.currentLocation
+                                            put("x", loc.position.x)
+                                            put("y", loc.position.y)
+                                            put("theta", loc.rotation)
+                                        } catch (e: Exception) {}
+                                    }
+                                }
+                                publishStatus("status_report", payload)
                             }
 
-                            // Trigger your existing hardware function!
-                            sendRobotNavigationCommand(targetRack, "AI recommendation received via network")
-                        }
-                        // NEW LOGIC: If the script says "speak"...
-                        else if (action == "speak") {
-                            val textToSay = json.optString("text", "Meow meow")
-
-                            runOnUiThread {
-                                setStatus("Speaking: $textToSay")
+                            // Compound greeting sequence:
+                            //   navigate to entrance → LIDAR detects person → speak + gesture
+                            "greet" -> {
+                                if (isBusy) {
+                                    publishStatus("robot_busy", JSONObject()
+                                        .put("command", "greet")
+                                        .put("reason", "robot is currently engaged with a customer"))
+                                    runOnUiThread { setStatus("Greet ignored — robot is busy") }
+                                } else {
+                                    val x       = json.optDouble("x", 0.0).toFloat()
+                                    val y       = json.optDouble("y", 0.0).toFloat()
+                                    val theta   = json.optDouble("theta", 0.0).toFloat()
+                                    pendingGreetText    = json.optString("text", pendingGreetText)
+                                    pendingGreetGesture = json.optString("gesture", "wave")
+                                    runOnUiThread { setStatus("Greeting sequence: moving to entrance…") }
+                                    sendGreetCommand(x, y, theta)
+                                }
                             }
 
-                            // Trigger the text-to-speech engine
-                            textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+                            // One-shot gesture without navigation.
+                            "gesture" -> {
+                                val name = json.optString("name", "wave")
+                                doGesture(name)
+                            }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -800,88 +921,431 @@ class MainActivity : AppCompatActivity() {
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
             })
 
-            // 3. Connect and Subscribe to the topic
             mqttClient?.connect(options)
             mqttClient?.subscribe("cruzr/commands")
-            runOnUiThread { setStatus("MQTT Connected to $ipAddress") }
+            runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
 
         } catch (e: Exception) {
             runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
         }
+        }.start()
     }
 
-    // --- HARDWARE INTEGRATION METHODS ---
     private fun initCruzrHardware() {
         setStatus("Initializing V2.8.0 Hardware Managers...")
 
         try {
-            // Fetch the active managers from the Robot's internal OS context
-            navigationManager = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
+            navigationManager   = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
+            speechManager       = Robot.globalContext().getSystemService("speech") as SpeechManager
+            motionManager       = Robot.globalContext().getSystemService("motion") as? MotionManager
+            cruzrSensorManager  = Robot.globalContext().getSystemService(CruzrSensorManager.SERVICE) as? CruzrSensorManager
 
-            // SpeechManager usually uses a similar constant or the string "speech"
-            speechManager = Robot.globalContext().getSystemService("speech") as SpeechManager
-
-            runOnUiThread { setStatus("Hardware Managers active.") }
+            val motionOk  = if (motionManager  != null) "✓" else "✗"
+            val sensorOk  = if (cruzrSensorManager != null) "✓" else "✗"
+            runOnUiThread { setStatus("Hardware ready — motion:$motionOk sensor:$sensorOk") }
         } catch (e: Exception) {
             runOnUiThread { setStatus("Manager Init Failed: ${e.message}") }
         }
     }
 
-    private fun sendRobotNavigationCommand(targetItem: String, reason: String) {
-        runOnUiThread { setStatus("Commanding hardware...") }
+    private fun publishStatus(event: String, extras: JSONObject?) {
+        val payload = JSONObject().apply {
+            put("event", event)
+            put("timestamp", System.currentTimeMillis() / 1000L)
+            extras?.keys()?.forEach { key -> put(key, extras.get(key)) }
+        }
+        try {
+            val msg = MqttMessage(payload.toString().toByteArray(Charsets.UTF_8)).apply { qos = 1 }
+            mqttClient?.publish("cruzr/status", msg)
+        } catch (e: Exception) {
+            android.util.Log.w("CruzrApp", "publishStatus failed: ${e.message}")
+        }
+    }
 
-        val textToSpeak = if (reason.isNotBlank()) {
-            "I found a great match! $reason. Let me show you where it is."
+    private fun speakText(textToSay: String) {
+        if (speechManager != null) {
+            try {
+                speechManager?.synthesize(textToSay)?.fail { error ->
+                    android.util.Log.e("CruzrApp", "Native voice failed: ${error.message}. Using fallback.")
+                    textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CruzrApp", "Native voice crashed. Using fallback.")
+                textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+            }
         } else {
-            "Let me show you where the $targetItem is."
+            textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+        }
+    }
+
+    private fun sendRawCoordinateCommand(x: Float, y: Float, theta: Float) {
+        val nav = navigationManager
+        if (nav == null) {
+            publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
+            return
+        }
+
+        isBusy = true
+        publishStatus("navigation_started", JSONObject().put("target_type", "raw_coords").put("x", x).put("y", y))
+        runOnUiThread { setStatus("Moving to raw coordinates $x, $y...") }
+
+        try {
+            val destination = Location.Builder(Point(x, y)).setRotation(theta).build()
+            val option = NavigationOption.Builder(destination)
+                .setTrackMode(false)
+                .setMaxSpeed(NAV_MAX_SPEED)
+                .setRetryCount(NAV_RETRY_COUNT)
+                .setRetryInterval(NAV_RETRY_INTERVAL)
+                .build()
+
+            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            })
+
+            Handler(Looper.getMainLooper()).postDelayed(Runnable {
+                nav.navigate(option)
+                    .done {
+                        isBusy = false
+                        publishStatus("navigation_arrived", JSONObject().put("target_type", "raw_coords"))
+                        runOnUiThread { setStatus("Arrived at coordinates!") }
+                    }
+                    .fail { error ->
+                        val errCode = error?.code ?: -1
+                        val errMsg = error?.message ?: "unknown"
+                        isBusy = false
+                        publishStatus("navigation_failed", JSONObject()
+                            .put("error_code", errCode)
+                            .put("error_message", errMsg))
+                        runOnUiThread { setStatus("Coord Navigation jammed: $errMsg") }
+                    }
+            }, 500L)
+
+        } catch (e: Exception) {
+            android.util.Log.e("CruzrApp", "CRASH routing raw coords: ${e.message}")
+        }
+    }
+
+    private fun sendRobotNavigationCommand(targetItem: String, reason: String, skipIntroSpeech: Boolean = false) {
+        val nav = navigationManager
+        if (nav == null) {
+            runOnUiThread { setStatus("Navigation Manager offline.") }
+            publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
+            return
+        }
+
+        isBusy = true
+        publishStatus("navigation_started", JSONObject().put("target", targetItem))
+
+        if (!skipIntroSpeech) {
+            val textToSpeak = if (reason.isNotBlank()) {
+                "I found a great match! $reason. Let me show you where it is."
+            } else {
+                "Let me show you where the $targetItem is."
+            }
+            speakText(textToSpeak)
+        }
+
+        runOnUiThread { setStatus("Checking spatial location...") }
+
+        if (!nav.isSelfLocated) {
+            runOnUiThread { setStatus("Locating self in the room...") }
+            publishStatus("localization_started", null)
+
+            nav.locateSelf().done {
+                runOnUiThread { Toast.makeText(this@MainActivity, "Localized!", Toast.LENGTH_SHORT).show() }
+                publishStatus("localization_success", null)
+                findMarkerAndNavigate(nav, targetItem)
+            }.fail { error ->
+                val errMsg = error?.message ?: "unknown"
+                isBusy = false
+                runOnUiThread { setStatus("Failed to localize: $errMsg") }
+                publishStatus("localization_failed", JSONObject().put("error_message", errMsg))
+            }
+        } else {
+            findMarkerAndNavigate(nav, targetItem)
+        }
+    }
+
+    private fun findMarkerAndNavigate(nav: NavigationManager, targetItem: String) {
+        runOnUiThread { setStatus("Loading internal map...") }
+
+        nav.currentNavMap.done { navMap ->
+            val scale = navMap.scale
+            android.util.Log.d("CruzrNav", "=== MAP SCALE = $scale ===")
+
+            try {
+                val here = nav.currentLocation
+                android.util.Log.d("CruzrNav", "CURRENT LOCATION (meters): x=${here?.position?.x} y=${here?.position?.y} rot=${here?.rotation}")
+            } catch (e: Exception) {
+                android.util.Log.w("CruzrNav", "getCurrentLocation threw: ${e.message}")
+            }
+
+            val polys = navMap.polylineList
+            android.util.Log.d("CruzrNav", "=== MAP POLYLINES (${polys?.size ?: 0}) ===")
+            polys?.forEachIndexed { i, poly ->
+                android.util.Log.d("CruzrNav", " Poly[$i] name='${poly.name}' points=${poly.locationList?.size ?: 0}")
+                poly.locationList?.forEachIndexed { j, loc ->
+                    android.util.Log.d("CruzrNav", " [$j] x=${loc.position?.x} y=${loc.position?.y}")
+                }
+            }
+            android.util.Log.d("CruzrNav", "=== MAP MARKERS (${navMap.markerList?.size ?: 0}) ===")
+            navMap.markerList?.forEach { m ->
+                android.util.Log.d("CruzrNav", " Marker '${m.title}' x=${m.position?.x} y=${m.position?.y}")
+            }
+
+            val markers = navMap.markerList
+
+            if (markers.isNullOrEmpty()) {
+                isBusy = false
+                runOnUiThread { setStatus("Map has no markers.") }
+                publishStatus("marker_not_found", JSONObject().put("target", targetItem).put("reason", "map has no markers"))
+                return@done
+            }
+
+            val targetMarker = markers.find { it.title.equals(targetItem, ignoreCase = true) }
+
+            if (targetMarker == null) {
+                isBusy = false
+                runOnUiThread { setStatus("Marker '$targetItem' not found on map.") }
+                publishStatus("marker_not_found", JSONObject().put("target", targetItem))
+                return@done
+            }
+
+            android.util.Log.d("CruzrNav", "Marker found: ${targetMarker.title} @ ${targetMarker.position}")
+
+            try {
+                val option = NavigationOption.Builder(targetMarker)
+                    .setTrackMode(TRACK_MODE)
+                    .setMaxSpeed(NAV_MAX_SPEED)
+                    .setRetryCount(NAV_RETRY_COUNT)
+                    .setRetryInterval(NAV_RETRY_INTERVAL)
+                    .build()
+
+                android.util.Log.d("CruzrNav", "Navigating (trackMode=$TRACK_MODE) to ${targetMarker.title}")
+                runOnUiThread { setStatus("Navigating to $targetItem...") }
+
+                startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                })
+
+                Handler(Looper.getMainLooper()).postDelayed(Runnable {
+                    nav.navigate(option)
+                        .done {
+                            android.util.Log.d("CruzrNav", "Navigation DONE - arrived!")
+                            isBusy = false
+                            publishStatus("navigation_arrived", JSONObject().put("target", targetItem))
+                            runOnUiThread {
+                                setStatus("Arrived at $targetItem!")
+                                speakText("Here is the item you are looking for.")
+                            }
+                        }
+                        .progress { p ->
+                            android.util.Log.d("CruzrNav", "Nav progress: $p")
+                            publishStatus("navigation_progress", JSONObject().put("target", targetItem).put("data", p.toString()))
+                        }
+                        .fail { error ->
+                            val errCode = error?.code ?: -1
+                            val errMsg = error?.message ?: "unknown"
+                            android.util.Log.e("CruzrNav", "Navigation FAILED: $errMsg / code: $errCode")
+                            isBusy = false
+                            publishStatus("navigation_failed", JSONObject()
+                                .put("target", targetItem)
+                                .put("error_code", errCode)
+                                .put("error_message", errMsg))
+                            runOnUiThread { setStatus("Navigation jammed: $errMsg (code $errCode)") }
+                        }
+                }, 500L)
+
+            } catch (e: Exception) {
+                isBusy = false
+                android.util.Log.e("CruzrNav", "CRASH building option or navigating: ${e.message}")
+                runOnUiThread { setStatus("Nav crash: ${e.message}") }
+            }
+
+        }.fail { error ->
+            val errMsg = error?.message ?: "unknown"
+            isBusy = false
+            runOnUiThread { setStatus("Map access failed: $errMsg") }
+            publishStatus("error", JSONObject().put("message", "Map access failed: $errMsg"))
+        }
+    }
+
+    /**
+     * Navigate to the entrance position.  On arrival, start LIDAR human detection —
+     * the actual greeting (speak + gesture) fires when the sensor detects the customer.
+     */
+    private fun sendGreetCommand(x: Float, y: Float, theta: Float) {
+        val nav = navigationManager ?: run {
+            publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
+            isBusy = false
+            return
+        }
+
+        isBusy = true
+        isAtEntrance = false
+        publishStatus("greeting_started", JSONObject().put("x", x).put("y", y))
+
+        try {
+            val destination = Location.Builder(Point(x, y)).setRotation(theta).build()
+            val option = NavigationOption.Builder(destination)
+                .setTrackMode(TRACK_MODE)
+                .setMaxSpeed(NAV_MAX_SPEED)
+                .setRetryCount(NAV_RETRY_COUNT)
+                .setRetryInterval(NAV_RETRY_INTERVAL)
+                .build()
+
+            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            })
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                nav.navigate(option)
+                    .done {
+                        runOnUiThread { setStatus("At entrance — LIDAR watching for customer…") }
+                        publishStatus("greeting_at_entrance", null)
+                        // Switch to LIDAR detection mode: greet fires when person arrives
+                        isAtEntrance = true
+                        startHumanDetection()
+                    }
+                    .fail { error ->
+                        val errMsg = error?.message ?: "unknown"
+                        publishStatus("navigation_failed", JSONObject()
+                            .put("context", "greet")
+                            .put("error_message", errMsg))
+                        runOnUiThread { setStatus("Greeting nav failed: $errMsg") }
+                        isBusy = false
+                    }
+            }, 500L)
+
+        } catch (e: Exception) {
+            android.util.Log.e("CruzrApp", "sendGreetCommand crash: ${e.message}")
+            isBusy = false
+        }
+    }
+
+    // ── LIDAR human detection ─────────────────────────────────────────────────
+
+    private fun startHumanDetection() {
+        val sm = cruzrSensorManager ?: run {
+            android.util.Log.w("CruzrApp", "SensorManager not available — LIDAR detection disabled")
+            // Fall back: greet immediately without waiting for detection
+            onPersonDetectedByLidar()
+            return
+        }
+        try {
+            humanDetectListener = object : SensorListener {
+                override fun onSensorChanged(device: SensorDevice, event: SensorEvent) {
+                    if (isAtEntrance) onPersonDetectedByLidar()
+                }
+            }
+            sm.registerListener("human_detect", humanDetectListener!!)
+            android.util.Log.i("CruzrApp", "LIDAR human detection active")
+        } catch (e: Exception) {
+            android.util.Log.e("CruzrApp", "registerListener failed: ${e.message}")
+            onPersonDetectedByLidar()  // fall back to immediate greet
+        }
+    }
+
+    private fun stopHumanDetection() {
+        val sm = cruzrSensorManager ?: return
+        val listener = humanDetectListener ?: return
+        try {
+            sm.unregisterListener(listener)
+        } catch (e: Exception) {
+            android.util.Log.w("CruzrApp", "unregisterListener failed: ${e.message}")
+        }
+        humanDetectListener = null
+    }
+
+    /**
+     * Called by the LIDAR sensor when a person enters the robot's detection range.
+     * Fires the full greeting: speak welcome, wave, then signal ready for scan.
+     */
+    private fun onPersonDetectedByLidar() {
+        if (!isAtEntrance) return       // guard against duplicate fires
+        isAtEntrance = false
+        stopHumanDetection()
+
+        runOnUiThread { setStatus("Customer detected! Greeting…") }
+        publishStatus("person_detected", JSONObject().put("source", "lidar"))
+
+        speakText(pendingGreetText)
+
+        // Start gesture 1.5 s after speech so they overlap naturally
+        Handler(Looper.getMainLooper()).postDelayed({
+            doGesture(pendingGreetGesture)
+        }, 1500L)
+
+        // Release busy flag after ~6 s so a new customer can trigger the flow again
+        Handler(Looper.getMainLooper()).postDelayed({
+            isBusy = false
+            publishStatus("greeting_complete", JSONObject().put("ready_for_scan", true))
+            runOnUiThread { setStatus("Greeting done — ready for customer scan") }
+        }, 6000L)
+    }
+
+    // ── Gestures ──────────────────────────────────────────────────────────────
+
+    /**
+     * Play a named body gesture using MotionManager.
+     *
+     * Action IDs confirmed from cruzr-sdk-2.8.0.jar ActionUris class:
+     *   "wave"       → "swingarm"    (swing/wave arms)
+     *   "raise"      → "zhanggao"    (raise arms high — celebratory)
+     *   "handshake"  → "shankhand"   (extend arm for handshake)
+     *   "guide_left" → "guideleft"   (point/guide left — use when sending to a stand)
+     *   "guide_right"→ "guideright"  (point/guide right)
+     *   "applause"   → "applause"
+     *   "surprise"   → "surprise"
+     *   "goodbye"    → "goodbye"
+     *   "searching"  → "searching"   (looking around gesture)
+     *   "cute"       → "cute"
+     */
+    private fun doGesture(gestureName: String) {
+        val mm = motionManager ?: run {
+            android.util.Log.w("CruzrApp", "MotionManager offline — gesture '$gestureName' skipped")
+            publishStatus("gesture_failed", JSONObject()
+                .put("gesture", gestureName).put("reason", "MotionManager offline"))
+            return
+        }
+
+        val actionId = when (gestureName.lowercase().replace("-", "_")) {
+            "wave"        -> "swingarm"
+            "raise"       -> "zhanggao"
+            "handshake"   -> "shankhand"
+            "guide_left"  -> "guideleft"
+            "guide_right" -> "guideright"
+            "applause"    -> "applause"
+            "surprise"    -> "surprise"
+            "goodbye"     -> "goodbye"
+            "searching"   -> "searching"
+            "cute"        -> "cute"
+            "reset"       -> "RESET"
+            else          -> gestureName   // pass through raw action IDs
         }
 
         try {
-            // 1. Trigger Speech
-            speechManager?.synthesize(textToSpeak)
-
-            // 2. Fetch the current map to find the destination
-            navigationManager?.currentNavMap?.done { navMap ->
-
-                // Get the list of markers using the exact method from the decompiled NavMap class
-                val markers = navMap.markerList
-
-                if (markers != null) {
-                    // Search the list using the Marker's TITLE property
-                    val targetMarker = markers.find { it.title.equals(targetItem, ignoreCase = true) }
-
-                    if (targetMarker != null) {
-                        // Because Marker extends Location, we pass it directly to navigate!
-                        navigationManager?.navigate(targetMarker)
-
-                        runOnUiThread {
-                            toast("Cruzr is moving to $targetItem!")
-                            setStatus("Navigating to location...")
-                        }
-                    } else {
-                        runOnUiThread {
-                            toast("'$targetItem' is not mapped on the robot.")
-                            setStatus("Target missing from map.")
-                        }
-                    }
+            val uri    = Uri.parse("action://ubtrobot/$actionId")
+            val option = PerformingOption.Builder(uri).build()
+            mm.performAction(option)
+                .done {
+                    publishStatus("gesture_performed", JSONObject().put("gesture", gestureName))
                 }
-
-            }?.fail {
-                runOnUiThread {
-                    toast("Could not access the robot's map.")
-                    setStatus("Map access failed.")
+                .fail { error ->
+                    android.util.Log.e("CruzrApp", "Gesture '$gestureName' failed: ${error?.message}")
+                    publishStatus("gesture_failed", JSONObject()
+                        .put("gesture", gestureName)
+                        .put("error", error?.message ?: "unknown"))
                 }
-            }
-
-        } catch (exc: Exception) {
-            runOnUiThread {
-                toast("Hardware execution failure: ${exc.message}")
-                setStatus("Manager failed.")
-            }
+        } catch (e: Exception) {
+            android.util.Log.e("CruzrApp", "doGesture crash for '$gestureName': ${e.message}")
         }
     }
 
     override fun onDestroy() {
+        isAtEntrance = false
+        stopHumanDetection()
+        try { mqttClient?.disconnect() } catch (_: Exception) {}
         if (::textToSpeech.isInitialized) {
             textToSpeech.stop()
             textToSpeech.shutdown()

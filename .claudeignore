@@ -1,0 +1,22 @@
+# Build artifacts & IDE
+build/
+.gradle/
+.idea/
+*.iml
+local.properties
+
+# APKs and the compileOnly SDK (large, not needed for context)
+*.apk
+*.aab
+**/libs/cruzr-sdk-*.jar
+
+# Secrets — DO NOT let the assistant read these
+*.keystore
+*.jks
+secrets.properties
+**/credentials*
+.env
+.env.*
+
+# Logs
+*.log

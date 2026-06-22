@@ -17,6 +17,7 @@ Run:
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import shutil
 import sqlite3
@@ -46,6 +47,10 @@ from src.api.schemas import (
     RecommendRequest,
     RecommendResponse,
     RegisterRequest,
+    RobotNavigateByCategoryRequest,
+    RobotNavigateRequest,
+    RobotNavigateResponse,
+    RobotStatusResponse,
     SessionResponse,
     SessionStartRequest,
 )
@@ -121,6 +126,29 @@ cameras_by_persona: dict[str, CameraStream] = {}
 # Multi-agent recommendation system (lazy: None until first /api/recommend call
 # or until XMPP broker is reachable at startup)
 rec_system = None
+
+# Cruzr robot bridge — None until connect() succeeds at startup
+robot_bridge = None
+_COORDS_FILE          = PROJECT_ROOT / "robotics" / "coordinates.json"
+_CATEGORY_LOCS_FILE   = PROJECT_ROOT / "robotics" / "category_locations.json"
+_ENTRANCE_LOCATION    = "entrance"   # must be surveyed; robot goes here on door trigger
+_GREETING_TEXT        = "Welcome! I'm Cruzr, your personal fashion assistant. Let me help you find the perfect outfit today."
+_GREETING_GESTURE     = "wave"
+
+
+def _load_robot_coords() -> dict:
+    if _COORDS_FILE.exists():
+        with open(_COORDS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _load_category_locations() -> dict:
+    if _CATEGORY_LOCS_FILE.exists():
+        with open(_CATEGORY_LOCS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+            return {k: v for k, v in data.items() if not k.startswith("_")}
+    return {}
 
 
 def _find_ffmpeg_exe() -> Optional[str]:
@@ -282,7 +310,7 @@ def _preload_search_embeddings_sync() -> Optional[str]:
 @app.on_event("startup")
 async def startup():
     global detector, recommender, camera, whisper_model, search_service
-    global detectors_by_persona, cameras_by_persona, pose_analyzer
+    global detectors_by_persona, cameras_by_persona, pose_analyzer, robot_bridge
 
     weights = WEIGHTS_PATH
     print(f"\n🚀  Loading model from: {weights}")
@@ -370,12 +398,28 @@ async def startup():
             rec_system = None
 
     asyncio.create_task(_start_rec_system())
+
+    # ── Cruzr robot bridge ────────────────────────────────────────────────
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(PROJECT_ROOT / "robotics"))
+        from cruzr_bridge import CruzrBridge
+        robot_bridge = CruzrBridge()
+        if robot_bridge.connect(timeout=8.0):
+            print("🤖  Cruzr robot bridge connected")
+        else:
+            print("⚠️  Cruzr robot bridge could not connect — /api/robot/* endpoints will return 503")
+            robot_bridge = None
+    except Exception as exc:
+        print(f"⚠️  Cruzr robot bridge unavailable: {exc}")
+        robot_bridge = None
+
     print("✅  API ready\n")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global cameras_by_persona, rec_system
+    global cameras_by_persona, rec_system, robot_bridge
     for camera_instance in cameras_by_persona.values():
         camera_instance.shutdown()
     if rec_system is not None:
@@ -383,6 +427,11 @@ async def shutdown():
             await rec_system.stop()
         except Exception as exc:
             print(f"⚠️  Error stopping multi-agent system: {exc}")
+    if robot_bridge is not None:
+        try:
+            robot_bridge.disconnect()
+        except Exception as exc:
+            print(f"⚠️  Error disconnecting robot bridge: {exc}")
 
 
 # ── Static / proxy routes ───────────────────────────────────────────────────
@@ -1149,6 +1198,151 @@ async def recommend(payload: RecommendRequest):
         )
 
     return RecommendResponse(recommendations=results)
+
+
+# ── Robot navigation endpoints ────────────────────────────────────────────────
+
+def _robot_unavailable():
+    raise HTTPException(
+        status_code=503,
+        detail="Robot bridge is not connected. Check that the Cruzr is online and the MQTT broker is reachable.",
+    )
+
+
+@app.get("/api/robot/status", response_model=RobotStatusResponse)
+async def robot_status():
+    """Returns bridge connection state, known locations, and category→location map."""
+    coords = _load_robot_coords()
+    cat_map = _load_category_locations()
+    return RobotStatusResponse(
+        connected=robot_bridge is not None and robot_bridge.connected,
+        known_locations=list(coords.keys()),
+        category_map=cat_map,
+    )
+
+
+@app.post("/api/robot/navigate", response_model=RobotNavigateResponse)
+async def robot_navigate(payload: RobotNavigateRequest):
+    """
+    Send the robot to a named surveyed location.
+    Example: {"target": "t-shirt stand"}
+    The location must exist in coordinates.json (use survey_tool.py to add it).
+    """
+    if robot_bridge is None or not robot_bridge.connected:
+        _robot_unavailable()
+
+    coords = _load_robot_coords()
+    if payload.target not in coords:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{payload.target}' not found. Known: {list(coords.keys())}",
+        )
+
+    loc = coords[payload.target]
+    x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+    ok = await run_in_threadpool(robot_bridge.navigate_to_coords, x, y, theta)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Robot bridge failed to publish the command.")
+    return RobotNavigateResponse(status="sent", target=payload.target, x=x, y=y, theta=theta)
+
+
+@app.post("/api/robot/navigate-by-category", response_model=RobotNavigateResponse)
+async def robot_navigate_by_category(payload: RobotNavigateByCategoryRequest):
+    """
+    Send the robot to the stand for a detected clothing category.
+    The AI agents call this after a recommendation round with the top item's type.
+    Example: {"category": "short_sleeve_top"} → robot goes to "t-shirt stand"
+    """
+    if robot_bridge is None or not robot_bridge.connected:
+        _robot_unavailable()
+
+    cat_map = _load_category_locations()
+    target = cat_map.get(payload.category.lower())
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No location mapped for category '{payload.category}'. Edit robotics/category_locations.json.",
+        )
+
+    coords = _load_robot_coords()
+    if target not in coords:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Category '{payload.category}' maps to '{target}' but that location hasn't been surveyed yet.",
+        )
+
+    loc = coords[target]
+    x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+    ok = await run_in_threadpool(robot_bridge.navigate_to_coords, x, y, theta)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Robot bridge failed to publish the command.")
+    return RobotNavigateResponse(status="sent", target=target, x=x, y=y, theta=theta,
+                                 message=f"Navigating to '{target}' for category '{payload.category}'")
+
+
+@app.post("/api/robot/sensor/door")
+async def robot_door_sensor(direction: str = "entering"):
+    """
+    Webhook for the entrance door sensor (2-sensor directional setup).
+
+    Send direction="entering" when a customer walks *into* the store — the robot
+    navigates to the entrance, waits at the door with LIDAR active, then greets the
+    customer when detected.  direction="leaving" is silently ignored.
+
+    The robot tracks its own busy state: if it is already serving a customer the
+    greet command is ignored on the Android side and a robot_busy status is published.
+
+    Trigger options:
+      - Two ultrasonic/IR sensors on a Raspberry Pi → POST with direction param
+      - Manual button/tablet during demos → omit direction (defaults to "entering")
+      - Android app UI override
+
+    Requires an 'entrance' location to be surveyed in coordinates.json.
+    """
+    if direction.lower() not in ("entering", "leaving"):
+        raise HTTPException(
+            status_code=400,
+            detail="direction must be 'entering' or 'leaving'",
+        )
+    if direction.lower() == "leaving":
+        return {"status": "ignored", "direction": "leaving", "reason": "person leaving — no action taken"}
+
+    if robot_bridge is None or not robot_bridge.connected:
+        _robot_unavailable()
+
+    coords = _load_robot_coords()
+    if _ENTRANCE_LOCATION not in coords:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Entrance position not surveyed yet. Run survey_tool.py and save a location named '{_ENTRANCE_LOCATION}'.",
+        )
+
+    loc = coords[_ENTRANCE_LOCATION]
+    x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+    ok = await run_in_threadpool(
+        robot_bridge.greet, x, y, theta, _GREETING_TEXT, _GREETING_GESTURE
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Robot bridge failed to publish greet command.")
+    return {"status": "sent", "direction": "entering", "sequence": ["navigate_to_entrance", "lidar_detect_person", "speak", "gesture"]}
+
+
+@app.post("/api/robot/speak")
+async def robot_speak(text: str):
+    """Make the robot say something via TTS."""
+    if robot_bridge is None or not robot_bridge.connected:
+        _robot_unavailable()
+    ok = await run_in_threadpool(robot_bridge.speak, text)
+    return {"status": "sent" if ok else "error"}
+
+
+@app.post("/api/robot/gesture")
+async def robot_gesture(name: str = "wave"):
+    """Trigger a body gesture without navigation (wave, bow, nod, …)."""
+    if robot_bridge is None or not robot_bridge.connected:
+        _robot_unavailable()
+    ok = await run_in_threadpool(robot_bridge.gesture, name)
+    return {"status": "sent" if ok else "error", "gesture": name}
 
 
 # ── WebSocket camera endpoint ─────────────────────────────────────────────────
