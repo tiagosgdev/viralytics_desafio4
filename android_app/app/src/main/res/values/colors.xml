@@ -12,4 +12,6 @@
     <color name="brand_border">#D9CDBA</color>
     <color name="brand_match_bg">#F1E4CF</color>
     <color name="brand_match_border">#9F7B49</color>
+    <color name="brand_green">#2D8A64</color>
+    <color name="brand_red">#B14F44</color>
 </resources>

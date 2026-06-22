@@ -7,7 +7,7 @@ Thumbs.db
 desktop.ini
 
 # =============================================================================
-# IDEs
+# IDEs & AI tools
 # =============================================================================
 
 # JetBrains (PyCharm, IntelliJ, etc.)
@@ -15,6 +15,9 @@ desktop.ini
 
 # Visual Studio Code
 .vscode/
+
+# Claude Code (project-level settings / memory)
+.claude/
 
 # Vim swap files
 *.swp
@@ -306,4 +309,8 @@ multi_agent/experiments/reports/
 # Android Gradle lock/probe files (transient build state)
 android_app/.gradle/9.0.0/checksums/checksums.lock
 android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
+<<<<<<< HEAD
 android_app/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+=======
+android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
+>>>>>>> 85861c6 (feat: Android build)

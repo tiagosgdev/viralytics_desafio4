@@ -1,0 +1,604 @@
+/* ── Header, main grid, panel, shared UI controls ────────────────────────── */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem 1.5rem;
+  backdrop-filter: blur(12px);
+  background: rgba(247, 243, 235, 0.7);
+  border-bottom: 1px solid var(--border);
+}
+
+body[data-persona='cruella'] header {
+  background: rgba(20, 10, 13, 0.78);
+}
+
+.logo {
+  font-family: var(--font-serif);
+  font-size: clamp(1.7rem, 2vw, 2.2rem);
+  letter-spacing: -0.03em;
+}
+
+.logo span {
+  margin-left: 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hdr-right {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.persona-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.login-btn,
+.persona-reset-btn {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text);
+  padding: 0.72rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.login-btn:hover,
+.login-btn:focus-visible,
+.persona-reset-btn:hover,
+.persona-reset-btn:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-persona='cruella'] .login-btn {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.view-toggle {
+  display: inline-flex;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+body[data-persona='cruella'] .view-toggle,
+body[data-persona='cruella'] .pill,
+body[data-persona='cruella'] .persona-chip,
+body[data-persona='cruella'] .persona-reset-btn {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+body[data-persona='cruella'] .logo,
+body[data-persona='cruella'] .logo span,
+body[data-persona='cruella'] .persona-chip,
+body[data-persona='cruella'] .persona-reset-btn,
+body[data-persona='cruella'] .pill,
+body[data-persona='cruella'] .plbl,
+body[data-persona='cruella'] .phase-lbl,
+body[data-persona='cruella'] .conf-row label,
+body[data-persona='cruella'] .conf-val,
+body[data-persona='cruella'] .notag,
+body[data-persona='cruella'] .tconf,
+body[data-persona='cruella'] .ccat,
+body[data-persona='cruella'] .cwhy,
+body[data-persona='cruella'] .cname,
+body[data-persona='cruella'] .ph,
+body[data-persona='cruella'] .chat-welcome-sub,
+body[data-persona='cruella'] .rec-modal-header p,
+body[data-persona='cruella'] .rec-modal-name,
+body[data-persona='cruella'] .rec-modal-category,
+body[data-persona='cruella'] .rec-modal-price,
+body[data-persona='cruella'] .rec-detail-category,
+body[data-persona='cruella'] .rec-detail-label,
+body[data-persona='cruella'] .rec-detail-row span,
+body[data-persona='cruella'] .modal-close,
+body[data-persona='cruella'] .recs-scroll-btn,
+body[data-persona='cruella'] .abtn-retry,
+body[data-persona='cruella'] .idle-sub,
+body[data-persona='cruella'] .idle-icon {
+  color: #f8ece8;
+}
+
+body[data-persona='cruella'] .chat-welcome-title,
+body[data-persona='cruella'] .idle-title,
+body[data-persona='cruella'] .rec-detail-copy h3,
+body[data-persona='cruella'] .rec-detail-row strong {
+  color: #fff7f5;
+}
+
+.vtab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.7rem 1rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+
+.vtab:hover,
+.vtab:focus-visible {
+  color: var(--text);
+}
+
+.vtab.active {
+  background: var(--text);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-persona='cruella'] .vtab.active {
+  background: linear-gradient(135deg, #6f131a, #b42a32);
+  color: #fff6f5;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: rgba(111, 98, 81, 0.35);
+}
+
+.dot.live {
+  background: var(--green);
+  box-shadow: 0 0 0.75rem rgba(45, 138, 100, 0.45);
+}
+
+.dot.scanning {
+  background: var(--accent);
+  box-shadow: 0 0 0.75rem rgba(159, 123, 73, 0.45);
+  animation: pulse 1s infinite ease-in-out;
+}
+
+.dot.error {
+  background: var(--red);
+  box-shadow: 0 0 0.75rem rgba(177, 79, 68, 0.35);
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24rem;
+  align-items: start;
+  overflow: visible;
+}
+
+.cam,
+.chat-view,
+.panel {
+  position: relative;
+}
+
+.cam,
+.chat-view {
+  overflow: hidden;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 253, 248, 0.7);
+  overflow: visible;
+}
+
+body[data-persona='cruella'] .panel {
+  background: rgba(26, 12, 15, 0.9);
+}
+
+.psec,
+.recs-hdr {
+  padding: 1.3rem 1.35rem;
+}
+
+.psec {
+  border-bottom: 1px solid var(--border);
+}
+
+.plbl {
+  margin-bottom: 1rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.steps {
+  display: flex;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.step {
+  flex: 1;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: rgba(111, 98, 81, 0.14);
+}
+
+.step.active {
+  background: var(--accent);
+  animation: pulse 1s infinite ease-in-out;
+}
+
+.step.done {
+  background: var(--green);
+}
+
+.phase-lbl {
+  margin-bottom: 1rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.phase-lbl em {
+  color: var(--accent-strong);
+  font-style: normal;
+}
+
+#btn-start,
+.abtn {
+  border: 0;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#btn-start {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  background: var(--text);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-persona='cruella'] #btn-start {
+  background: linear-gradient(135deg, #7d171d, #c13740);
+  color: #fff7f6;
+}
+
+#btn-start:hover,
+.abtn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+}
+
+#btn-start:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.actions {
+  display: none;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.actions.show {
+  display: flex;
+}
+
+.abtn {
+  flex: 1;
+  padding: 0.8rem 0.9rem;
+}
+
+.abtn-retry {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+body[data-persona='cruella'] .abtn-retry {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.abtn-more {
+  background: rgba(159, 123, 73, 0.12);
+  color: var(--accent-strong);
+  border: 1px solid rgba(159, 123, 73, 0.15);
+}
+
+body[data-persona='cruella'] .abtn-more {
+  background: rgba(197, 66, 66, 0.14);
+  border-color: rgba(255, 113, 113, 0.18);
+}
+
+.conf-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.conf-row label,
+.conf-val {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.conf-row input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.conf-row input[type='number'] {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  padding: 0.3rem 0.5rem;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+body[data-persona='cruella'] .conf-row input[type='number'] {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.conf-row input[type='number']::-webkit-inner-spin-button,
+.conf-row input[type='number']::-webkit-outer-spin-button {
+  opacity: 0.4;
+}
+
+.conf-row input[type='number']:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(159, 123, 73, 0.12);
+}
+
+body[data-persona='cruella'] .conf-row input[type='number']:focus {
+  box-shadow: 0 0 0 3px rgba(197, 66, 66, 0.18);
+}
+
+/* ── Auth modal ─────────────────────────────────────────────────────────── */
+.auth-modal {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(56rem, calc(100vw - 2rem));
+  max-height: min(90vh, 48rem);
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(255, 253, 248, 0.98), rgba(245, 238, 227, 0.98));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+body[data-persona='cruella'] .auth-modal {
+  background: linear-gradient(180deg, rgba(27, 12, 15, 0.98), rgba(20, 9, 12, 0.98));
+}
+
+.auth-container {
+  padding: 2.5rem 2rem;
+  overflow-y: auto;
+}
+
+.auth-header {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.auth-header h2 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-serif);
+  font-size: 2rem;
+  color: var(--text);
+}
+
+body[data-persona='cruella'] .auth-header h2 {
+  color: #fff7f5;
+}
+
+.auth-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.auth-form {
+  display: none;
+}
+
+.auth-form.active {
+  display: block;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+body[data-persona='cruella'] .form-group input {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8ece8;
+}
+
+body[data-persona='cruella'] .form-group input:focus {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #ff9090;
+}
+
+body[data-persona='cruella'] .form-group input::placeholder {
+  color: #d9bfbb;
+}
+
+.form-group input::placeholder {
+  color: var(--muted);
+}
+
+.auth-btn {
+  width: 100%;
+  padding: 1rem;
+  border: 0;
+  border-radius: 0.9rem;
+  background: var(--text);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-btn:hover,
+.auth-btn:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+body[data-persona='cruella'] .auth-btn {
+  background: linear-gradient(135deg, #7d171d, #c13740);
+  color: #fff7f6;
+}
+
+.auth-switch {
+  margin-top: 1.5rem;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.switch-btn {
+  background: none;
+  border: none;
+  color: var(--accent-strong);
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.2s ease;
+}
+
+.switch-btn:hover,
+.switch-btn:focus {
+  color: var(--accent);
+}
+
+body[data-persona='cruella'] .switch-btn {
+  color: #ff9090;
+}
+
+body[data-persona='cruella'] .switch-btn:hover {
+  color: #ffb3b3;
+}
+
+/* ── Generic modal shell ───────────────────────────────────────────────────── */
+.modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: none;
+}
+
+.modal-shell.open {
+  display: block;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(36, 27, 16, 0.42);
+  backdrop-filter: blur(8px);
+}
+
+body[data-persona='cruella'] .modal-backdrop {
+  background: rgba(3, 0, 0, 0.76);
+}
+
+.modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 2.8rem;
+  height: 2.8rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+}
+
+body[data-persona='cruella'] .modal-close {
+  background: rgba(255, 255, 255, 0.06);
+}

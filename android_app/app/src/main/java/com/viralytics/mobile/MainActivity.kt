@@ -21,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
@@ -29,14 +30,8 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.viralytics.mobile.databinding.ActivityMainBinding
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 
 // V2.8.0 UBTech Robot Imports
 import com.ubtrobot.Robot
@@ -63,8 +58,9 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private val httpClient = OkHttpClient()
+    private val viewModel: MainViewModel by viewModels()
 
+<<<<<<< HEAD
     // --- VERSION TRACKER ---
     private val APP_VERSION = "v2.3"
 
@@ -79,6 +75,8 @@ class MainActivity : AppCompatActivity() {
     private val currentRecommendations = mutableListOf<RecommendationItem>()
     private var currentConversationState: JSONObject? = null
     private var currentIncludeFilters: JSONObject? = null
+=======
+>>>>>>> 85861c6 (feat: Android build)
     private var currentTab: String = "scan"
 
     private var mqttClient: MqttClient? = null
@@ -112,11 +110,13 @@ class MainActivity : AppCompatActivity() {
                 setStatus("Capture cancelled.")
                 return@registerForActivityResult
             }
-            uploadScan(bitmap)
+            val baseUrl = normalizedBaseUrl() ?: return@registerForActivityResult
+            viewModel.uploadScan(bitmap, baseUrl, loadPersona())
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+<<<<<<< HEAD
 
         try {
             binding = ActivityMainBinding.inflate(layoutInflater)
@@ -159,6 +159,75 @@ class MainActivity : AppCompatActivity() {
                 binding.chatReplyText.text = "CRASH LOG:\n${e.stackTraceToString()}"
             } else {
                 Toast.makeText(this, "CRASH: ${e.message}", Toast.LENGTH_LONG).show()
+=======
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        initCruzrHardware()
+        startMqttListener()
+        observeViewModel()
+
+        setStatus("Ready.")
+        updateSessionLabel()
+        renderDetections()
+        renderRecommendations()
+        switchTab("scan")
+
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech.language = java.util.Locale.US
+                android.util.Log.d("CruzrApp", "TTS Ready!")
+            }
+        }
+
+        binding.captureButton.setOnClickListener {
+            if (loadPersona().isBlank()) { showPersonaDialog(); return@setOnClickListener }
+            launchCamera()
+        }
+        binding.sendChatButton.setOnClickListener { sendChat() }
+        binding.chatInput.setOnEditorActionListener { _, _, _ -> sendChat(); true }
+        binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
+        binding.recommendationsRightButton.setOnClickListener { scrollRecommendations(1) }
+        binding.connectionSettingsButton.setOnClickListener { showConnectionSettingsDialog() }
+        binding.switchPersonaButton?.setOnClickListener { showPersonaDialog() }
+        binding.tabScanButton.setOnClickListener { switchTab("scan") }
+        binding.tabRefineButton.setOnClickListener { switchTab("refine") }
+
+        val storedPersona = loadPersona()
+        if (storedPersona.isNotBlank()) {
+            applyPersona(storedPersona)
+        } else {
+            showPersonaDialog()
+        }
+    }
+
+    private fun observeViewModel() {
+        viewModel.events.observe(this) { event ->
+            when (event) {
+                is UiEvent.SetStatus -> setStatus(event.message)
+                is UiEvent.ShowToast -> toast(event.message)
+                is UiEvent.ScanComplete -> {
+                    renderDetections()
+                    renderRecommendations()
+                    updateAnnotatedImage(event.annotatedFrameBase64)
+                    switchTab("scan")
+                    updateSessionLabel("Vision-led")
+                    showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
+                }
+                is UiEvent.ScanError -> showChatReply(event.message)
+                is UiEvent.ChatComplete -> {
+                    renderRecommendations()
+                    switchTab("refine")
+                    val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
+                    updateSessionLabel(mode)
+                    showChatReply(event.reply)
+                    binding.chatInput.text?.clear()
+                }
+                is UiEvent.AgentRecsComplete -> {
+                    renderRecommendations()
+                }
+                is UiEvent.ChatError -> showChatReply(event.message)
+>>>>>>> 85861c6 (feat: Android build)
             }
         }
     }
@@ -171,142 +240,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun uploadScan(bitmap: Bitmap) {
-        setStatus("Uploading scan...")
-        val baseUrl = normalizedBaseUrl() ?: return
-        val jpegBytes = bitmap.toJpegBytes()
-
-        val imageBody = jpegBytes.toRequestBody("image/jpeg".toMediaType())
-        val multipartBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", "scan.jpg", imageBody)
-            .build()
-
-        val request = Request.Builder()
-            .url("$baseUrl/api/mobile/scan")
-            .post(multipartBody)
-            .build()
-
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        runOnUiThread {
-                            setStatus("Scan failed: HTTP ${response.code}")
-                            binding.chatReplyText.text = bodyText.ifBlank { "No error body returned." }
-                        }
-                        return@use
-                    }
-
-                    val json = JSONObject(bodyText)
-                    currentSessionId = json.optString("session_id").ifBlank { null }
-                    currentConversationState = null
-                    currentIncludeFilters = null
-                    updateDetections(json.optJSONArray("detections"))
-                    updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
-                    updateAnnotatedImage(json.optString("annotated_frame"))
-
-                    runOnUiThread {
-                        switchTab("scan")
-                        updateSessionLabel("Vision-led")
-                        binding.chatReplyText.text = "Scan complete. Tap a recommendation to inspect it, or refine with chat."
-                        setStatus("Scan complete.")
-                    }
-                }
-            } catch (exc: Exception) {
-                runOnUiThread {
-                    setStatus("Scan request failed.")
-                    binding.chatReplyText.text = exc.message ?: "Unknown error"
-                }
-            }
-        }.start()
-    }
-
     private fun sendChat() {
+        val persona = loadPersona()
+        if (persona.isBlank()) {
+            showPersonaDialog()
+            return
+        }
         val message = binding.chatInput.text.toString().trim()
         if (message.isBlank()) {
             toast("Enter a refinement message first.")
             return
         }
-
         val baseUrl = normalizedBaseUrl() ?: return
-        setStatus("Sending refinement...")
-
-        val payload = JSONObject().apply {
-            put("message", message)
-            put("session_id", currentSessionId)
-            put("replace_vision", binding.replaceVisionSwitch.isChecked)
-            put("detected_categories", JSONArray(detectedCategories))
-            put("history", JSONArray())
-            put("recommendations", JSONArray(currentRecommendations.map { it.toJson() }))
-            currentConversationState?.let { put("state", it) }
-        }
-
-        val request = Request.Builder()
-            .url("$baseUrl/api/chat")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        runOnUiThread {
-                            setStatus("Chat failed: HTTP ${response.code}")
-                            binding.chatReplyText.text = extractErrorMessage(bodyText)
-                        }
-                        return@use
-                    }
-
-                    val json = JSONObject(bodyText)
-                    currentSessionId = json.optString("session_id").ifBlank { currentSessionId }
-                    currentConversationState = json.optJSONObject("state")
-                    currentIncludeFilters = extractIncludeFilters(json)
-                    updateRecommendations(parseRecommendations(json.optJSONArray("results")))
-
-                    runOnUiThread {
-                        switchTab("refine")
-                        val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
-                        updateSessionLabel(mode)
-                        binding.chatReplyText.text = json.optString("reply", "No reply returned.")
-                        setStatus("Refinement complete.")
-                        binding.chatInput.text?.clear()
-                    }
-                }
-            } catch (exc: Exception) {
-                runOnUiThread {
-                    setStatus("Chat request failed.")
-                    binding.chatReplyText.text = exc.message ?: "Unknown error"
-                }
-            }
-        }.start()
-    }
-
-    private fun updateDetections(detections: JSONArray?) {
-        detectedCategories.clear()
-        if (detections != null) {
-            for (i in 0 until detections.length()) {
-                val det = detections.optJSONObject(i) ?: continue
-                val name = det.optString("class_name", "").trim()
-                if (name.isNotBlank()) {
-                    detectedCategories.add(name)
-                }
-            }
-        }
-        runOnUiThread { renderDetections() }
+        viewModel.sendChat(
+            message = message,
+            baseUrl = baseUrl,
+            replaceVision = binding.replaceVisionSwitch.isChecked,
+            persona = persona,
+        )
     }
 
     private fun renderDetections() {
         binding.detectionsGroup.removeAllViews()
-        if (detectedCategories.isEmpty()) {
+        val categories = viewModel.detectedCategories
+        if (categories.isEmpty()) {
             val chip = buildDetectionChip(getString(R.string.detections_empty))
             binding.detectionsGroup.addView(chip)
             return
         }
-
-        detectedCategories.distinct().forEach { category ->
+        categories.distinct().forEach { category ->
             binding.detectionsGroup.addView(buildDetectionChip(category.replace("_", " ")))
         }
     }
@@ -323,15 +285,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateRecommendations(items: List<RecommendationItem>) {
-        currentRecommendations.clear()
-        currentRecommendations.addAll(items)
-        runOnUiThread { renderRecommendations() }
-    }
-
     private fun renderRecommendations() {
+        val recommendations = viewModel.currentRecommendations
         binding.recommendationsStrip.removeAllViews()
-        val hasItems = currentRecommendations.isNotEmpty()
+        val hasItems = recommendations.isNotEmpty()
         binding.recommendationsEmptyText.isVisible = !hasItems
         binding.recommendationsScroll.isVisible = hasItems
         binding.recommendationsLeftButton.isEnabled = hasItems
@@ -339,7 +296,7 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasItems) return
 
-        currentRecommendations.forEachIndexed { index, item ->
+        recommendations.forEachIndexed { index, item ->
             binding.recommendationsStrip.addView(buildRecommendationCard(item, index))
         }
         binding.recommendationsScroll.post {
@@ -404,7 +361,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(14), 0, 0)
         })
 
-        if (index == currentRecommendations.lastIndex) {
+        if (index == viewModel.currentRecommendations.lastIndex) {
             (card.layoutParams as LinearLayout.LayoutParams).marginEnd = 0
         }
 
@@ -532,10 +489,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getActiveIncludeFilters(): JSONObject? {
-        val direct = extractIncludeFilters(currentIncludeFilters)
+        val direct = extractIncludeFilters(viewModel.currentIncludeFilters)
         if (direct != null && direct.length() > 0) return direct
 
-        val stateFilters = currentConversationState?.optJSONObject("filters")
+        val stateFilters = viewModel.currentConversationState?.optJSONObject("filters")
         val fallback = extractIncludeFilters(stateFilters)
         return if (fallback != null && fallback.length() > 0) fallback else null
     }
@@ -571,30 +528,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun parseRecommendations(items: JSONArray?): List<RecommendationItem> {
-        if (items == null) return emptyList()
-        return buildList {
-            for (i in 0 until items.length()) {
-                val item = items.optJSONObject(i) ?: continue
-                add(RecommendationItem.fromJson(item))
-            }
-        }
-    }
-
     private fun updateAnnotatedImage(base64Image: String?) {
-        if (base64Image.isNullOrBlank()) {
-            return
-        }
+        if (base64Image.isNullOrBlank()) return
         try {
             val bytes = Base64.decode(base64Image, Base64.DEFAULT)
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            runOnUiThread {
-                binding.resultImage.setImageBitmap(bitmap)
-            }
+            binding.resultImage.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
         } catch (_: IllegalArgumentException) {
-            runOnUiThread {
-                binding.resultImage.setImageBitmap(null)
-            }
+            binding.resultImage.setImageBitmap(null)
         }
     }
 
@@ -608,25 +548,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(message: String) {
+<<<<<<< HEAD
         binding.statusText.text = "[$APP_VERSION] Status: $message"
+=======
+        binding.statusText.text = message
+        val dotColor = when {
+            message.contains("error", ignoreCase = true) ||
+            message.contains("fail", ignoreCase = true) ||
+            message.contains("denied", ignoreCase = true) ||
+            message.contains("lost", ignoreCase = true) -> R.color.brand_red
+            message.contains("ready", ignoreCase = true) ||
+            message.contains("complete", ignoreCase = true) ||
+            message.contains("connected", ignoreCase = true) ||
+            message.contains("saved", ignoreCase = true) ||
+            message.contains("active", ignoreCase = true) -> R.color.brand_green
+            else -> R.color.brand_accent
+        }
+        binding.statusDot?.backgroundTintList = ContextCompat.getColorStateList(this, dotColor)
+>>>>>>> 85861c6 (feat: Android build)
     }
 
     private fun updateSessionLabel(mode: String? = null) {
-        val sessionId = currentSessionId
+        val sessionId = viewModel.currentSessionId
         binding.sessionText.text = if (sessionId.isNullOrBlank()) {
             getString(R.string.session_waiting)
         } else {
             val modeSuffix = if (mode.isNullOrBlank()) "" else " | $mode"
             "Session: ${sessionId.take(8)}$modeSuffix"
-        }
-    }
-
-    private fun extractErrorMessage(bodyText: String): String {
-        return try {
-            val json = JSONObject(bodyText)
-            json.optString("detail").ifBlank { bodyText.ifBlank { "No error body returned." } }
-        } catch (_: Exception) {
-            bodyText.ifBlank { "No error body returned." }
         }
     }
 
@@ -645,12 +593,6 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putString("server_url", url.trim())
             .apply()
-    }
-
-    private fun Bitmap.toJpegBytes(): ByteArray {
-        val stream = ByteArrayOutputStream()
-        compress(Bitmap.CompressFormat.JPEG, 90, stream)
-        return stream.toByteArray()
     }
 
     private fun showConnectionSettingsDialog() {
@@ -678,14 +620,21 @@ class MainActivity : AppCompatActivity() {
         styleTabButton(binding.tabRefineButton, selected = !showingScan)
     }
 
+    private fun showChatReply(message: String) {
+        binding.chatReplyText.text = message
+        binding.chatReplyText.isVisible = true
+    }
+
     private fun styleTabButton(button: MaterialButton, selected: Boolean) {
         if (selected) {
             button.setBackgroundColor(ContextCompat.getColor(this, R.color.brand_text))
             button.setTextColor(ContextCompat.getColor(this, R.color.white))
+            button.iconTint = ContextCompat.getColorStateList(this, R.color.white)
             button.strokeWidth = 0
         } else {
-            button.setBackgroundColor(ContextCompat.getColor(this, R.color.brand_surface))
+            button.setBackgroundColor(ContextCompat.getColor(this, R.color.brand_surface_soft))
             button.setTextColor(ContextCompat.getColor(this, R.color.brand_text))
+            button.iconTint = ContextCompat.getColorStateList(this, R.color.brand_text)
             button.strokeWidth = dp(1)
             button.setStrokeColorResource(R.color.brand_border)
         }
@@ -764,6 +713,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+<<<<<<< HEAD
 
     private fun startMqttListener() {
         // MQTT runs on a background thread — MqttClient.connect() is blocking and
@@ -798,15 +748,77 @@ class MainActivity : AppCompatActivity() {
             mqttClient?.setCallback(object : MqttCallback {
                 override fun connectionLost(cause: Throwable?) {
                     runOnUiThread { setStatus("MQTT lost — reconnecting…") }
+=======
+}
+
+    private fun loadPersona(): String =
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .getString("persona", "").orEmpty()
+
+    private fun savePersona(persona: String) {
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .edit().putString("persona", persona).apply()
+    }
+
+    private fun applyPersona(persona: String) {
+        viewModel.selectedPersona = persona
+        binding.personaChip?.text = if (persona == "edna") "EDNA active" else "CRUELLA active"
+        binding.personaRow?.isVisible = true
+    }
+
+    private fun showPersonaDialog() {
+        val options = arrayOf(
+            "Cruella — YOLO vision + LLM text + strict matching",
+            "Edna — FashionNet vision + custom text + flexible matching",
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.persona_dialog_title))
+            .setCancelable(loadPersona().isNotBlank())
+            .setItems(options) { _, which ->
+                val persona = if (which == 0) "cruella" else "edna"
+                savePersona(persona)
+                applyPersona(persona)
+                viewModel.clearSession()
+                renderDetections()
+                renderRecommendations()
+            }
+            .show()
+    }
+
+    private fun startMqttListener() {
+        // 1. Extract the raw IP address from your existing server URL string
+        val rawUrl = loadServerUrl().replace("http://", "").replace("https://", "")
+        val ipAddress = rawUrl.split(":")[0]
+
+        val brokerUri = "tcp://$ipAddress:1883"
+        val clientId = "Cruzr_Kotlin_App"
+
+        try {
+            mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+            val options = MqttConnectOptions().apply {
+                isCleanSession = true
+                connectionTimeout = 10
+            }
+
+            // 2. Define what happens when a network message arrives
+            mqttClient?.setCallback(object : MqttCallback {
+                override fun connectionLost(cause: Throwable?) {
+                    runOnUiThread { setStatus("MQTT Connection Lost: ${cause?.message}") }
+>>>>>>> 85861c6 (feat: Android build)
                 }
 
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
                     val payloadString = message?.toString() ?: return
 
+<<<<<<< HEAD
+=======
+                    // When a message arrives, parse the JSON
+>>>>>>> 85861c6 (feat: Android build)
                     try {
                         val json = JSONObject(payloadString)
                         val action = json.optString("action")
 
+<<<<<<< HEAD
                         when (action) {
                             "move_to_stand" -> {
                                 val target = json.optString("target", "unknown_rack")
@@ -912,6 +924,29 @@ class MainActivity : AppCompatActivity() {
                                 val name = json.optString("name", "wave")
                                 doGesture(name)
                             }
+=======
+                        // If the PC Python script says "move_to_stand"...
+                        if (action == "move_to_stand") {
+                            val targetRack = json.optString("target", "unknown_rack")
+
+                            runOnUiThread {
+                                toast("Received PC Command: Go to $targetRack!")
+                            }
+
+                            // Trigger your existing hardware function!
+                            sendRobotNavigationCommand(targetRack, "AI recommendation received via network")
+                        }
+                        // NEW LOGIC: If the script says "speak"...
+                        else if (action == "speak") {
+                            val textToSay = json.optString("text", "Meow meow")
+
+                            runOnUiThread {
+                                setStatus("Speaking: $textToSay")
+                            }
+
+                            // Trigger the text-to-speech engine
+                            textToSpeech.speak(textToSay, TextToSpeech.QUEUE_FLUSH, null, null)
+>>>>>>> 85861c6 (feat: Android build)
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -921,20 +956,34 @@ class MainActivity : AppCompatActivity() {
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
             })
 
+<<<<<<< HEAD
             mqttClient?.connect(options)
             mqttClient?.subscribe("cruzr/commands")
             runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
+=======
+            // 3. Connect and Subscribe to the topic
+            mqttClient?.connect(options)
+            mqttClient?.subscribe("cruzr/commands")
+            runOnUiThread { setStatus("MQTT Connected to $ipAddress") }
+>>>>>>> 85861c6 (feat: Android build)
 
         } catch (e: Exception) {
             runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
         }
+<<<<<<< HEAD
         }.start()
     }
 
+=======
+    }
+
+    // --- HARDWARE INTEGRATION METHODS ---
+>>>>>>> 85861c6 (feat: Android build)
     private fun initCruzrHardware() {
         setStatus("Initializing V2.8.0 Hardware Managers...")
 
         try {
+<<<<<<< HEAD
             navigationManager   = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
             speechManager       = Robot.globalContext().getSystemService("speech") as SpeechManager
             motionManager       = Robot.globalContext().getSystemService("motion") as? MotionManager
@@ -1339,17 +1388,89 @@ class MainActivity : AppCompatActivity() {
                 }
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "doGesture crash for '$gestureName': ${e.message}")
+=======
+            // Fetch the active managers from the Robot's internal OS context
+            navigationManager = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
+
+            // SpeechManager usually uses a similar constant or the string "speech"
+            speechManager = Robot.globalContext().getSystemService("speech") as SpeechManager
+
+            runOnUiThread { setStatus("Hardware Managers active.") }
+        } catch (e: Exception) {
+            runOnUiThread { setStatus("Manager Init Failed: ${e.message}") }
+        }
+    }
+
+    private fun sendRobotNavigationCommand(targetItem: String, reason: String) {
+        runOnUiThread { setStatus("Commanding hardware...") }
+
+        val textToSpeak = if (reason.isNotBlank()) {
+            "I found a great match! $reason. Let me show you where it is."
+        } else {
+            "Let me show you where the $targetItem is."
+        }
+
+        try {
+            // 1. Trigger Speech
+            speechManager?.synthesize(textToSpeak)
+
+            // 2. Fetch the current map to find the destination
+            navigationManager?.currentNavMap?.done { navMap ->
+
+                // Get the list of markers using the exact method from the decompiled NavMap class
+                val markers = navMap.markerList
+
+                if (markers != null) {
+                    // Search the list using the Marker's TITLE property
+                    val targetMarker = markers.find { it.title.equals(targetItem, ignoreCase = true) }
+
+                    if (targetMarker != null) {
+                        // Because Marker extends Location, we pass it directly to navigate!
+                        navigationManager?.navigate(targetMarker)
+
+                        runOnUiThread {
+                            toast("Cruzr is moving to $targetItem!")
+                            setStatus("Navigating to location...")
+                        }
+                    } else {
+                        runOnUiThread {
+                            toast("'$targetItem' is not mapped on the robot.")
+                            setStatus("Target missing from map.")
+                        }
+                    }
+                }
+
+            }?.fail {
+                runOnUiThread {
+                    toast("Could not access the robot's map.")
+                    setStatus("Map access failed.")
+                }
+            }
+
+        } catch (exc: Exception) {
+            runOnUiThread {
+                toast("Hardware execution failure: ${exc.message}")
+                setStatus("Manager failed.")
+            }
+>>>>>>> 85861c6 (feat: Android build)
         }
     }
 
     override fun onDestroy() {
+<<<<<<< HEAD
         isAtEntrance = false
         stopHumanDetection()
         try { mqttClient?.disconnect() } catch (_: Exception) {}
+=======
+>>>>>>> 85861c6 (feat: Android build)
         if (::textToSpeech.isInitialized) {
             textToSpeech.stop()
             textToSpeech.shutdown()
         }
         super.onDestroy()
     }
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 85861c6 (feat: Android build)
