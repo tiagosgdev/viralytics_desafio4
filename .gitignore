@@ -289,3 +289,9 @@ LNIAGIA/DB/SQLLite/*.db.bak*
 # SQLite WAL sidecars (clothing.db kept tracked; sidecars are transient)
 LNIAGIA/DB/SQLLite/*.db-wal
 LNIAGIA/DB/SQLLite/*.db-shm
+
+# Per-agent write-only memory stores (runtime artefacts; the shared
+# multi_agent/history.db stays tracked, these per-agent DBs do not).
+multi_agent/memory/*.db
+multi_agent/memory/*.db-wal
+multi_agent/memory/*.db-shm

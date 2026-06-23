@@ -28,6 +28,7 @@ from spade.template import Template
 
 from multi_agent import config
 from multi_agent.agents.base import BaseRecommenderAgent
+from multi_agent.memory import AgentMemory
 from multi_agent.messages import parse, make_propose, comm_log, CFP
 from multi_agent.strategies.registry import get_strategy
 
@@ -106,6 +107,10 @@ class StockScoreBehaviour(CyclicBehaviour):
             scores   = scores,
         )
         await self.send(propose)
+        # Write-only per-agent memory (course requirement; never read for
+        # decisions). Defensive: must not break the round if _memory is absent.
+        if mem := getattr(self.agent, "_memory", None):
+            mem.record(conv_id, context, scores)
         top3 = sorted(scores.items(), key=lambda x: -x[1])[:3]
         top_str = "  ".join(f"{k}={v:.2f}" for k, v in top3)
         comm_log("stock", "orchestrator", "PROPOSE", conv_id,
@@ -130,8 +135,8 @@ class StockRecommenderAgent(BaseRecommenderAgent):
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(StockScoreBehaviour(), template)
-        from multi_agent.history import history
-        summary = history.agent_context_summary("stock")
+        self._memory = AgentMemory("stock")
+        summary = self._memory.summary()
         if summary:
             logger.info(summary)
         logger.info("StockRecommenderAgent ready.")
