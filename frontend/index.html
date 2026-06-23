@@ -1758,6 +1758,18 @@ function extractApiError(data, fallback) {
   return fallback;
 }
 
+// Builds the running user request from the last few user-role chat turns.
+// Confirmation turns like "correct"/"yes" carry no new intent on their own, so the
+// agent round (analyze_intent) must see the accumulated request to keep emphasizing
+// the real preferences. Capped to the last 6 user turns to avoid unbounded growth.
+function accumulatedUserIntent() {
+  const userTurns = chatHistory
+    .filter((entry) => entry && entry.role === 'user' && typeof entry.content === 'string')
+    .map((entry) => entry.content.trim())
+    .filter((content) => content.length > 0);
+  return userTurns.slice(-6).join('. ');
+}
+
 function sendChat() {
   if (!selectedPersona) {
     return;
@@ -1807,9 +1819,10 @@ function sendChat() {
       if (Array.isArray(data.results) && data.results.length) renderRecs(data.results);
       // …then drive a multi-agent round with the user's message. On success it
       // overwrites the recs with agent recs; on broker-down it leaves them intact.
-      // Confidences persist from the last scan (1.0 if none yet); the message
-      // drives the importance weights via analyze_intent.
-      triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, text);
+      // Confidences persist from the last scan (1.0 if none yet); the accumulated
+      // user intent drives the importance weights via analyze_intent, so a
+      // confirmation turn ("correct") still carries the real request.
+      triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, accumulatedUserIntent());
     })
     .catch((error) => {
       removeTypingIndicator();
@@ -2010,9 +2023,10 @@ async function toggleVoice() {
                 chatHistory.push({ role: 'assistant', content: reply });
                 // Fast fallback: show embedding-search results immediately…
                 if (Array.isArray(chatData.results) && chatData.results.length) renderRecs(chatData.results);
-                // …then drive a multi-agent round with the transcribed message.
-                // Confidences persist from the last scan; the message drives importance.
-                triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, text);
+                // …then drive a multi-agent round with the accumulated user intent.
+                // Confidences persist from the last scan; the accumulated request
+                // drives importance, so a confirmation turn still carries the intent.
+                triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, accumulatedUserIntent());
               })
               .catch((error) => {
                 removeTypingIndicator();
