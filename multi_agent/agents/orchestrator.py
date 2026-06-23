@@ -163,10 +163,21 @@ class OrchestratorBehaviour(CyclicBehaviour):
             # conversation-driven emphases in `weights_result["weights"]`
             # (which now includes a `stock` importance). STOCK_WEIGHT is only a
             # fallback importance for callers that omit the stock emphasis.
+            # Fold real detection confidence into the four emphasis agents so a
+            # low-confidence detection quiets its agent. stock is not a detection
+            # (always 1.0); the RL fixed slice is never confidence-scaled. With
+            # all-1.0 confidences this is identical to the legacy split.
+            confidences = {
+                "colour":   context.get("detected_color_conf",     1.0),
+                "clothing": context.get("detected_type_conf",      1.0),
+                "body":     context.get("detected_body_type_conf", 1.0),
+                "stock":    1.0,
+            }
             agent_weights = build_agent_weights(
                 weights_result.get("weights", {}),
                 STOCK_WEIGHT,
                 rl_weight=RL_WEIGHT if RL_ENABLED else 0.0,
+                confidences=confidences,
                 present_agents=frozenset(responded),
             )
             top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
@@ -365,29 +376,40 @@ class OrchestratorAgent(BaseRecommenderAgent):
     def trigger_round(
         self,
         *,
-        detected_color:      str = "",
-        detected_type:       str = "",
-        detected_body_type:  str = "",
-        user_answer:         str = "",
-        user_gender:         str = "",
-        user_height_cm:      float | None = None,
-        result_future:       asyncio.Future,
+        detected_color:           str = "",
+        detected_type:            str = "",
+        detected_body_type:       str = "",
+        detected_color_conf:      float = 1.0,
+        detected_type_conf:       float = 1.0,
+        detected_body_type_conf:  float = 1.0,
+        user_answer:              str = "",
+        user_gender:              str = "",
+        user_height_cm:           float | None = None,
+        result_future:            asyncio.Future,
     ) -> str:
         """
         Queue a new recommendation round.  Returns the conv_id (UUID hex).
         The caller awaits `result_future` to get the top-10 list.
+
+        The three `*_conf` values are the real detection confidences (0–1) for
+        the colour/type/body signals; they ride in the context to the weight
+        calculation so a low-confidence detection quiets its agent. They default
+        to 1.0, which reproduces the legacy (confidence-agnostic) behaviour.
         """
         conv_id   = uuid4().hex
         context   = {
-            "conv_id":            conv_id,
-            "result_future":      result_future,
-            "queued_at":          time.monotonic(),
-            "detected_color":     detected_color,
-            "detected_type":      detected_type,
-            "detected_body_type": detected_body_type,
-            "user_answer":        user_answer,
-            "user_gender":        user_gender,
-            "user_height_cm":     user_height_cm,
+            "conv_id":                 conv_id,
+            "result_future":           result_future,
+            "queued_at":               time.monotonic(),
+            "detected_color":          detected_color,
+            "detected_type":           detected_type,
+            "detected_body_type":      detected_body_type,
+            "detected_color_conf":     detected_color_conf,
+            "detected_type_conf":      detected_type_conf,
+            "detected_body_type_conf": detected_body_type_conf,
+            "user_answer":             user_answer,
+            "user_gender":             user_gender,
+            "user_height_cm":          user_height_cm,
         }
         history.record_enqueued(conv_id, context)
         try:

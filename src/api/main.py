@@ -644,17 +644,36 @@ async def _run_multiagent_round(
     detected_type: str,
     detected_body_type: str,
     user_gender: str,
+    detected_color_conf: float = 1.0,
+    detected_type_conf: float = 1.0,
+    detected_body_type_conf: float = 1.0,
 ) -> list[dict] | None:
-    """Fire a multi-agent round and return results, or None on any failure."""
+    """
+    Fire a multi-agent round and return results, or None on any failure.
+
+    The three `*_conf` values are the real detection confidences (0–1) for the
+    colour/type/body signals; a low value quiets the corresponding agent. They
+    default to 1.0 (legacy, confidence-agnostic behaviour).
+
+    NOTE: when a detection-flow caller is wired to this helper, source the real
+    confidences there — colour & type from the primary garment `Detection`
+    (max-confidence `Detection` of the chosen `detected_type`, else the
+    max-confidence detection, else 1.0; colour shares that crop's `d.confidence`),
+    and body from `body_analysis.get("confidence", 1.0)`. There is currently no
+    caller of this helper, so the real values cannot be sourced here yet.
+    """
     if rec_system is None or not rec_system.is_ready:
         return None
     try:
         _round_id, results = await asyncio.wait_for(
             rec_system.recommend(
-                detected_color     = detected_color,
-                detected_type      = detected_type,
-                detected_body_type = detected_body_type,
-                user_gender        = user_gender,
+                detected_color          = detected_color,
+                detected_type           = detected_type,
+                detected_body_type      = detected_body_type,
+                detected_color_conf     = detected_color_conf,
+                detected_type_conf      = detected_type_conf,
+                detected_body_type_conf = detected_body_type_conf,
+                user_gender             = user_gender,
             ),
             timeout=120,
         )
@@ -1187,12 +1206,15 @@ async def recommend(payload: RecommendRequest):
 
     try:
         round_id, results = await rec_system.recommend(
-            detected_color     = payload.detected_color,
-            detected_type      = payload.detected_type,
-            detected_body_type = payload.detected_body_type,
-            user_answer        = payload.user_answer,
-            user_gender        = payload.user_gender,
-            user_height_cm     = payload.user_height_cm,
+            detected_color          = payload.detected_color,
+            detected_type           = payload.detected_type,
+            detected_body_type      = payload.detected_body_type,
+            detected_color_conf     = payload.detected_color_conf,
+            detected_type_conf      = payload.detected_type_conf,
+            detected_body_type_conf = payload.detected_body_type_conf,
+            user_answer             = payload.user_answer,
+            user_gender             = payload.user_gender,
+            user_height_cm          = payload.user_height_cm,
         )
     except asyncio.TimeoutError:
         raise HTTPException(

@@ -103,12 +103,15 @@ class RecommendationSystem:
     async def recommend(
         self,
         *,
-        detected_color:     str = "",
-        detected_type:      str = "",
-        detected_body_type: str = "",
-        user_answer:        str = "",
-        user_gender:        str = "",
-        user_height_cm:     float | None = None,
+        detected_color:          str = "",
+        detected_type:           str = "",
+        detected_body_type:      str = "",
+        detected_color_conf:     float = 1.0,
+        detected_type_conf:      float = 1.0,
+        detected_body_type_conf: float = 1.0,
+        user_answer:             str = "",
+        user_gender:             str = "",
+        user_height_cm:          float | None = None,
     ) -> tuple[str, list[dict]]:
         """
         Run one recommendation round and return (round_id, top-10 list).
@@ -129,13 +132,16 @@ class RecommendationSystem:
         result_future = loop.create_future()
 
         round_id = self._orchestrator.trigger_round(
-            detected_color     = detected_color,
-            detected_type      = detected_type,
-            detected_body_type = detected_body_type,
-            user_answer        = user_answer,
-            user_gender        = user_gender,
-            user_height_cm     = user_height_cm,
-            result_future      = result_future,
+            detected_color          = detected_color,
+            detected_type           = detected_type,
+            detected_body_type      = detected_body_type,
+            detected_color_conf     = detected_color_conf,
+            detected_type_conf      = detected_type_conf,
+            detected_body_type_conf = detected_body_type_conf,
+            user_answer             = user_answer,
+            user_gender             = user_gender,
+            user_height_cm          = user_height_cm,
+            result_future           = result_future,
         )
 
         results = await asyncio.wait_for(result_future, timeout=ROUND_TIMEOUT_S)

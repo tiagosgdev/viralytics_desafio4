@@ -64,6 +64,7 @@ def build_agent_weights(
     feature_weights: dict,
     stock_weight: float = 0.20,
     rl_weight: float = 0.0,
+    confidences: dict[str, float] | None = None,
     present_agents: frozenset[str] | None = None,
 ) -> dict[str, float]:
     """
@@ -97,6 +98,15 @@ def build_agent_weights(
     rl_weight       : fixed budget reserved for the RL agent (learned signal),
                       carved off the top before the emphases are normalised. 0
                       disables / omits the RL agent.
+    confidences     : optional {agent_id: confidence} for the four emphasis agents
+                      (colour/clothing/body/stock), where the value is the real
+                      detection confidence (0–1) backing that agent's signal. Each
+                      emphasis is multiplied by its confidence *before* the budget
+                      is normalised, so a low-confidence detection quiets its agent.
+                      Missing agents (and the RL fixed slice) default to 1.0, so
+                      `confidences=None` — or all-1.0 — is byte-identical to the
+                      legacy emphasis-only split. stock is not a detection and is
+                      conventionally passed 1.0.
     present_agents  : set of agent ids that actually responded this round.
                       When an agent is absent its weight is redistributed
                       proportionally among the agents that did respond.
@@ -140,6 +150,17 @@ def build_agent_weights(
         raw["stock"] = (frac / (1.0 - frac)) * others if others > 0 else 0.0
 
     importances = {agent_id: (raw[agent_id] or 0.0) for _, agent_id in feature_to_agent}
+
+    # Fold in real detection confidence: a low-confidence detection quiets its
+    # agent by scaling its emphasis down *before* the budget is normalised.
+    # confidences=None (or all 1.0) leaves `importances` untouched, so the output
+    # is byte-identical to the legacy emphasis-only split.
+    if confidences:
+        importances = {
+            agent_id: imp * float(confidences.get(agent_id, 1.0))
+            for agent_id, imp in importances.items()
+        }
+
     total = sum(importances.values())
 
     # The RL agent (when enabled) takes a fixed slice off the top; the four
