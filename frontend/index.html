@@ -785,7 +785,10 @@ function handleCameraMessage(msg) {
     currentDetectedClothingType = (msg.detections || [])[0]?.class_name || '';
     currentDetectedBodyType = msg.body_analysis?.body_shape || '';
     currentDetectedColor = msg.dominant_color?.name || (msg.detections || [])[0]?.color_name || '';
-    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor);
+    // Colour and type share the chosen garment detection's confidence; body has its own.
+    const garmentConf = (msg.detections || [])[0]?.confidence ?? 1.0;
+    const bodyConf    = msg.body_analysis?.confidence ?? 1.0;
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, garmentConf, bodyConf);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -967,7 +970,7 @@ function formatAgentRec(item) {
   };
 }
 
-async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor) {
+async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor, typeColorConf = 1.0, bodyConf = 1.0) {
   const myGen = ++agentRoundGeneration;
   const agentEl = document.getElementById('agent-status');
 
@@ -983,6 +986,9 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
     detected_body_type: detectedBodyType  || '',
     detected_color:     detectedColor     || '',
     user_gender:        genderEl ? (genderEl.value || '') : '',
+    detected_type_conf:      typeColorConf,
+    detected_color_conf:     typeColorConf,
+    detected_body_type_conf: bodyConf,
   };
 
   try {
