@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 
 # ── XMPP broker ───────────────────────────────────────────────────────────────
 # Prosody runs in Docker, exposed to the host on localhost:5222.
@@ -17,22 +18,62 @@ JIDS: dict[str, str] = {
     "colour":       f"colour@{XMPP_HOST}",
     "stock":        f"stock@{XMPP_HOST}",
     "weights":      f"weights@{XMPP_HOST}",
+    "rl":           f"rl@{XMPP_HOST}",
 }
 
-# Names of the four agents that score candidates and submit sealed proposals
+# ── Reinforcement-learning agent ───────────────────────────────────────────────
+# Master switch.  When False the system behaves exactly as before the RL agent was
+# added (four scorers, no learning, weights identical to the legacy split).
+RL_ENABLED        = True
+
+# Names of the agents that score candidates and submit sealed proposals.
+# The RL agent is appended only when enabled so the rest of the pipeline (CFP
+# broadcast, proposal collection, Borda weighting) picks it up automatically.
 SCORER_NAMES: list[str] = ["body", "clothing", "colour", "stock"]
+if RL_ENABLED:
+    SCORER_NAMES.append("rl")
 
 # ── Round parameters ──────────────────────────────────────────────────────────
 N_CANDIDATES      = 40    # items retrieved from DB before the debate round
 TOP_K             = 10    # final recommendations returned to the user
 
-# Fallback emphases (NOT a hard budget split any more). All four agent weights
-# are now conversation-driven: build_agent_weights normalises the four emphases
-# (color/type/bodyType/stock) returned by FeatureWeightAgent. STOCK_WEIGHT is
-# only used as a FALLBACK stock importance when a caller omits the `stock`
-# emphasis; USER_WEIGHT is kept for backward-compatibility / reference only.
+# Fallback emphases (NOT a hard budget split any more). The four scorer weights
+# are conversation-driven: build_agent_weights normalises the four emphases
+# (color/type/bodyType/stock) returned by FeatureWeightAgent across the budget
+# left after the RL slice. STOCK_WEIGHT is only used as a FALLBACK stock
+# importance when a caller omits the `stock` emphasis; USER_WEIGHT is kept for
+# backward-compatibility / reference only.
 STOCK_WEIGHT      = 0.20  # fallback stock importance (when no stock emphasis supplied)
 USER_WEIGHT       = 0.80  # legacy reference; no longer a fixed user-preference budget
+
+# RL_WEIGHT is the ONE fixed-slice budget: it is carved off the top for the RL
+# agent's learned signal, and the four conversation emphases share the remaining
+# 1 - RL_WEIGHT. 0 (or RL_ENABLED=False) omits the RL agent entirely.
+RL_WEIGHT         = 0.15  # fixed weight for the RLRecommenderAgent (learned signal)
+
+# ── PPO hyperparameters ──────────────────────────────────────────────────────────
+# The RL agent is a PyTorch actor-critic trained with Proximal Policy Optimisation.
+PPO_HIDDEN         = 32      # hidden units per layer in the shared actor-critic trunk
+PPO_LR             = 3e-4    # Adam learning rate
+PPO_CLIP_EPS       = 0.2     # PPO clipped-surrogate ε (trust-region width)
+PPO_EPOCHS         = 4       # optimisation passes over each collected rollout
+PPO_MINIBATCH      = 64      # minibatch size within an epoch
+PPO_VALUE_COEF     = 0.5     # weight of the critic (value) loss
+PPO_ENTROPY_COEF   = 0.01    # weight of the entropy bonus (drives exploration)
+PPO_MAX_GRAD_NORM  = 0.5     # global gradient-norm clip
+PPO_INIT_LOG_STD   = -0.5    # initial log σ of the Gaussian action head (σ ≈ 0.61)
+PPO_ROLLOUT_ROUNDS = 8       # rounds collected before each on-policy PPO update
+
+# Per-item reward shaping (see rl/store.py)
+PASSRATE_ANCHOR   = 0.10  # fraction of the agent's picks that must advance for reward 0
+ZERO_PASS_PENALTY = -1.5  # extra-negative reward when 0% of the agent's picks advance
+
+# ── RL persistence ─────────────────────────────────────────────────────────────────
+# ONE global policy, shared by every customer.  Checkpointed (network + optimizer
+# state) and reloaded on startup so the learned pattern is never lost on restart.
+_REPO_ROOT         = Path(__file__).resolve().parent.parent
+RL_CHECKPOINT_PATH = _REPO_ROOT / "models" / "weights" / "agents" / "rl_ppo.pt"
+RL_ROUND_CACHE     = 200  # recent rounds kept in the in-memory transition cache
 
 # Timeouts (seconds)
 WEIGHTS_TIMEOUT_S = 120   # max wait for FeatureWeightAgent INFORM reply

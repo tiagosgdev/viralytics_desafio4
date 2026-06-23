@@ -506,6 +506,7 @@ let frozen = false;
 let currentSessionId = null;
 let currentDetectedCategories = [];
 let currentRecommendations = [];
+let currentRoundId = null;   // round_id of the last agent round, for /api/feedback
 let chatHistory = [];
 let chatConversationState = null;
 let currentActiveFilters = {};
@@ -946,13 +947,16 @@ function formatAgentRec(item) {
   const typeName = (item.type || '').replace(/_/g, ' ');
   const brandName = item.brand || '';
   const scores = item.agent_scores || {};
+  const rlPart = (scores.rl != null) ? ` · rl ${(scores.rl||0).toFixed(2)}` : '';
   return {
     id:       String(item.item_id || ''),
+    item_id:  item.item_id,
+    size:     item.size || '',
     name:     [brandName, typeName].filter(Boolean).join(' ').trim() || `Item ${item.item_id}`,
     category: item.type || '',
     price:    item.price != null ? `EUR ${Number(item.price).toFixed(2)}` : 'N/A',
     image_url: null,
-    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}`,
+    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}${rlPart}`,
     score:    Math.round((1 - (item.rank - 1) / 10) * 100) / 100,
     brand:    item.brand || null,
     metadata: Object.fromEntries(
@@ -1008,6 +1012,7 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
     if (agentRecs.length) {
       renderRecs(agentRecs, { autoOpen: false });
       currentRecommendations = agentRecs;
+      currentRoundId = data.round_id || null;   // enables emoji feedback for this round
     }
 
     if (agentEl) {
@@ -1023,6 +1028,9 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
 
 function renderRecs(recs, options = {}) {
   const autoOpen = Boolean(options.autoOpen);
+  // Any plain render clears the agent round id; triggerAgentRecommendations
+  // re-sets it afterwards so emoji feedback only shows for agent rounds.
+  currentRoundId = null;
 
   if (!recs.length) {
     currentRecommendations = [];
@@ -1130,6 +1138,74 @@ function buildDetailRow(label, value, field, recommendation) {
   return '<div class="rec-detail-row' + highlight + '"><span>' + esc(label) + '</span>' + badge + '<strong>' + esc(value) + '</strong></div>';
 }
 
+// 5-emoji satisfaction scale (rating 1..5; index 2 = neutral).
+const FEEDBACK_EMOJIS = [
+  { e: '😣', label: 'Hate it' },
+  { e: '😕', label: 'Not for me' },
+  { e: '😐', label: 'Neutral' },
+  { e: '🙂', label: 'Like it' },
+  { e: '😍', label: 'Love it' },
+];
+
+// Emoji rating row shown in the item detail view — only for agent rounds
+// (currentRoundId set), since feedback trains the RL agent for that round.
+function buildFeedbackRow(rec, index) {
+  if (!currentRoundId) return '';
+  const selected = Number(rec._rating || 0);
+  const buttons = FEEDBACK_EMOJIS.map((em, i) => {
+    const rating = i + 1;
+    const sel = selected === rating ? ' selected' : '';
+    return '<button type="button" class="emoji-btn' + sel + '" title="' + escAttr(em.label) +
+      '" aria-label="' + escAttr(em.label) + '" onclick="submitItemFeedback(' + index + ',' + rating + ')">' +
+      em.e + '</button>';
+  }).join('');
+  const status = rec._rating ? 'Thanks — feedback recorded.' : 'How happy are you with this pick?';
+  return '<div class="rec-detail-section rec-feedback">' +
+    '<div class="rec-detail-label">Rate this recommendation</div>' +
+    '<div class="emoji-row" id="rec-feedback-row">' + buttons + '</div>' +
+    '<div class="emoji-status" id="rec-feedback-status">' + esc(status) + '</div>' +
+    '</div>';
+}
+
+async function submitItemFeedback(index, rating) {
+  const rec = currentRecommendations[index];
+  if (!rec || !currentRoundId) return;
+  rec._rating = rating;
+
+  const row = document.getElementById('rec-feedback-row');
+  if (row) {
+    Array.from(row.querySelectorAll('.emoji-btn')).forEach((b, i) =>
+      b.classList.toggle('selected', i === rating - 1));
+  }
+  const statusEl = document.getElementById('rec-feedback-status');
+  if (statusEl) statusEl.textContent = 'Sending…';
+
+  try {
+    const resp = await fetch('/api/feedback', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        round_id: currentRoundId,
+        item_id:  Number(rec.item_id || rec.id || 0),
+        size:     rec.size || (rec.metadata && rec.metadata.size) || '',
+        rating:   rating,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (statusEl) {
+      if (data && data.ok) {
+        statusEl.textContent = data.applied
+          ? 'Thanks — the agent is learning from this 🎓'
+          : 'Thanks! Neutral rating — no change.';
+      } else {
+        statusEl.textContent = (data && data.reason) || 'Feedback saved.';
+      }
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Could not send feedback.';
+  }
+}
+
 function openRecommendationDetail(index, openModal = false) {
   if (!currentRecommendations.length || !currentRecommendations[index]) return;
 
@@ -1182,6 +1258,7 @@ function openRecommendationDetail(index, openModal = false) {
     })() +
     '</div></div>' +
     (overviewRows ? '<div class="rec-detail-section"><div class="rec-detail-label">Store details</div><div class="rec-detail-grid">' + overviewRows + '</div></div>' : '') +
+    buildFeedbackRow(rec, index) +
     '<div class="rec-detail-section"><div class="rec-detail-label">Why it fits</div><p>' + esc(rec.reason || 'Recommended from your search context.') + '</p></div>' +
     '<div class="rec-detail-section"><div class="rec-detail-label">Description</div><p>' + esc(rec.description || 'No extra product description is available for this item yet.') + '</p></div>' +
     '<div class="rec-detail-grid">' + (

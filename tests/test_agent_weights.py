@@ -126,3 +126,56 @@ def test_present_agents_none_returns_unredistributed_full():
         "body":     pytest.approx(0.25),
         "stock":    pytest.approx(0.25),
     }
+
+
+# ── RL integration: rl_weight is a fixed slice carved off the top ──────────────
+
+def test_rl_weight_carved_off_top_emphases_share_remainder():
+    # rl gets its fixed slice; the four emphases share (1 - rl_weight) in
+    # proportion to their importances. Everything sums to 1.0.
+    fw = _fw(40, 30, 20, 10)
+    weights = build_agent_weights(fw, rl_weight=0.15)
+
+    assert set(weights) == {"colour", "clothing", "body", "stock", "rl"}
+    assert weights["rl"] == pytest.approx(0.15)
+    assert sum(weights.values()) == pytest.approx(1.0)
+    # 0.85 split 40/30/20/10
+    assert weights["colour"]   == pytest.approx(0.40 * 0.85)
+    assert weights["clothing"] == pytest.approx(0.30 * 0.85)
+    assert weights["body"]     == pytest.approx(0.20 * 0.85)
+    assert weights["stock"]    == pytest.approx(0.10 * 0.85)
+
+
+def test_rl_weight_zero_is_legacy_four_way_split():
+    # rl_weight=0 (RL disabled) → no rl key, four emphases share the whole budget.
+    fw = _fw(40, 30, 20, 10)
+    weights = build_agent_weights(fw, rl_weight=0.0)
+
+    assert "rl" not in weights
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert weights["colour"] == pytest.approx(0.40)
+
+
+def test_rl_absent_from_responders_redistributes_its_slice():
+    # If the RL agent does not respond, its fixed slice is redistributed
+    # proportionally among the present agents (which still sum to ~1.0).
+    fw = _fw(40, 30, 20, 10)
+    present = frozenset({"colour", "clothing", "body", "stock"})
+    weights = build_agent_weights(fw, rl_weight=0.15, present_agents=present)
+
+    assert "rl" not in weights
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_rl_present_but_scorer_missing_keeps_rl_slice():
+    # RL responded but a scorer (stock) did not: stock's weight is redistributed
+    # among the present agents, RL keeps a (redistributed-inclusive) slice, and
+    # the surviving weights still sum to ~1.0.
+    fw = _fw(40, 30, 20, 10)
+    present = frozenset({"colour", "clothing", "body", "rl"})
+    weights = build_agent_weights(fw, rl_weight=0.15, present_agents=present)
+
+    assert set(weights) == {"colour", "clothing", "body", "rl"}
+    assert "stock" not in weights
+    assert weights["rl"] > 0.0
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)

@@ -32,6 +32,8 @@ from multi_agent.config import (
     COLLECT_TIMEOUT_S,
     JIDS,
     QUEUE_MAX_SIZE,
+    RL_ENABLED,
+    RL_WEIGHT,
     SCORER_NAMES,
     STOCK_WEIGHT,
     TOP_K,
@@ -45,6 +47,7 @@ from multi_agent.messages import (
     comm_log,
     make_cfp,
     make_request,
+    make_round_result,
     parse,
 )
 from multi_agent.retrieval import get_candidates
@@ -76,6 +79,9 @@ _CFP_FIELDS: dict[str, frozenset[str]] = {
     # clothing_agent: counts how many include-filter axes each item satisfies
     "clothing": frozenset({"item_id", "size", "type", "age_group", "occasion",
                            "season", "style", "pattern", "material", "gender", "fit"}),
+    # rl_agent: builds match + normalised inventory/price features from these fields
+    "rl":       frozenset({"item_id", "size", "color", "type", "gender",
+                           "price", "stock_count", "push_score"}),
 }
 
 
@@ -160,6 +166,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
             agent_weights = build_agent_weights(
                 weights_result.get("weights", {}),
                 STOCK_WEIGHT,
+                rl_weight=RL_WEIGHT if RL_ENABLED else 0.0,
                 present_agents=frozenset(responded),
             )
             top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
@@ -172,6 +179,17 @@ class OrchestratorBehaviour(CyclicBehaviour):
             history.record_complete(conv_id, len(result), responded, missing)
             fut.set_result(result)
             logger.info(f"[{conv_id}] Round complete — top-{TOP_K} resolved.")
+
+            # ── 7. Notify the RL agent of the outcome so it can learn ──────────
+            # (pass-rate reward — see RoundResultBehaviour). Fire-and-forget; it
+            # must not affect the result already returned to the caller.
+            if RL_ENABLED and "rl" in responded:
+                try:
+                    await self.send(make_round_result(JIDS["rl"], conv_id, top_k_keys))
+                    comm_log("orchestrator", "rl", "INFORM", conv_id,
+                             f"round_result — {len(top_k_keys)} final keys")
+                except Exception as exc:
+                    logger.warning(f"[{conv_id}] Could not notify RL agent: {exc}")
 
         except Exception as exc:
             logger.error(f"[{conv_id}] Round failed: {exc}", exc_info=True)
