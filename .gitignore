@@ -296,6 +296,11 @@ multi_agent/memory/*.db
 multi_agent/memory/*.db-wal
 multi_agent/memory/*.db-shm
 
+# Experiment harness results store (Part E; runtime artefact, untracked).
+multi_agent/experiments/results.db
+multi_agent/experiments/results.db-wal
+multi_agent/experiments/results.db-shm
+
 # Android Gradle lock/probe files (transient build state)
 android_app/.gradle/9.0.0/checksums/checksums.lock
 android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
