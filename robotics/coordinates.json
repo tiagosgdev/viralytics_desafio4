@@ -1,26 +1,13 @@
 {
-    "entrance": {
-        "x": 0.0,
-        "y": 0.0
-    },
-    "red dress": {
-        "x": 4.5,
-        "y": -2.1
-    },
-    "jackets": {
-        "x": -1.0,
-        "y": 3.5
-    },
-    "shoes": {
-        "x": 2.2,
-        "y": 5.0
-    },
-    "blue shirt": {
-        "x": 1.5,
-        "y": -3.0
-    },
-    "teste_3": {
-        "x": 90.33,
-        "y": 163.6
-    }
+  "test_spot": {
+    "x": -221.254,
+    "y": 1115.2799,
+    "theta": -0.924271,
+    "note": "Verified 2026-06-20 \u2014 robot drove here successfully"
+  },
+  "PC Teste": {
+    "x": -212.682,
+    "y": 1209.91,
+    "theta": -2.78659
+  }
 }

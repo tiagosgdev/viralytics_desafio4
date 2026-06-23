@@ -114,6 +114,31 @@ class AuthResponse(BaseModel):
     token: Optional[str] = None
 
 
+# ── Robot navigation ─────────────────────────────────────────────────────────
+
+class RobotNavigateRequest(BaseModel):
+    target: str = Field(..., description="Named location from coordinates.json, e.g. 't-shirt stand'")
+
+
+class RobotNavigateResponse(BaseModel):
+    status: str                       # "sent" | "error"
+    target: str
+    x: Optional[float] = None
+    y: Optional[float] = None
+    theta: Optional[float] = None
+    message: Optional[str] = None
+
+
+class RobotNavigateByCategoryRequest(BaseModel):
+    category: str = Field(..., description="Clothing detection category, e.g. 'short_sleeve_top'")
+
+
+class RobotStatusResponse(BaseModel):
+    connected: bool
+    known_locations: List[str]
+    category_map: Dict[str, str] = Field(default_factory=dict)
+
+
 # ── Multi-agent recommendation ────────────────────────────────────────────────
 
 class RecommendRequest(BaseModel):

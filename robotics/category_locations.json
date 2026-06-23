@@ -1,0 +1,21 @@
+{
+  "_note": "Maps clothing detection categories to surveyed location names in coordinates.json. Add/edit entries as you survey more stands.",
+  "short_sleeve_top": "t-shirt stand",
+  "long_sleeve_top":  "t-shirt stand",
+  "shirt":            "t-shirt stand",
+  "top":              "t-shirt stand",
+  "vest":             "t-shirt stand",
+  "dress":            "dress stand",
+  "skirt":            "dress stand",
+  "jacket":           "jackets stand",
+  "coat":             "jackets stand",
+  "hoodie":           "jackets stand",
+  "sweater":          "jackets stand",
+  "trousers":         "pants stand",
+  "jeans":            "pants stand",
+  "shorts":           "shorts stand",
+  "shoes":            "shoes stand",
+  "bag":              "accessories stand",
+  "scarf":            "accessories stand",
+  "hat":              "accessories stand"
+}

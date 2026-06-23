@@ -295,3 +295,8 @@ LNIAGIA/DB/SQLLite/*.db-shm
 multi_agent/memory/*.db
 multi_agent/memory/*.db-wal
 multi_agent/memory/*.db-shm
+
+# Android Gradle lock/probe files (transient build state)
+android_app/.gradle/9.0.0/checksums/checksums.lock
+android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
+android_app/.gradle/buildOutputCleanup/buildOutputCleanup.lock

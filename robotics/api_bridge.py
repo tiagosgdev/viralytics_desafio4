@@ -1,30 +1,68 @@
-import paho.mqtt.client as mqtt
+#!/usr/bin/env python3
+"""
+One-shot navigation trigger — sends the robot to a saved location.
+
+Usage:
+    python robotics/api_bridge.py                    # lists available locations
+    python robotics/api_bridge.py test_spot          # navigate to 'test_spot'
+    python robotics/api_bridge.py "t-shirt stand"    # navigate to 't-shirt stand'
+
+The robot connects to this script via MQTT on test.mosquitto.org.
+Coordinates are loaded from coordinates.json (populated by survey_tool.py).
+"""
+
 import json
+import sys
+from pathlib import Path
 
-# 1. Configuração do Broker
-BROKER_ADDRESS = "test.mosquitto.org" 
-PORT = 1883
-TOPIC = "cruzr/commands"
+sys.path.insert(0, str(Path(__file__).parent))
+from cruzr_bridge import CruzrBridge
 
-# 2. Inicialização do Cliente (Compatível com paho-mqtt v2.0+)
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "ROS2_Bridge_Node")
+COORDS_FILE = Path(__file__).parent / "coordinates.json"
 
-try:
-    client.connect(BROKER_ADDRESS, PORT)
-    print(f"Connected to broker at {BROKER_ADDRESS}:{PORT}")
-    
-    # 3. NOVO PAYLOAD: Alterado de movimento para fala (TTS)
-    payload = {
-        "action": "speak",
-    "text": "Hello, I am Fashion-Clanker! How can I assist you today? Would you like help with getting new clothes"
-    }
-    
-    json_string = json.dumps(payload)
-    client.publish(TOPIC, json_string)
-    print(f"Published to topic '{TOPIC}': {json_string}")
 
-except Exception as e:
-    print(f"Failed to connect or publish: {e}")
+def load_coords() -> dict:
+    if not COORDS_FILE.exists():
+        return {}
+    with open(COORDS_FILE) as f:
+        return json.load(f)
 
-finally:
-    client.disconnect()
+
+def main():
+    coords = load_coords()
+
+    if not coords:
+        print("No saved locations. Run survey_tool.py to survey the space first.")
+        sys.exit(1)
+
+    if len(sys.argv) < 2:
+        print("Saved locations:")
+        for name, loc in coords.items():
+            note = f"  ({loc['note']})" if "note" in loc else ""
+            print(f"  {name:<28} x={loc['x']:.3f}  y={loc['y']:.3f}  theta={loc.get('theta', 0):.4f}{note}")
+        print(f"\nUsage: python robotics/api_bridge.py <location_name>")
+        sys.exit(0)
+
+    name = " ".join(sys.argv[1:])
+    if name not in coords:
+        print(f"Location '{name}' not found.")
+        print(f"Available: {', '.join(coords)}")
+        sys.exit(1)
+
+    loc = coords[name]
+    x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+
+    print(f"Connecting to test.mosquitto.org...")
+    bridge = CruzrBridge()
+    if not bridge.connect():
+        print("Connection failed.")
+        sys.exit(1)
+
+    print(f"Sending robot to '{name}': x={x}, y={y}, theta={theta}")
+    bridge.navigate_to_coords(x, y, theta)
+    bridge.disconnect()
+    print("Command sent.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,12 @@
+{
+  "note": "Affine pixel-to-metric calibration for Cruzr tablet map. Established 2026-06-20 with 3 manual survey control points.",
+  "control_points": [
+    {"pixel": [85.33,  98.67],  "metric": [-210.286, 1114.66]},
+    {"pixel": [254.93, 230.47], "metric": [ 647.011,  447.123]},
+    {"pixel": [189.2,  229.42], "metric": [ 310.278,  446.451]}
+  ],
+  "coefficients": {
+    "x": [ 5.1244, -0.0895, -638.7161],
+    "y": [ 0.0930, -5.1845, 1618.2753]
+  }
+}
