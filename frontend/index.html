@@ -522,6 +522,11 @@ let agentRoundGeneration = 0;
 let currentDetectedBodyType = '';
 let currentDetectedClothingType = '';
 let currentDetectedColor = '';
+// Per-feature detection confidences from the last camera scan. Reused on
+// chat-after-camera rounds so a low-confidence detection stays damped even
+// when the conversation (not the camera) drives the round. 1.0 = no scan yet.
+let currentDetectedTypeColorConf = 1.0;
+let currentDetectedBodyConf = 1.0;
 
 const feed = document.getElementById('feed');
 const landingScreen = document.getElementById('landing-screen');
@@ -786,9 +791,10 @@ function handleCameraMessage(msg) {
     currentDetectedBodyType = msg.body_analysis?.body_shape || '';
     currentDetectedColor = msg.dominant_color?.name || (msg.detections || [])[0]?.color_name || '';
     // Colour and type share the chosen garment detection's confidence; body has its own.
-    const garmentConf = (msg.detections || [])[0]?.confidence ?? 1.0;
-    const bodyConf    = msg.body_analysis?.confidence ?? 1.0;
-    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, garmentConf, bodyConf);
+    // Persist them so chat-after-camera rounds reuse the same confidences until a re-scan.
+    currentDetectedTypeColorConf = (msg.detections || [])[0]?.confidence ?? 1.0;
+    currentDetectedBodyConf      = msg.body_analysis?.confidence ?? 1.0;
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -812,6 +818,8 @@ function startScan() {
   currentDetectedBodyType = '';
   currentDetectedClothingType = '';
   currentDetectedColor = '';
+  currentDetectedTypeColorConf = 1.0;
+  currentDetectedBodyConf = 1.0;
   const agentEl = document.getElementById('agent-status');
   if (agentEl) agentEl.hidden = true;
   toggleRecommendationsModal(false);
@@ -970,7 +978,7 @@ function formatAgentRec(item) {
   };
 }
 
-async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor, typeColorConf = 1.0, bodyConf = 1.0) {
+async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor, typeColorConf = 1.0, bodyConf = 1.0, userAnswer = '') {
   const myGen = ++agentRoundGeneration;
   const agentEl = document.getElementById('agent-status');
 
@@ -989,6 +997,7 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
     detected_type_conf:      typeColorConf,
     detected_color_conf:     typeColorConf,
     detected_body_type_conf: bodyConf,
+    user_answer:             userAnswer || '',
   };
 
   try {
@@ -1794,7 +1803,13 @@ function sendChat() {
       }
       addChatBubble(reply, 'bot');
       chatHistory.push({ role: 'assistant', content: reply });
+      // Fast fallback: show embedding-search results immediately…
       if (Array.isArray(data.results) && data.results.length) renderRecs(data.results);
+      // …then drive a multi-agent round with the user's message. On success it
+      // overwrites the recs with agent recs; on broker-down it leaves them intact.
+      // Confidences persist from the last scan (1.0 if none yet); the message
+      // drives the importance weights via analyze_intent.
+      triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, text);
     })
     .catch((error) => {
       removeTypingIndicator();
@@ -1993,7 +2008,11 @@ async function toggleVoice() {
                 }
                 addChatBubble(reply, 'bot');
                 chatHistory.push({ role: 'assistant', content: reply });
+                // Fast fallback: show embedding-search results immediately…
                 if (Array.isArray(chatData.results) && chatData.results.length) renderRecs(chatData.results);
+                // …then drive a multi-agent round with the transcribed message.
+                // Confidences persist from the last scan; the message drives importance.
+                triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, text);
               })
               .catch((error) => {
                 removeTypingIndicator();
