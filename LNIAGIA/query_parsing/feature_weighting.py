@@ -374,6 +374,93 @@ def _split_terms_by_negation(
     return negated, positive
 
 
+# ── Deterministic price / budget extraction ────────────────────────
+# The small quantized LLM is unreliable at pulling a numeric budget out of
+# chat, so we resolve it in code from the raw answer (same philosophy as the
+# color-negation reconciliation above). Two hard thresholds partition the
+# catalogue into cheap / medium / expensive (catalogue spread: p25≈34,
+# median≈68, p75≈153), used for vague terms like "cheap" or "premium".
+PRICE_CHEAP_MAX = 50.0
+PRICE_EXPENSIVE_MIN = 150.0
+
+_PRICE_AMOUNT = r"\$?\s*(\d+(?:\.\d+)?)"
+_PRICE_BETWEEN_RE = re.compile(
+    r"\b(?:between|from)\b\s*" + _PRICE_AMOUNT + r"\s*(?:and|to|-|–|—)\s*" + _PRICE_AMOUNT,
+    re.I,
+)
+_PRICE_RANGE_RE = re.compile(_PRICE_AMOUNT + r"\s*(?:to|-|–|—)\s*" + _PRICE_AMOUNT, re.I)
+_PRICE_UNDER_RE = re.compile(
+    r"\b(?:under|below|less than|cheaper than|up to|no more than|at most|within|max(?:imum)?)\b\s*"
+    + _PRICE_AMOUNT,
+    re.I,
+)
+# A negated floor is really a ceiling: "nothing over 40", "not above 75",
+# "no more than 60". Checked BEFORE the floor pattern so it wins.
+_PRICE_NEG_OVER_RE = re.compile(
+    r"\b(?:no|not|nothing|none)\b[\w\s]{0,10}?\b(?:over|above|more than|more)\b\s*" + _PRICE_AMOUNT,
+    re.I,
+)
+_PRICE_OVER_RE = re.compile(
+    r"\b(?:over|above|more than|at least|min(?:imum)?|starting (?:from|at))\b\s*" + _PRICE_AMOUNT,
+    re.I,
+)
+# "not/too/less expensive" means they want it CHEAPER, not pricier.
+_PRICE_NEG_EXPENSIVE_RE = re.compile(
+    r"\b(?:not|no|nothing|isn'?t|too|less|avoid)\b[\w\s]{0,12}\bexpensive\b", re.I
+)
+_PRICE_CHEAP_WORDS = (
+    "cheap", "cheapest", "affordable", "inexpensive", "budget", "low price",
+    "low-priced", "economical", "bargain",
+)
+_PRICE_EXPENSIVE_WORDS = (
+    "expensive", "premium", "luxury", "luxurious", "high-end", "high end",
+    "pricey", "designer", "splurge",
+)
+_PRICE_MEDIUM_WORDS = (
+    "mid-range", "mid range", "midrange", "medium price", "moderate",
+    "moderately priced", "reasonably priced", "reasonable price",
+)
+
+
+def _extract_price_range(user_answer: str) -> tuple[float | None, float | None]:
+    """Return (price_min, price_max) inferred from the shopper's words.
+
+    Numeric phrases win over vague terms; vague terms fall back to the two hard
+    thresholds. Either bound may be None (open). Returns (None, None) when no
+    budget signal is present.
+    """
+    text = str(user_answer or "").lower()
+    if not text:
+        return None, None
+
+    # 1) Explicit numeric ranges / bounds take priority.
+    m = _PRICE_BETWEEN_RE.search(text) or _PRICE_RANGE_RE.search(text)
+    if m:
+        lo, hi = float(m.group(1)), float(m.group(2))
+        return (min(lo, hi), max(lo, hi))
+    # A negated floor ("nothing over 40") is a ceiling — resolve it first so it
+    # is not misread as a floor by _PRICE_OVER_RE.
+    neg_over = _PRICE_NEG_OVER_RE.search(text)
+    under = _PRICE_UNDER_RE.search(text)
+    over = None if neg_over else _PRICE_OVER_RE.search(text)
+    ceiling = float(neg_over.group(1)) if neg_over else (float(under.group(1)) if under else None)
+    floor = float(over.group(1)) if over else None
+    if ceiling is not None or floor is not None:
+        return floor, ceiling
+
+    # 2) Vague terms → the two hard thresholds. Check the "not expensive" =
+    #    cheaper case before the plain "expensive" word so negation wins.
+    if _PRICE_NEG_EXPENSIVE_RE.search(text):
+        return None, PRICE_CHEAP_MAX
+    if any(w in text for w in _PRICE_MEDIUM_WORDS):
+        return PRICE_CHEAP_MAX, PRICE_EXPENSIVE_MIN
+    if any(w in text for w in _PRICE_CHEAP_WORDS):
+        return None, PRICE_CHEAP_MAX
+    if any(w in text for w in _PRICE_EXPENSIVE_WORDS):
+        return PRICE_EXPENSIVE_MIN, None
+    return None, None
+
+
 def _reconcile_color_negation(
     answer: str,
     detected_color: str,
@@ -640,6 +727,15 @@ def analyze_intent(
 
     _inject_detected_filters(include, detected_type, detected_body_type)
     filters = {"include": include, "exclude": exclude}
+
+    # Budget, resolved deterministically from the raw answer (the small LLM is
+    # unreliable here). Rides in `filters` as a SOFT signal: get_candidates adds
+    # 1 to match_count for in-budget items, so it never dead-ends the pool.
+    price_min, price_max = _extract_price_range(user_answer)
+    if price_min is not None:
+        filters["price_min"] = price_min
+    if price_max is not None:
+        filters["price_max"] = price_max
 
     if verbose:
         print(f"  [color state] {color_state}")

@@ -125,8 +125,8 @@ class StockAgent:
             {
               "include": {field: [value, ...]},   # any-of, contributes 1 to match_count
               "exclude": {field: [value, ...]},   # hard drop
-              "price_min": float,                  # hard filter
-              "price_max": float,                  # hard filter
+              "price_min": float,                  # soft: in-budget +1 match_count
+              "price_max": float,                  # soft: in-budget +1 match_count
             }
 
         Shorthand (back-compat): a flat dict with QUERY_KEYS + RANGE_KEYS
@@ -147,11 +147,6 @@ class StockAgent:
         mask = (df["active"] == 1) & (df["stock_count"] > 0)
         df = df.loc[mask].copy()
 
-        if price_min is not None:
-            df = df.loc[df["price"] >= price_min]
-        if price_max is not None:
-            df = df.loc[df["price"] <= price_max]
-
         # Apply exclude as hard filter BEFORE scoring
         for k, vals in exclude.items():
             df = df.loc[~_field_match(df, k, vals)]
@@ -167,6 +162,20 @@ class StockAgent:
         match_count = pd.Series(0, index=df.index)
         for k, vals in include.items():
             match_count = match_count + _field_match(df, k, vals).astype(int)
+
+        # Price range is a SOFT feature, scored exactly like an include key:
+        # being within the requested budget adds 1 to match_count. So in-budget
+        # items rank first, but out-of-budget items still backfill the pool when
+        # too few match (tiered relaxation — we always return up to n, never an
+        # empty/short pool just because a budget was tight).
+        if price_min is not None or price_max is not None:
+            in_budget = pd.Series(True, index=df.index)
+            if price_min is not None:
+                in_budget = in_budget & (df["price"] >= price_min)
+            if price_max is not None:
+                in_budget = in_budget & (df["price"] <= price_max)
+            match_count = match_count + in_budget.astype(int)
+
         df["__match_count"] = match_count
 
         df = df.sort_values(
