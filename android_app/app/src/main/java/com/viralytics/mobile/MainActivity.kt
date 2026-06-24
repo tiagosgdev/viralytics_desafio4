@@ -3,9 +3,13 @@ package com.viralytics.mobile
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
+import java.io.File
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -61,9 +65,13 @@ import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
+enum class AppMode { TABLET, PHONE_CAMERA }
+
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val viewModel: MainViewModel by viewModels()
+
+    private var appMode: AppMode = AppMode.PHONE_CAMERA
 
     // --- NAVIGATION CONFIG ---
     private val TRACK_MODE = false
@@ -92,16 +100,26 @@ class MainActivity : AppCompatActivity() {
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
-                cameraLauncher.launch(null)
+                openCameraActivity()
             } else {
                 setStatus("Camera permission denied.")
             }
         }
 
-    private val cameraLauncher =
-        registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-            if (bitmap == null) {
+    private val cameraActivityLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != RESULT_OK) {
                 setStatus("Capture cancelled.")
+                return@registerForActivityResult
+            }
+            val path = result.data?.getStringExtra(CameraActivity.RESULT_IMAGE_PATH) ?: run {
+                setStatus("Capture failed.")
+                return@registerForActivityResult
+            }
+            val bitmap = BitmapFactory.decodeFile(path)?.applyExifRotation(path)
+            File(path).delete()
+            if (bitmap == null) {
+                setStatus("Failed to decode captured image.")
                 return@registerForActivityResult
             }
             val baseUrl = normalizedBaseUrl() ?: return@registerForActivityResult
@@ -113,11 +131,17 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        initCruzrHardware()
+        appMode = detectAppMode()
+        setupUiForMode(appMode)
+
+        if (appMode == AppMode.TABLET) {
+            initCruzrHardware()
+        }
         startMqttListener()
+
         observeViewModel()
 
-        setStatus("Ready.")
+        setStatus(if (appMode == AppMode.TABLET) "Waiting for scan from phone…" else "Ready to scan.")
         updateSessionLabel()
         renderDetections()
         renderRecommendations()
@@ -157,12 +181,17 @@ class MainActivity : AppCompatActivity() {
                 is UiEvent.SetStatus -> setStatus(event.message)
                 is UiEvent.ShowToast -> toast(event.message)
                 is UiEvent.ScanComplete -> {
-                    renderDetections()
-                    renderRecommendations()
-                    updateAnnotatedImage(event.annotatedFrameBase64)
-                    switchTab("scan")
-                    updateSessionLabel("Vision-led")
-                    showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
+                    if (appMode == AppMode.PHONE_CAMERA) {
+                        toast("Scan sent to tablet!")
+                    } else {
+                        setStatus("Scan received from phone.")
+                        renderDetections()
+                        renderRecommendations()
+                        updateAnnotatedImage(event.annotatedFrameBase64)
+                        switchTab("scan")
+                        updateSessionLabel("Vision-led")
+                        showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
+                    }
                 }
                 is UiEvent.ScanError -> showChatReply(event.message)
                 is UiEvent.ChatComplete -> {
@@ -181,23 +210,53 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun detectAppMode(): AppMode {
+        val override = getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .getString("device_mode_override", null)
+        if (override == "tablet") return AppMode.TABLET
+        if (override == "phone") return AppMode.PHONE_CAMERA
+
+        return try {
+            if (Robot.globalContext() != null) AppMode.TABLET else AppMode.PHONE_CAMERA
+        } catch (e: Exception) {
+            AppMode.PHONE_CAMERA
+        }
+    }
+
+    private fun saveDeviceModeOverride(mode: AppMode) {
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .edit()
+            .putString("device_mode_override", if (mode == AppMode.TABLET) "tablet" else "phone")
+            .apply()
+    }
+
+    private fun setupUiForMode(mode: AppMode) {
+        when (mode) {
+            AppMode.PHONE_CAMERA -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                binding.tabBar?.isVisible = false
+                binding.refineSection.isVisible = false
+                binding.modeIndicatorText?.text = "CAMERA MODE"
+            }
+            AppMode.TABLET -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                binding.captureButton.isVisible = false
+                binding.scanWaitingText?.isVisible = true
+                binding.modeIndicatorText?.text = "DISPLAY MODE"
+            }
+        }
+    }
+
     private fun launchCamera() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             return
         }
-        val btn = binding.captureButton
-        btn.isEnabled = false
-        object : android.os.CountDownTimer(5000, 1000) {
-            override fun onTick(millisUntilFinished: Long) {
-                btn.text = "${(millisUntilFinished / 1000) + 1}"
-            }
-            override fun onFinish() {
-                btn.text = getString(R.string.capture_outfit)
-                btn.isEnabled = true
-                cameraLauncher.launch(null)
-            }
-        }.start()
+        openCameraActivity()
+    }
+
+    private fun openCameraActivity() {
+        cameraActivityLauncher.launch(Intent(this, CameraActivity::class.java))
     }
 
     private fun sendChat() {
@@ -611,12 +670,23 @@ class MainActivity : AppCompatActivity() {
         val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogServerUrlInput)
         input.setText(loadServerUrl())
 
+        val modeGroup = dialogView.findViewById<android.widget.RadioGroup>(R.id.deviceModeGroup)
+        val phoneRadio = dialogView.findViewById<android.widget.RadioButton>(R.id.modePhoneRadio)
+        val tabletRadio = dialogView.findViewById<android.widget.RadioButton>(R.id.modeTabletRadio)
+        if (appMode == AppMode.TABLET) tabletRadio.isChecked = true else phoneRadio.isChecked = true
+
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.connection_title))
             .setView(dialogView)
             .setPositiveButton(getString(R.string.connection_save)) { _, _ ->
                 saveServerUrl(input.text?.toString().orEmpty())
-                toast("Connection saved.")
+                val selectedMode = if (tabletRadio.isChecked) AppMode.TABLET else AppMode.PHONE_CAMERA
+                if (selectedMode != appMode) {
+                    saveDeviceModeOverride(selectedMode)
+                    recreate()
+                } else {
+                    toast("Connection saved.")
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -742,6 +812,15 @@ class MainActivity : AppCompatActivity() {
             .edit().putString("persona", persona).apply()
     }
 
+    private fun publishPersona(persona: String) {
+        Thread {
+            try {
+                val payload = JSONObject().put("persona", persona).toString()
+                mqttClient?.publish("cruzr/persona", MqttMessage(payload.toByteArray()).apply { qos = 1 })
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     private fun applyPersona(persona: String) {
         viewModel.selectedPersona = persona
         binding.personaChip?.text = if (persona == "edna") "EDNA active" else "CRUELLA active"
@@ -837,6 +916,7 @@ class MainActivity : AppCompatActivity() {
                 val persona = if (which == 0) "cruella" else "edna"
                 savePersona(persona)
                 applyPersona(persona)
+                publishPersona(persona)
                 viewModel.clearSession()
                 renderDetections()
                 renderRecommendations()
@@ -868,6 +948,18 @@ class MainActivity : AppCompatActivity() {
                         val payloadString = message?.toString() ?: return
                         try {
                             val json = JSONObject(payloadString)
+
+                            if (topic == "cruzr/persona") {
+                                val p = json.optString("persona").ifBlank { null } ?: return
+                                runOnUiThread { applyPersona(p); savePersona(p) }
+                                return
+                            }
+
+                            if (topic == "cruzr/scan_result") {
+                                handleScanResult(json)
+                                return
+                            }
+
                             val action = json.optString("action")
 
                             when (action) {
@@ -980,13 +1072,47 @@ class MainActivity : AppCompatActivity() {
                 })
 
                 mqttClient?.connect(options)
-                mqttClient?.subscribe("cruzr/commands")
+                mqttClient?.subscribe("cruzr/persona", 1)
+                if (appMode == AppMode.TABLET) {
+                    mqttClient?.subscribe("cruzr/commands")
+                    mqttClient?.subscribe("cruzr/scan_result", 1)
+                }
                 runOnUiThread { setStatus("MQTT Connected to $ipAddress") }
 
             } catch (e: Exception) {
                 runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
             }
         }.start()
+    }
+
+    private fun handleScanResult(payload: JSONObject) {
+        val sessionId = payload.optString("session_id").ifBlank { null }
+        val persona = payload.optString("persona").ifBlank { null }
+
+        val detections = mutableListOf<String>()
+        val detArray = payload.optJSONArray("detections")
+        if (detArray != null) {
+            for (i in 0 until detArray.length()) {
+                val name = detArray.optJSONObject(i)?.optString("class_name")?.trim() ?: continue
+                if (name.isNotBlank()) detections.add(name)
+            }
+        }
+
+        val recommendations = mutableListOf<RecommendationItem>()
+        val recArray = payload.optJSONArray("recommendations")
+        if (recArray != null) {
+            for (i in 0 until recArray.length()) {
+                val item = recArray.optJSONObject(i) ?: continue
+                recommendations.add(RecommendationItem.fromJson(item))
+            }
+        }
+
+        val annotatedFrame = payload.optString("annotated_frame").ifBlank { null }
+
+        viewModel.injectScanResult(sessionId, detections, recommendations, annotatedFrame)
+        if (persona != null) {
+            runOnUiThread { applyPersona(persona) }
+        }
     }
 
     private fun initCruzrHardware() {
@@ -1358,6 +1484,19 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "doGesture crash for '$gestureName': ${e.message}")
         }
+    }
+
+    private fun Bitmap.applyExifRotation(path: String): Bitmap {
+        val degrees = when (ExifInterface(path).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+        )) {
+            ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> return this
+        }
+        val m = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(this, 0, 0, width, height, m, true).also { recycle() }
     }
 
     override fun onDestroy() {

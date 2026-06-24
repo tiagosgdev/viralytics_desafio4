@@ -126,10 +126,26 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:layout_marginBottom="14dp"
             android:text="@string/session_waiting"
             android:textColor="@color/brand_muted"
             android:textSize="11sp" />
+
+        <!-- Mode indicator (shows CAMERA MODE / DISPLAY MODE) -->
+        <TextView
+            android:id="@+id/modeIndicatorText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:layout_marginBottom="14dp"
+            android:background="@drawable/mobile_status_pill"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:textColor="@color/brand_muted"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08" />
 
         <!-- ── TAB BAR ──────────────────────────────────────────────── -->
         <LinearLayout
@@ -228,6 +244,18 @@
                         app:iconSize="18dp"
                         app:backgroundTint="@color/brand_text"
                         app:cornerRadius="16dp" />
+
+                    <TextView
+                        android:id="@+id/scanWaitingText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:background="@drawable/mobile_empty_state"
+                        android:gravity="center"
+                        android:padding="18dp"
+                        android:text="Waiting for scan from phone…"
+                        android:textColor="@color/brand_muted"
+                        android:visibility="gone" />
 
                     <ImageView
                         android:id="@+id/resultImage"

@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 
 data class HistoryEntry(val role: String, val content: String)
 
@@ -33,7 +34,11 @@ sealed interface UiEvent {
 
 class MainViewModel : ViewModel() {
 
-    private val httpClient = OkHttpClient()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
     private val scanRepository = ScanRepository(httpClient)
     private val chatRepository = ChatRepository(httpClient)
     private val sessionRepository = SessionRepository(httpClient)
@@ -162,6 +167,28 @@ class MainViewModel : ViewModel() {
                     _events.value = UiEvent.SetStatus("Chat request failed.")
                 }
         }
+    }
+
+    fun injectScanResult(
+        sessionId: String?,
+        detections: List<String>,
+        recommendations: List<MainActivity.RecommendationItem>,
+        annotatedFrameBase64: String?,
+    ) {
+        currentSessionId = sessionId
+        currentConversationState = null
+        currentIncludeFilters = null
+        chatHistory.clear()
+        detectedCategories.clear()
+        detectedCategories.addAll(detections)
+        currentRecommendations.clear()
+        currentRecommendations.addAll(recommendations)
+        _events.postValue(UiEvent.ScanComplete(
+            sessionId = sessionId,
+            detections = detections,
+            recommendations = recommendations,
+            annotatedFrameBase64 = annotatedFrameBase64,
+        ))
     }
 
     fun clearSession() {

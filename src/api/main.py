@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import httpx
 import numpy as np
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -687,6 +687,7 @@ async def _detect_image_impl(
     file: UploadFile,
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
+    run_body_analysis: bool = True,
 ) -> DetectionResponse:
     """
     Shared implementation for image/mobile scan uploads.
@@ -714,7 +715,7 @@ async def _detect_image_impl(
     body_analysis: dict | None = None
     body_annotated_frame: str | None = None
 
-    if pose_analyzer is not None and pose_analyzer.is_available():
+    if run_body_analysis and pose_analyzer is not None and pose_analyzer.is_available():
         try:
             body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy())
         except Exception as exc:
@@ -791,6 +792,7 @@ async def detect_image(
 
 @app.post("/api/mobile/scan", response_model=DetectionResponse)
 async def mobile_scan(
+    background_tasks: BackgroundTasks,
     persona: str = "cruella",
     file: UploadFile = File(...),
     user_id: Optional[int] = Depends(get_optional_user_id),
@@ -798,11 +800,17 @@ async def mobile_scan(
     """
     Mobile-friendly alias for image scan uploads from native clients.
     Supports the same user-profile personalisation as /api/detect/image.
+    After processing, publishes the result to MQTT so the tablet can display it.
+    The MQTT publish runs after the HTTP response is sent so it never delays the phone.
     """
+    from src.mqtt_scan import publish_scan_result
+
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
     if user_profile:
         print(f"👤  Personalising mobile scan for user_id={user_id}")
-    return await _detect_image_impl(file, persona=persona, user_profile=user_profile)
+    result = await _detect_image_impl(file, persona=persona, user_profile=user_profile, run_body_analysis=False)
+    background_tasks.add_task(publish_scan_result, result.dict(), persona)
+    return result
 
 
 # ── Conversation / chat endpoints ─────────────────────────────────────────────

@@ -72,9 +72,14 @@ class ScanRepository(private val httpClient: OkHttpClient) {
         }
     }
 
-    private fun Bitmap.toJpegBytes(): ByteArray {
+    private fun Bitmap.toJpegBytes(maxDim: Int = 1280): ByteArray {
+        val scaled = if (width > maxDim || height > maxDim) {
+            val scale = maxDim.toFloat() / maxOf(width, height)
+            Bitmap.createScaledBitmap(this, (width * scale).toInt(), (height * scale).toInt(), true)
+        } else this
         val stream = ByteArrayOutputStream()
-        compress(Bitmap.CompressFormat.JPEG, 90, stream)
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+        if (scaled !== this) scaled.recycle()
         return stream.toByteArray()
     }
 }
