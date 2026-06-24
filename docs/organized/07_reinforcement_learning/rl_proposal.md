@@ -3,6 +3,19 @@
 
 ---
 
+> **Implementation update (2026-06).** This proposal originally recommended a
+> contextual-bandit approach and argued against deep RL (§2.1) on the grounds of slow
+> rounds and sparse feedback. The shipped implementation instead uses **PPO** (a PyTorch
+> actor-critic), per an explicit product requirement, while keeping the bandit *framing*:
+> each round is treated as a **one-step** contextual-bandit episode, so PPO runs with a
+> single-step return and a value baseline rather than full multi-step credit assignment.
+> The reward design below (pass-rate + emoji satisfaction) is preserved as the per-item
+> return. A single **global** policy is learned and **persisted across restarts**
+> (network + optimizer checkpoint). See
+> [`rl_implementation.md`](rl_implementation.md) for the full technical write-up.
+
+---
+
 ## 1. Motivation
 
 The current multi-agent recommendation system uses fixed scoring functions and static feature importances. Every round, the `ColourAgent` applies the same compatibility matrix, the `BodyAgent` uses the same adjacency scores, and the `FeatureWeightAgent` derives importances purely from the detected context — none of them learn from whether past recommendations were actually accepted by users.

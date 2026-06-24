@@ -111,6 +111,20 @@ def make_inform(to_jid: str, conv_id: str, payload: dict) -> Message:
     return msg
 
 
+def make_round_result(to_jid: str, conv_id: str, final_keys: list[str]) -> Message:
+    """
+    Orchestrator → RL agent: end-of-round notification carrying the final top-K
+    item keys.  Tagged with event="round_result" so the recipient can tell it
+    apart from other INFORM messages.  This realises the "Orchestrator → agents
+    INFORM (final result)" step described at the top of this module.
+    """
+    return make_inform(
+        to_jid  = to_jid,
+        conv_id = conv_id,
+        payload = {"event": "round_result", "final_keys": list(final_keys)},
+    )
+
+
 # ── Parser ────────────────────────────────────────────────────────────────────
 
 def parse(msg: Message) -> dict:

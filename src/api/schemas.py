@@ -153,3 +153,17 @@ class RecommendRequest(BaseModel):
 class RecommendResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
     round_id: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    round_id: str
+    item_id:  int
+    size:     str = ""
+    rating:   int = Field(..., ge=1, le=5, description="1–5 emoji satisfaction; 3 = neutral")
+
+
+class FeedbackResponse(BaseModel):
+    ok:      bool
+    applied: bool = False          # False when the rating was neutral (no weight change)
+    reason:  Optional[str] = None  # populated when ok is False
+    policy:  Optional[Dict[str, Any]] = None
