@@ -14,4 +14,14 @@
     <color name="brand_match_border">#9F7B49</color>
     <color name="brand_green">#2D8A64</color>
     <color name="brand_red">#B14F44</color>
+
+    <!-- Cruella persona theme (mirrors web CSS body[data-persona='cruella']) -->
+    <color name="cruella_bg">#130B0D</color>
+    <color name="cruella_surface">#1C1013</color>
+    <color name="cruella_surface_soft">#2A161A</color>
+    <color name="cruella_text">#F8ECE8</color>
+    <color name="cruella_muted">#C9A7A2</color>
+    <color name="cruella_accent">#C54242</color>
+    <color name="cruella_accent_strong">#FF9090</color>
+    <color name="cruella_border">#3D1C1E</color>
 </resources>

@@ -40,6 +40,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
+                    android:tag="color_accent"
                     android:text="OUTFIT SCANNER"
                     android:textColor="@color/brand_accent"
                     android:textSize="8sp"
@@ -132,6 +133,7 @@
 
         <!-- ── TAB BAR ──────────────────────────────────────────────── -->
         <LinearLayout
+            android:id="@+id/tabBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="14dp"
@@ -198,6 +200,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:tag="color_muted"
                         android:text="SCAN CONTROLS"
                         android:textColor="@color/brand_muted"
                         android:textSize="10sp"
@@ -258,6 +261,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:tag="color_muted"
                         android:text="DETECTED CLOTHING"
                         android:textColor="@color/brand_muted"
                         android:textSize="10sp"
@@ -309,6 +313,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:tag="color_muted"
                             android:text="STORE RECOMMENDATIONS"
                             android:textColor="@color/brand_muted"
                             android:textSize="10sp"
@@ -340,7 +345,7 @@
                     <HorizontalScrollView
                         android:id="@+id/recommendationsScroll"
                         android:layout_width="match_parent"
-                        android:layout_height="160dp"
+                        android:layout_height="220dp"
                         android:layout_marginTop="12dp"
                         android:fillViewport="true"
                         android:overScrollMode="never"
@@ -394,6 +399,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:tag="color_muted"
                         android:text="REFINE SEARCH"
                         android:textColor="@color/brand_muted"
                         android:textSize="10sp"
@@ -422,6 +428,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
+                            android:tag="color_muted"
                             android:text="@string/chat_welcome_sub"
                             android:textColor="@color/brand_muted"
                             android:textSize="12sp"
@@ -458,6 +465,7 @@
                         android:orientation="horizontal">
 
                         <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/chatInputLayout"
                             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"

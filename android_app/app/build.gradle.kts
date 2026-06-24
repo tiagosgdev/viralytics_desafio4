@@ -49,8 +49,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(files("libs/cruzr-sdk-2.8.0.jar"))
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
-<<<<<<< HEAD
-=======
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
@@ -63,5 +61,7 @@ dependencies {
     // Jetpack Navigation
     implementation("androidx.navigation:navigation-fragment-ktx:2.7.7")
     implementation("androidx.navigation:navigation-ui-ktx:2.7.7")
->>>>>>> 85861c6 (feat: Android build)
+
+    // Image loading
+    implementation("io.coil-kt:coil:2.7.0")
 }
