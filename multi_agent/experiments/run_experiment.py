@@ -351,6 +351,15 @@ async def main() -> None:
             + (f"  (avg {_fmt_dur(total_elapsed / episode_no)}/episode)"
                if episode_no else "")
         )
+        # Auto-generate the Markdown report (best-effort; even a partial/
+        # interrupted run gets one since this is in `finally`).
+        if episode_no and experiment_id and experiment_id > 0:
+            try:
+                from multi_agent.experiments.report import generate
+                out = generate(experiment_id, None)
+                print(f"[{_clock()}] Markdown report → {out}/  (open README.md)")
+            except Exception as exc:
+                print(f"[{_clock()}] (report generation skipped: {exc})")
 
 
 if __name__ == "__main__":
