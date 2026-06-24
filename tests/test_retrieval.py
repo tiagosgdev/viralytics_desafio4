@@ -185,6 +185,121 @@ def test_get_row_keyerror_skips_pair():
     assert out[0]["color"] == "blue"
 
 
+# ── body_type stripping / filter survival (the bug fix) ───────────────────────
+
+# Mirror of the stock SQL query's accepted equality keys (stock_agent QUERY_KEYS).
+# body_type is intentionally NOT here — it belongs to the vector-search path.
+_STOCK_KEYS = {
+    "color", "type", "fit", "size", "style", "pattern", "material",
+    "gender", "age_group", "season", "occasion", "brand",
+}
+
+
+class _ValidatingStockAgent:
+    """Stub that mimics StockAgent.get_candidates' real behaviour closely enough
+    to exercise the fix: it RAISES on any include/exclude key outside QUERY_KEYS
+    (just like ``_normalize_query``), and otherwise actually applies the include
+    (any-of) / exclude (hard drop) filters over a small in-memory catalogue.
+    """
+
+    def __init__(self, catalogue: dict, overstock: list | None = None):
+        # catalogue maps (item_id, size) -> attribute dict
+        self._catalogue = catalogue
+        self.stats = _StubStats(catalogue, overstock or [])
+        self.received_filters = None
+
+    def get_candidates(self, filters, n):
+        self.received_filters = filters
+        include = filters.get("include") or {}
+        exclude = filters.get("exclude") or {}
+        for label, sub in (("include", include), ("exclude", exclude)):
+            for k in sub:
+                if k not in _STOCK_KEYS:
+                    raise ValueError(f"unknown key {k!r} in {label}")
+        if not include and not exclude:
+            raise ValueError("query is empty")
+
+        pairs = []
+        for key, row in self._catalogue.items():
+            if any(row.get(k) in vals for k, vals in exclude.items()):
+                continue
+            if include and not all(row.get(k) in vals for k, vals in include.items()):
+                continue
+            pairs.append(key)
+        return pairs[:n]
+
+
+def test_body_type_stripped_and_valid_filter_applies():
+    # include has body_type (would raise in the stock query) AND a valid `type`.
+    # After the fix body_type is stripped, so the query succeeds and the `type`
+    # filter genuinely applies — we get REAL filtered candidates, NOT overstock.
+    catalogue = {
+        (1, "M"): _full_row(type="shirt"),
+        (2, "M"): _full_row(type="pants"),
+    }
+    overstock = [(99, "L")]  # distinct id so we can tell fallback apart
+    catalogue[(99, "L")] = _full_row(type="hat")
+    agent = _ValidatingStockAgent(catalogue, overstock=overstock)
+
+    weights_result = {
+        "filters": {"include": {"body_type": ["hourglass"], "type": ["shirt"]}}
+    }
+    out = get_candidates(agent, weights_result, {})
+
+    # body_type was stripped before reaching the stock query
+    assert "body_type" not in agent.received_filters["include"]
+    assert agent.received_filters["include"]["type"] == ["shirt"]
+    # the valid `type` filter applied → only the shirt, and NOT the overstock id
+    assert [c["item_id"] for c in out] == [1]
+    assert 99 not in {c["item_id"] for c in out}
+
+
+def test_exclude_filter_drops_matching_items():
+    # An exclude(color) filter must survive stripping and actually drop matches.
+    catalogue = {
+        (1, "M"): _full_row(color="red"),
+        (2, "M"): _full_row(color="blue"),
+        (3, "M"): _full_row(color="green"),
+    }
+    agent = _ValidatingStockAgent(catalogue)
+
+    weights_result = {
+        "filters": {
+            "include": {"body_type": ["pear"]},   # stripped → include becomes empty
+            "exclude": {"color": ["red"]},          # must survive and apply
+        }
+    }
+    out = get_candidates(agent, weights_result, {})
+
+    assert "body_type" not in agent.received_filters["include"]
+    assert agent.received_filters["exclude"] == {"color": ["red"]}
+    ids = {c["item_id"] for c in out}
+    assert 1 not in ids                  # red dropped
+    assert ids == {2, 3}                 # blue + green survive
+
+
+def test_caller_weights_result_not_mutated_by_stripping():
+    # Pruning body_type must not mutate the caller's nested include/exclude dicts.
+    catalogue = {(1, "M"): _full_row(type="shirt")}
+    agent = _ValidatingStockAgent(catalogue)
+
+    weights_result = {
+        "filters": {
+            "include": {"body_type": ["hourglass"], "type": ["shirt"]},
+            "exclude": {"color": ["red"]},
+        }
+    }
+    get_candidates(agent, weights_result, {})
+
+    # Original dict still carries body_type and is byte-for-byte unchanged.
+    assert weights_result["filters"]["include"] == {
+        "body_type": ["hourglass"], "type": ["shirt"]
+    }
+    assert weights_result["filters"]["exclude"] == {"color": ["red"]}
+    # The pruned dicts handed to the stock agent are distinct objects.
+    assert agent.received_filters["include"] is not weights_result["filters"]["include"]
+
+
 # ── n forwarding ──────────────────────────────────────────────────────────────
 
 def test_n_defaults_and_forwards():
