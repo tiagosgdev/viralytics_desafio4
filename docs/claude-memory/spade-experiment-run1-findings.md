@@ -38,11 +38,16 @@ First live end-to-end run of the Part E harness (`multi_agent/experiments/`), 20
   frontend ACCUMULATES (commit cb6bc95, `accumulatedUserIntent()` = last 6 user turns joined
   '. '). Fixed `multi_agent/experiments/run_experiment.py` to accumulate likewise (shopper still
   sees its individual lines, clean prompt). Verified live: colour/type anchor now survives refining turns.
-- **#3 price/soft-attrs — NOT fixed (remaining).** sofia got $605 preppy date-night trousers.
-  Parser DOES extract style/occasion/fit into filters AND price_min/max, but `price` is NOT in
-  stock `QUERY_KEYS`, so price preference is dropped at the SQL retrieval. Fixing means threading
-  price_min/max through (stock_agent.get_candidates already accepts them; the multi_agent path/
-  weight layer needs to forward them). Deeper change; left for the user.
+- **#3 price/budget — FIXED (2026-06-24).** Budget now parsed from chat and steers retrieval.
+  `feature_weighting._extract_price_range()` = deterministic parser (numeric phrases + vague
+  cheap<$50<medium<$150<expensive via PRICE_CHEAP_MAX/PRICE_EXPENSIVE_MIN; handles negated floors
+  "nothing over $40" = ceiling). analyze_intent emits price_min/max into `filters`; retrieval
+  already forwards the whole filters dict. `stock_agent.get_candidates` makes price a SOFT feature
+  (in-budget = +1 match_count, like an include key) NOT a hard filter — so the pool always
+  backfills to n (tiered relaxation), never dead-ends on a tight budget. Per user's spec:
+  "always need 40, follow same rule as other features." c) no price weight/scoring emphasis —
+  price only gates retrieval. Verified live: "nothing over $40"→$17-38; "premium over $200"→
+  $208-1153. Budget fully honoured when >=n in-budget items exist, else best-effort.
 
 ## Stats caveat
 Per-combo means 1.33–2.33 over n=3 (3 customers × repeats=1), scores compressed to 1/2/3 (no 4-5). The "winner" (clothing=weighted_axes 2.33) is noise. Can't discriminate personalities until bugs fixed AND repeats raised (→3) and/or a stronger shopper model.
