@@ -33,13 +33,20 @@ import asyncio
 import json
 import logging
 import subprocess
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import spade
 
 from multi_agent import config
 from multi_agent.experiments import shopper
-from multi_agent.experiments.spec import Combo, ExperimentSpec
+from multi_agent.experiments.spec import (
+    Combo,
+    ExperimentSpec,
+    full_factorial_combos,
+    ofat_combos,
+)
 from multi_agent.experiments.store import ResultsStore
 from multi_agent.run import RecommendationSystem
 
@@ -229,6 +236,18 @@ async def _run_episode(
 
 # ── orchestration ──────────────────────────────────────────────────────────────
 
+def _clock() -> str:
+    """Wall-clock HH:MM:SS for stamping progress lines."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def _fmt_dur(seconds: float) -> str:
+    """Human-readable elapsed time, e.g. '1h 03m 12s' or '47.3s'."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return str(timedelta(seconds=round(seconds)))
+
+
 async def main() -> None:
     logging.basicConfig(
         level  = logging.INFO,
@@ -236,7 +255,26 @@ async def main() -> None:
     )
 
     personas = _load_personas()
-    spec = ExperimentSpec(customer_ids=[p["id"] for p in personas])
+
+    # Run shape is env-configurable so the same entry point serves the quick OFAT
+    # slice (default) and the full factorial grid, without editing code.
+    #   EXPERIMENT_MODE    = ofat (default) | full
+    #   EXPERIMENT_REPEATS = K replays per (customer × combo)   [default 1]
+    import os
+    mode = (os.getenv("EXPERIMENT_MODE") or "ofat").strip().lower()
+    repeats = int(os.getenv("EXPERIMENT_REPEATS") or "1")
+    if mode == "full":
+        combos = list(full_factorial_combos())
+        name = "full_factorial_grid"
+    else:
+        combos = list(ofat_combos())
+        name = "ofat_vertical_slice"
+    spec = ExperimentSpec(
+        name         = name,
+        repeats      = repeats,
+        customer_ids = [p["id"] for p in personas],
+        combos       = combos,
+    )
     persona_by_id = {p["id"]: p for p in personas}
 
     store = ResultsStore()
@@ -253,16 +291,22 @@ async def main() -> None:
 
     print("\n━━  Viralytics Multi-Agent Experiment Harness (Part E)  ━━")
     print("(XMPP broker must be running: docker compose up -d xmpp; Ollama reachable)\n")
+    from multi_agent.experiments.shopper import OLLAMA_SHOPPER_MODEL
     print(f"Experiment #{experiment_id}: {spec.name}")
     print(f"  personas : {', '.join(spec.customer_ids)}")
-    print(f"  combos   : {', '.join(c.name for c in spec.combos)}")
-    print(f"  repeats  : {spec.repeats}\n")
+    print(f"  combos   : {len(spec.combos)}")
+    print(f"  repeats  : {spec.repeats}")
+    print(f"  episodes : {len(spec.customer_ids) * len(spec.combos) * spec.repeats}")
+    print(f"  shopper  : {OLLAMA_SHOPPER_MODEL}\n")
 
     system = RecommendationSystem()
-    print("Starting agents…", flush=True)
+    print(f"[{_clock()}] Starting agents…", flush=True)
     await system.start()
-    print("All agents online.\n")
+    print(f"[{_clock()}] All agents online.\n")
 
+    total_episodes = len(spec.customer_ids) * len(spec.combos) * spec.repeats
+    episode_no   = 0
+    run_started  = time.monotonic()
     try:
         for customer_id in spec.customer_ids:
             persona = persona_by_id[customer_id]
@@ -270,16 +314,22 @@ async def main() -> None:
                 snapshot = _apply_combo(combo)
                 try:
                     for repeat_idx in range(spec.repeats):
+                        episode_no += 1
                         print(
-                            f"  ▸ customer={customer_id}  combo={combo.name}  "
+                            f"[{_clock()}] ▸ ({episode_no}/{total_episodes}) "
+                            f"customer={customer_id}  combo={combo.name}  "
                             f"repeat={repeat_idx} …",
                             flush=True,
                         )
+                        ep_started = time.monotonic()
                         rating = await _run_episode(
                             system, store, experiment_id,
                             persona, combo, repeat_idx,
                         )
-                        print(f"     review = {rating}")
+                        print(
+                            f"[{_clock()}]    review = {rating}  "
+                            f"(took {_fmt_dur(time.monotonic() - ep_started)})"
+                        )
                 finally:
                     _restore_strategies(snapshot)
 
@@ -293,7 +343,14 @@ async def main() -> None:
     finally:
         await system.stop()
         store.close()
+        total_elapsed = time.monotonic() - run_started
         print("\nAgents stopped. Results in multi_agent/experiments/results.db")
+        print(
+            f"[{_clock()}] Total run duration: {_fmt_dur(total_elapsed)} "
+            f"for {episode_no} episode(s)"
+            + (f"  (avg {_fmt_dur(total_elapsed / episode_no)}/episode)"
+               if episode_no else "")
+        )
 
 
 if __name__ == "__main__":

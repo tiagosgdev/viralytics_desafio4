@@ -4,10 +4,10 @@ multi_agent/experiments/shopper.py
 The LLM-played customer.
 
 Replaces the human shopper + the browser frontend in an experiment episode. It
-reuses Ollama exactly like ``LNIAGIA/query_parsing/feature_weighting.py`` does
-(``import ollama`` + ``ollama.chat(model=OLLAMA_REFINER_MODEL, …)``), and mirrors
-that module's robust JSON-extraction so a small instruct model's slightly-off
-replies still parse.
+reuses Ollama like ``LNIAGIA/query_parsing/feature_weighting.py`` does, but on
+its OWN model (``OLLAMA_SHOPPER_MODEL``, default a larger instruct model than the
+pipeline's fast refiner) so the simulated human perceives/steers more reliably.
+It mirrors that module's robust JSON-extraction so a slightly-off reply parses.
 
 Two public calls:
   * ``next_message(persona, history, last_recs) -> {"message": str, "stop": bool}``
@@ -44,6 +44,18 @@ logger = logging.getLogger(__name__)
 # Hard cap on conversation length: even a shopper that never sets stop=True ends.
 MAX_TURNS = 6
 
+# Model used to SIMULATE THE HUMAN shopper — deliberately decoupled from the
+# pipeline's OLLAMA_REFINER_MODEL (the fast 7b-q3 the weight agent uses). A
+# stronger shopper perceives item attributes more reliably and steers/judges
+# more realistically (the 7b-q3 hallucinated item details in run 1). Override
+# with OLLAMA_SHOPPER_MODEL; defaults to a larger instruct model.
+import os
+
+_DEFAULT_SHOPPER_MODEL = "qwen2.5:14b-instruct"
+OLLAMA_SHOPPER_MODEL = (
+    (os.getenv("OLLAMA_SHOPPER_MODEL") or "").strip() or _DEFAULT_SHOPPER_MODEL
+)
+
 # Number of top recommendations shown to the shopper each turn (keeps the prompt
 # small for a small instruct model).
 _RECS_SHOWN = 5
@@ -69,10 +81,9 @@ def _ollama_chat(messages: list[dict]) -> str:
     catch and fall back.
     """
     import ollama  # local import — keeps the module importable without ollama
-    from query_parsing.llm_query_parser import OLLAMA_REFINER_MODEL
 
     response = ollama.chat(
-        model=OLLAMA_REFINER_MODEL,
+        model=OLLAMA_SHOPPER_MODEL,
         messages=messages,
         format="json",
         keep_alive="30m",

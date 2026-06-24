@@ -21,6 +21,7 @@ full factorial grid is deferred (see the Part E plan).
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -89,3 +90,22 @@ def ofat_combos() -> Iterator[Combo]:
             combo = dict(_DEFAULT_AGENT_STRATEGIES)
             combo[agent] = strategy
             yield Combo(name=f"{agent}={strategy}", strategies=combo)
+
+
+def full_factorial_combos() -> Iterator[Combo]:
+    """Yield every combination of the four scorers' registered strategies.
+
+    Unlike OFAT (one agent off-baseline at a time), this is the full grid:
+    ``∏ |strategies(agent)|`` combos (e.g. 3×3×3×3 = 81). Use this to measure
+    interactions between agent personalities, not just each one's marginal
+    effect. The label encodes all four assignments, e.g.
+    ``colour=harmonizer|body=lenient|clothing=strict_type|stock=bestsellers``.
+    """
+    per_agent = [
+        [(agent, strategy) for strategy in registry.strategy_names(agent)]
+        for agent in SCORER_AGENTS
+    ]
+    for assignment in itertools.product(*per_agent):
+        combo = dict(assignment)
+        label = "|".join(f"{agent}={combo[agent]}" for agent in SCORER_AGENTS)
+        yield Combo(name=label, strategies=combo)
