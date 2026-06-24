@@ -36,6 +36,12 @@ def borda_aggregate(
     k             : number of top items to return
 
     Returns a list of item_keys (f"{item_id}:{size}") sorted best-first.
+
+    The result is deduplicated by item_id: only the best-scoring size of each
+    garment is kept, so the top-k is k DISTINCT items. Without this, every size
+    of the same item scores near-identically (colour/clothing/body read the same
+    item_id, only stock/RL vary slightly by size), so the top-k floods with the
+    same garment repeated across sizes — killing perceived diversity.
     """
     all_items = {key for scores in proposals.values() for key in scores}
     if not all_items:
@@ -56,8 +62,20 @@ def borda_aggregate(
             borda_pts = n - rank_0       # n pts for rank 1, down to 1 pt for rank n
             composite[item_key] += weight * borda_pts
 
-    top_items = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
-    return top_items[:k]
+    ranked_keys = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
+
+    # Keep only the best-scoring size per item_id (item_key is "item_id:size").
+    seen_item_ids: set[str] = set()
+    top_items: list[str] = []
+    for item_key in ranked_keys:
+        item_id = item_key.split(":", 1)[0]
+        if item_id in seen_item_ids:
+            continue
+        seen_item_ids.add(item_id)
+        top_items.append(item_key)
+        if len(top_items) >= k:
+            break
+    return top_items
 
 
 def build_agent_weights(

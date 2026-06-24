@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from multi_agent.retrieval import get_candidates
+from multi_agent.retrieval import _SIZE_OVERFETCH, get_candidates
 
 
 # ── Stub stock agent ──────────────────────────────────────────────────────────
@@ -300,13 +300,43 @@ def test_caller_weights_result_not_mutated_by_stripping():
     assert agent.received_filters["include"] is not weights_result["filters"]["include"]
 
 
-# ── n forwarding ──────────────────────────────────────────────────────────────
+# ── n forwarding (overfetch) ────────────────────────────────────────────────
 
-def test_n_defaults_and_forwards():
+def test_n_overfetches_to_find_distinct_items():
+    # The stock pool is at (item_id, size) grain, so to return n DISTINCT items
+    # the function overfetches n * _SIZE_OVERFETCH rows from the stock agent.
     agent = _StubStockAgent(pairs=[], rows={})
     get_candidates(agent, {}, {})
-    assert agent.received_n == 40  # N_CANDIDATES default
+    assert agent.received_n == 40 * _SIZE_OVERFETCH  # N_CANDIDATES default
 
     agent2 = _StubStockAgent(pairs=[], rows={})
     get_candidates(agent2, {}, {}, n=5)
-    assert agent2.received_n == 5
+    assert agent2.received_n == 5 * _SIZE_OVERFETCH
+
+
+# ── distinct-item dedup ───────────────────────────────────────────────────────
+
+def test_collapses_to_distinct_items_keeping_best_stocked_size():
+    # Same item_id across three sizes plus a second item. Result must hold one
+    # row per item_id, and for the duplicated item keep the best-stocked size.
+    rows = {
+        (1, "S"): _full_row(stock_count=2),
+        (1, "M"): _full_row(stock_count=9),   # best stock for item 1
+        (1, "L"): _full_row(stock_count=5),
+        (2, "M"): _full_row(stock_count=3),
+    }
+    agent = _StubStockAgent(pairs=[(1, "S"), (1, "M"), (1, "L"), (2, "M")], rows=rows)
+
+    out = get_candidates(agent, {"filters": {}}, {})
+
+    assert [c["item_id"] for c in out] == [1, 2]      # distinct, match-count order
+    assert out[0]["size"] == "M" and out[0]["stock_count"] == 9
+
+
+def test_distinct_item_cap_respects_n():
+    rows = {(i, "M"): _full_row() for i in range(1, 6)}
+    agent = _StubStockAgent(pairs=[(i, "M") for i in range(1, 6)], rows=rows)
+
+    out = get_candidates(agent, {"filters": {}}, {}, n=3)
+
+    assert [c["item_id"] for c in out] == [1, 2, 3]

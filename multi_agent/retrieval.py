@@ -21,6 +21,12 @@ from multi_agent.config import N_CANDIDATES
 
 logger = logging.getLogger(__name__)
 
+# The stock pool is at (item_id, size) grain. To collect N_CANDIDATES *distinct*
+# items we overfetch ~this many rows per wanted item (a garment has up to ~8
+# sizes), then keep the best-stocked size of each. Bounded so a small/over-
+# filtered catalogue still returns promptly.
+_SIZE_OVERFETCH = 8
+
 
 # The stock SQL query only accepts the keys in StockAgent's QUERY_KEYS; any other
 # field (notably `body_type`, which the intent/weight layer injects for the Qdrant
@@ -82,24 +88,35 @@ def get_candidates(
     # invalid). The overstock fallback keeps us returning *something*, but we log
     # it loudly: a silent fallback here is exactly what once hid body_type
     # leaking into the query and degrading every round to the same overstock set.
+    #
+    # The stock pool is at (item_id, size) grain, so a plain top-n collapses to a
+    # handful of garments repeated across sizes (~7 distinct items for n=40). We
+    # overfetch and collapse to n DISTINCT items below, so the debate — and the
+    # final top-k — span n real garments, not the same few in every size.
+    raw_n = n * _SIZE_OVERFETCH
     try:
-        pairs = stock_agent.get_candidates(query_filters, n=n)
+        pairs = stock_agent.get_candidates(query_filters, n=raw_n)
     except Exception as exc:
         logger.warning(
             "stock_agent.get_candidates failed (%s); falling back to overstock "
             "items. query_filters=%r",
             exc, query_filters,
         )
-        pairs = stock_agent.stats.get_overstock_items(top_k=n)
+        pairs = stock_agent.stats.get_overstock_items(top_k=raw_n)
 
-    info: list[dict] = []
+    # Collapse to one row per item_id, keeping the best-stocked in-stock size and
+    # preserving the match-count order in which each item first appears (the raw
+    # pairs are already sorted by match_count desc, item_id asc).
+    best_by_item: dict[int, dict] = {}
+    order: list[int] = []
     for iid, sz in pairs:
         try:
             row = stock_agent.stats.get_row(iid, sz)
         except KeyError:
             continue
-        info.append({
-            "item_id":    int(iid),
+        iid = int(iid)
+        cand = {
+            "item_id":    iid,
             "size":       sz,
             "color":      row.get("color", ""),
             "type":       row.get("type", ""),
@@ -115,5 +132,12 @@ def get_candidates(
             "price":      row.get("price"),
             "stock_count": int(row.get("stock_count", 0)),
             "push_score": float(row.get("push_score", 0.0)),
-        })
-    return info
+        }
+        prev = best_by_item.get(iid)
+        if prev is None:
+            best_by_item[iid] = cand
+            order.append(iid)
+        elif cand["stock_count"] > prev["stock_count"]:
+            best_by_item[iid] = cand
+
+    return [best_by_item[iid] for iid in order[:n]]

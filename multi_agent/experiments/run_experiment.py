@@ -118,12 +118,17 @@ async def _run_episode(
     height_cm          = persona.get("height_cm")
     height_cm          = float(height_cm) if height_cm is not None else None
 
-    history: list[dict] = []   # [{shopper_msg, agent_weights, items}]
+    history: list[dict] = []        # persisted turns: [{shopper_msg, agent_weights, items}]
+    shopper_msgs: list[str] = []    # individual shopper utterances (for accumulation)
     last_recs: list[dict] = []
-    user_answer = ""           # first round has no answer yet (rule-based weights)
     abandoned = False
 
     for turn_idx in range(shopper.MAX_TURNS):
+        # Accumulated intent mirrors the frontend's accumulatedUserIntent(): join
+        # the last 6 shopper utterances so the colour/type anchor survives a later
+        # turn that only refines fit/style. Empty on the first (camera-only) round,
+        # which keeps the rule-based weights for that round.
+        user_answer = ". ".join(shopper_msgs[-6:])
         try:
             _round_id, results = await system.recommend(
                 detected_color          = detected_color,
@@ -154,9 +159,12 @@ async def _run_episode(
         # first, camera-only round).
         #
         # Ask the shopper for its next line (run the blocking LLM off the loop).
+        # It sees its own prior INDIVIDUAL lines (not the accumulated string) so
+        # the prompt stays clean and non-repetitive.
         loop = asyncio.get_event_loop()
+        shopper_history = [{"shopper_msg": m} for m in shopper_msgs]
         reaction = await loop.run_in_executor(
-            None, shopper.next_message, persona, history, last_recs
+            None, shopper.next_message, persona, shopper_history, last_recs
         )
         history.append(
             {
@@ -169,7 +177,9 @@ async def _run_episode(
         if reaction.get("stop"):
             # Satisfied / gave up: this turn's recs are the final ones.
             break
-        user_answer = reaction.get("message", "")
+        new_msg = reaction.get("message", "").strip()
+        if new_msg:
+            shopper_msgs.append(new_msg)
     else:
         # Loop exhausted MAX_TURNS without a stop — still a valid (capped) episode.
         pass
@@ -182,8 +192,9 @@ async def _run_episode(
         reason = ""
     else:
         loop = asyncio.get_event_loop()
+        shopper_history = [{"shopper_msg": m} for m in shopper_msgs]
         review = await loop.run_in_executor(
-            None, shopper.final_review, persona, history, last_recs
+            None, shopper.final_review, persona, shopper_history, last_recs
         )
         rating = review.get("rating")
         reason = review.get("reason", "")
