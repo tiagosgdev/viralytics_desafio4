@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 :root {
   --bg: #f4f1ea;
   --surface: rgba(255, 255, 255, 0.82);
@@ -2332,3 +2333,21 @@ body[data-persona='cruella'] .match-badge {
     scroll-behavior: auto !important;
   }
 }
+=======
+/*
+ * Legacy entry point — kept so any existing references to style.css still work.
+ * The canonical split files are now loaded directly from index.html.
+ * If you ever serve this file standalone (e.g. from a CDN), re-enable these imports:
+ *
+ * @import url('./base.css');
+ * @import url('./layout.css');
+ * @import url('./landing.css');
+ * @import url('./camera.css');
+ * @import url('./chat.css');
+ * @import url('./tags.css');
+ * @import url('./recommendations.css');
+ * @import url('./notifications.css');
+ * @import url('./animations.css');
+ * @import url('./responsive.css');
+ */
+>>>>>>> d334ee2 (feat: Android build)

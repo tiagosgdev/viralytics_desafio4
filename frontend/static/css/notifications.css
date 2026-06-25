@@ -1,0 +1,217 @@
+/* ── Dismissible notification toasts ─────────────────────────────────────── */
+
+.notification-modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem 1rem;
+  pointer-events: none;
+}
+
+.notification-modal {
+  position: relative;
+  pointer-events: auto;
+  border-radius: var(--radius-md);
+  padding: 2rem;
+  max-width: 26rem;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  animation: fadeInScale 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.notification-modal.removing {
+  animation: fadeOutScale 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Success */
+.notification-modal.success {
+  background: linear-gradient(135deg, rgba(45, 138, 100, 0.28), rgba(45, 138, 100, 0.18));
+  border: 1px solid rgba(45, 138, 100, 0.35);
+}
+
+body[data-persona='cruella'] .notification-modal.success {
+  background: linear-gradient(135deg, rgba(87, 184, 143, 0.32), rgba(87, 184, 143, 0.22));
+  border: 1px solid rgba(87, 184, 143, 0.45);
+}
+
+.notification-modal.success .notification-icon {
+  color: var(--green);
+  background: rgba(45, 138, 100, 0.22);
+}
+
+/* Error */
+.notification-modal.error {
+  background: linear-gradient(135deg, rgba(177, 79, 68, 0.28), rgba(177, 79, 68, 0.18));
+  border: 1px solid rgba(177, 79, 68, 0.35);
+}
+
+body[data-persona='cruella'] .notification-modal.error {
+  background: linear-gradient(135deg, rgba(255, 103, 103, 0.32), rgba(255, 103, 103, 0.22));
+  border: 1px solid rgba(255, 103, 103, 0.45);
+}
+
+.notification-modal.error .notification-icon {
+  color: var(--red);
+  background: rgba(177, 79, 68, 0.22);
+}
+
+body[data-persona='cruella'] .notification-modal.error .notification-icon {
+  color: #ff6767;
+  background: rgba(255, 103, 103, 0.28);
+}
+
+/* Warning */
+.notification-modal.warning {
+  background: linear-gradient(135deg, rgba(159, 123, 73, 0.28), rgba(159, 123, 73, 0.18));
+  border: 1px solid rgba(159, 123, 73, 0.35);
+}
+
+body[data-persona='cruella'] .notification-modal.warning {
+  background: linear-gradient(135deg, rgba(255, 144, 144, 0.32), rgba(255, 144, 144, 0.22));
+  border: 1px solid rgba(255, 144, 144, 0.45);
+}
+
+.notification-modal.warning .notification-icon {
+  color: var(--accent-strong);
+  background: rgba(159, 123, 73, 0.22);
+}
+
+body[data-persona='cruella'] .notification-modal.warning .notification-icon {
+  color: #ffb3b3;
+  background: rgba(255, 144, 144, 0.28);
+}
+
+/* Content */
+.notification-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.notification-icon {
+  width: 2.8rem;
+  height: 2.8rem;
+  flex: 0 0 2.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 1.4rem;
+}
+
+.notification-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-title {
+  margin: 0 0 0.3rem;
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+body[data-persona='cruella'] .notification-title {
+  color: #fff7f5;
+}
+
+.notification-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+body[data-persona='cruella'] .notification-message {
+  color: #c9a7a2;
+}
+
+.notification-action {
+  margin-top: 1.2rem;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.notification-btn {
+  border: 0;
+  border-radius: 0.8rem;
+  padding: 0.7rem 1.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.notification-btn-primary {
+  background: var(--text);
+  color: #fff;
+}
+
+body[data-persona='cruella'] .notification-btn-primary {
+  background: linear-gradient(135deg, #7d171d, #c13740);
+  color: #fff7f6;
+}
+
+.notification-btn-primary:hover,
+.notification-btn-primary:focus {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.notification-btn-secondary {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+body[data-persona='cruella'] .notification-btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f8ece8;
+}
+
+.notification-btn-secondary:hover,
+.notification-btn-secondary:focus {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.notification-close-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.4rem;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.notification-close-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+
+body[data-persona='cruella'] .notification-close-btn {
+  color: #c9a7a2;
+}
+
+body[data-persona='cruella'] .notification-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff7f5;
+}
