@@ -142,6 +142,14 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
 ## Resolved decisions
 1. **Veto combination → B (weighted collective).** Eliminate if Σ(weights of vetoing
    agents) ≥ τ. A (blackball) kept reachable as the τ→0+ special case via `VETO_MODE`.
+   - **τ = 0.5 (default) is intentional:** typical agent weights are colour 0.255,
+     clothing 0.255, body 0.212, stock 0.128, rl 0.15, so **no single agent can eliminate
+     an item** — it takes ≥2 agents agreeing (e.g. colour+clothing = 0.51 ≥ 0.5). This is
+     the accepted behaviour (confirmed 2026-06-25): a lone strict agent only *down-weights*
+     via Borda, it does not remove. Live smoke confirmed the τ threshold sits at the
+     single-agent weight (~0.25): τ≤0.2 lets colour alone gate → monochrome-but-varied-type
+     results; τ≥0.3 needs a coalition → broader colour variety. τ is the relevance↔variety
+     dial; 0.5 favours variety.
 2. **Broad band width → match ≥ 1 signal.** Band = items matching at least one of the
    scanned attributes (color/type/body_type) OR any conversation-requested feature.
    ~1,300+ items, so random sampling actually varies the slate.
