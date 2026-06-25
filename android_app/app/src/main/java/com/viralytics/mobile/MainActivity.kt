@@ -241,6 +241,7 @@ class MainActivity : AppCompatActivity() {
                         switchTab("scan")
                         updateSessionLabel("Vision-led")
                         showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
+                        extendSession()
                     }
                 }
                 is UiEvent.ScanError -> showChatReply(event.message)
@@ -251,6 +252,7 @@ class MainActivity : AppCompatActivity() {
                     updateSessionLabel(mode)
                     showChatReply(event.reply)
                     binding.chatInput.text?.clear()
+                    extendSession()
                 }
                 is UiEvent.AgentRecsComplete -> {
                     if (appMode == AppMode.TABLET) renderRecommendations()
