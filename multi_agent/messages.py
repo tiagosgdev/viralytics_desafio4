@@ -84,18 +84,25 @@ def make_propose(
     conv_id: str,
     agent_id: str,
     scores: dict[str, float],
+    vetoes: list[str] | None = None,
 ) -> Message:
     """
     Scorer agent → Orchestrator: sealed proposal.
 
     `scores` maps item_key ("item_id:size") → raw score in [0, 1].
     Higher score = agent believes this item better suits its criterion.
+
+    `vetoes` is the optional list of item_keys this agent rejects (score below
+    its personality `veto_threshold`). Defaults to an empty list, so legacy
+    callers that pass only `scores` are unaffected. Consumed by the veto_batch
+    selection path; ignored by legacy Borda.
     """
     msg = Message(to=to_jid)
     msg.body = json.dumps({
         "conv_id":  conv_id,
         "agent_id": agent_id,
         "scores":   scores,
+        "vetoes":   list(vetoes or []),
     })
     msg.set_metadata("performative", PROPOSE)
     msg.set_metadata("conv_id", conv_id)

@@ -55,11 +55,18 @@ class ColourScoreBehaviour(CyclicBehaviour):
         )
         detected = _resolve_detected(context, weights_result)
 
+        # Derive the veto set from the existing scores: an item is vetoed when its
+        # score is strictly below this personality's veto_threshold. Default -1.0
+        # vetoes nothing (legacy-safe when the param is absent).
+        veto_threshold = float(params.get("veto_threshold", -1.0))
+        vetoes = [k for k, v in scores.items() if v < veto_threshold]
+
         propose = make_propose(
             to_jid   = str(msg.sender),
             conv_id  = conv_id,
             agent_id = "colour",
             scores   = scores,
+            vetoes   = vetoes,
         )
         await self.send(propose)
         # Write-only per-agent memory (course requirement; never read for

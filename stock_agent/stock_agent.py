@@ -183,6 +183,74 @@ class StockAgent:
         ).head(n)
         return list(zip(df["item_id"].tolist(), df["size"].tolist()))
 
+    # ─── 1b. Broad random batch (veto_batch selection mode) ─────────────
+
+    def get_random_batch(
+        self,
+        query: dict,
+        n: int = 40,
+        *,
+        exclude_item_ids: Iterable[int] | None = None,
+        seed: int | None = None,
+    ) -> list[tuple[int, str]]:
+        """Sample `n` RANDOM in-stock (item_id, size) pairs from the BROAD band.
+
+        The broad relevance band = rows matching **at least one** include signal
+        (any one scanned attribute / conversation-requested feature). This is the
+        OR of the include filters, in contrast to `get_candidates`, which ranks by
+        how MANY filters match. The band is much wider (~1,300+ rows vs ~45), so a
+        random sample genuinely varies the slate every batch.
+
+        exclude_item_ids : item_ids already seen in earlier batches — dropped so
+                           successive batches don't re-offer the same garments.
+        seed             : optional RNG seed for reproducible sampling (tests).
+
+        Falls back to sampling the whole in-stock catalogue when the query carries
+        no usable include signal. `exclude` filters (hard drops) still apply.
+        """
+        include, exclude, price_min, price_max = self._normalize_query(query)
+
+        df = self.stats.df
+        mask = (df["active"] == 1) & (df["stock_count"] > 0)
+        df = df.loc[mask].copy()
+
+        # exclude is a hard drop (same as get_candidates).
+        for k, vals in exclude.items():
+            df = df.loc[~_field_match(df, k, vals)]
+
+        if exclude_item_ids:
+            seen = {int(i) for i in exclude_item_ids}
+            if seen:
+                df = df.loc[~df["item_id"].isin(seen)]
+
+        if df.empty:
+            return []
+
+        # Broad band = OR of all include filters (+ in-budget as one more signal).
+        # An item is in the band if it matches AT LEAST ONE signal.
+        band = pd.Series(False, index=df.index)
+        any_signal = False
+        for k, vals in include.items():
+            band = band | _field_match(df, k, vals)
+            any_signal = True
+        if price_min is not None or price_max is not None:
+            in_budget = pd.Series(True, index=df.index)
+            if price_min is not None:
+                in_budget = in_budget & (df["price"] >= price_min)
+            if price_max is not None:
+                in_budget = in_budget & (df["price"] <= price_max)
+            band = band | in_budget
+            any_signal = True
+
+        # No usable signal → the whole in-stock catalogue is the band.
+        pool = df.loc[band] if any_signal else df
+        if pool.empty:
+            pool = df  # signal matched nothing → fall back to the full in-stock set
+
+        take = min(n, len(pool))
+        sample = pool.sample(n=take, random_state=seed)
+        return list(zip(sample["item_id"].tolist(), sample["size"].tolist()))
+
     # ─── query normalization ──────────────────────────────────────────
 
     @staticmethod

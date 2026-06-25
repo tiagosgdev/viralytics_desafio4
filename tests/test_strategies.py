@@ -239,6 +239,60 @@ def test_get_strategy_returns_param_copy():
     assert p2["exact"] == 1.0   # mutation didn't leak into the registry
 
 
+# ── veto_threshold (random-batch + veto path) ─────────────────────────────────
+
+def _veto_set(agent: str, name: str, cands, ctx, wr):
+    """Replicate the scorer agents' veto derivation: score < veto_threshold."""
+    fn, params = get_strategy(agent, name)
+    scores = fn(cands, ctx, wr, params)
+    thr = float(params.get("veto_threshold", -1.0))
+    return {k for k, v in scores.items() if v < thr}, scores
+
+
+def test_registry_strategies_carry_veto_threshold():
+    # Every registered strategy must expose a veto_threshold param.
+    for agent, names in EXPECTED_NAMES.items():
+        for name in names:
+            _, params = get_strategy(agent, name)
+            assert "veto_threshold" in params, f"{agent}/{name} missing veto_threshold"
+
+
+def test_colour_purist_vetoes_unrelated_and_compatible():
+    cands = _colour_candidates()           # exact / compatible / unrelated
+    ctx = {"detected_color": "black"}
+    vetoes, scores = _veto_set("colour", "purist", cands, ctx, {})
+    # purist threshold 0.7: exact (1.0) survives; compatible (0.65) and
+    # unrelated (0.20) are vetoed.
+    assert vetoes == {"2:M", "3:M"}
+    assert "1:M" not in vetoes
+
+
+def test_colour_adventurous_vetoes_nothing():
+    cands = _colour_candidates()
+    ctx = {"detected_color": "black"}
+    vetoes, _ = _veto_set("colour", "adventurous", cands, ctx, {})
+    assert vetoes == set()                  # threshold 0.0 → nothing below it
+
+
+def test_stock_never_vetoes():
+    # stock is a ranking preference, not a gate → threshold -1 → no vetoes.
+    cands = _stock_candidates()
+    for name in ("push", "overstock_aggressive", "bestsellers"):
+        vetoes, _ = _veto_set("stock", name, cands, {}, {})
+        assert vetoes == set(), f"stock/{name} should never veto"
+
+
+def test_body_strict_vetoes_poor_fits_lenient_does_not():
+    cands = _body_candidates()              # exact / adjacent / no-data / no-match
+    ctx = {"detected_body_type": "hourglass"}
+    strict_vetoes, _ = _veto_set("body", "strict", cands, ctx, {})
+    lenient_vetoes, _ = _veto_set("body", "lenient", cands, ctx, {})
+    # strict threshold 0.5 vetoes no-data (0.20) and no-match (0.0).
+    assert strict_vetoes == {"3:M", "4:M"}
+    # lenient (threshold 0.1) vetoes strictly fewer items.
+    assert lenient_vetoes < strict_vetoes
+
+
 @pytest.mark.parametrize("agent,names", sorted((a, n) for a, n in EXPECTED_NAMES.items()))
 def test_every_strategy_returns_scores_in_unit_interval(agent, names):
     cand_builders = {
