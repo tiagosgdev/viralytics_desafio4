@@ -28,17 +28,29 @@ nuanced "prioritize X but also weigh Y" judgment would be brittle hand-tuning.
 
 Per João Serra's proposal, adapted to a **broad random sample** (option 3):
 
-1. **Retrieval goes broad + random.** Instead of the exact `color+type` hard filter,
-   sample N=40 **random** in-stock items within a *broad relevance band* (e.g. same
-   garment family / any one scanned attribute) so the slate is **diverse on every
-   dimension**. Every agent now has variation to act on → no agent is inert.
-2. **Agents vote *and* can veto.** Each agent keeps scoring only its own dimension
-   (no holistic rewrite), but additionally **vetoes** items that fall below a
-   personality-set threshold on that dimension. Personality = veto strictness.
-3. **Eliminate + rank survivors.** Remove vetoed items; rank the rest by weighted
-   approval; add them to a running "chosen" pool.
-4. **Iterate to fill 10.** If the chosen pool has < 10, draw another random 40
-   (excluding already-seen) and repeat, up to `MAX_BATCHES`, then best-effort fill.
+1. **Retrieval goes broad + random.** Sample N=40 **random** in-stock items from the
+   *broad relevance band* = items matching **at least one** signal — any one scanned
+   attribute (color / type / body_type) OR any conversation-requested feature
+   (decision #2). This band holds ~1,300+ items (vs 45 for the old `color AND type`), so
+   random sampling genuinely varies the slate AND every agent's dimension varies → no
+   agent is inert.
+2. **Agents score + veto (membership).** Each agent keeps scoring only its own dimension
+   (no holistic rewrite), and **vetoes** items below a personality-set `veto_threshold`.
+   Personality = veto strictness.
+3. **Weighted veto eliminates (decision #1 = B).** For each item, `reject_mass` = Σ of the
+   weights of the agents that vetoed it; **eliminate if `reject_mass ≥ τ`**. Surviving
+   items go into a running pool (keep each agent's raw score for them). Relevance is left
+   entirely to the agents' votes (decision #3 = votes) — no separate soft scan-preference.
+4. **Iterate to fill 10.** If the pool has < 10 survivors, draw another random 40
+   (excluding already-seen) and repeat, up to `MAX_BATCHES`.
+5. **Tie-aware Borda orders the survivors (ranking).** Once the pool has ≥ 10 (or batches
+   exhausted), run **tie-aware weighted Borda over the accumulated survivor pool** (using
+   each agent's stored raw scores) → ordered top-10. If still < 10 after `MAX_BATCHES`,
+   best-effort fill from the least-vetoed / highest-Borda items seen.
+
+> **Veto vs Borda:** the weighted veto decides *which* items survive (membership); Borda is
+> NOT removed — it runs *after*, on the survivors, to decide the *order* and final 10. Same
+> Borda mechanism as today, just over the post-veto pool instead of the raw 40.
 
 Why this fixes it: a diverse slate makes every agent's bid vary, and the **veto makes
 each agent's personality directly change which items survive** → swapping personalities
@@ -76,9 +88,9 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
 - **Cons:** more moving parts; τ needs tuning; a high-weight agent can still dominate
   (often desirable).
 
-> **Decision: TBD.** Note A is a special case of B (τ → 0+ behaves like a blackball),
-> so building B with a `VETO_MODE` flag keeps both A/B-testable in the harness without
-> committing to one now. Final choice left open.
+> **Decision: B (weighted collective).** Eliminate an item when the combined weight of the
+> agents vetoing it reaches τ. A (blackball) is the τ→0+ special case, so a `VETO_MODE` flag
+> can still expose it for A/B comparison, but B is the chosen default.
 
 ## Files to change
 
@@ -127,17 +139,18 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
   `python -m multi_agent.experiments.report`. Success = per-agent marginal spread now
   exceeds noise (Δ ≫ 0.04 SE), i.e. personalities separate.
 
-## Committed (not open)
-- **Tie-aware Borda** fix ships as part of this work (appendix below).
-- **Random sampling** in retrieval replaces the deterministic id-ordered query.
+## Resolved decisions
+1. **Veto combination → B (weighted collective).** Eliminate if Σ(weights of vetoing
+   agents) ≥ τ. A (blackball) kept reachable as the τ→0+ special case via `VETO_MODE`.
+2. **Broad band width → match ≥ 1 signal.** Band = items matching at least one of the
+   scanned attributes (color/type/body_type) OR any conversation-requested feature.
+   ~1,300+ items, so random sampling actually varies the slate.
+3. **Relevance floor → votes only.** No separate soft scan-preference in ranking;
+   relevance is entirely the agents' scores + vetoes.
 
-## Open decisions (TBD)
-1. **Veto combination:** Option A (blackball) vs B (weighted). See note above.
-2. **Broad band width:** how loose is "broad relevance" — same garment family? any one
-   scanned attribute? fully random in-stock? (controls relevance vs variety + speed, and
-   also whether random sampling actually varies the slate — needs ≫ 40 items in band).
-3. **Relevance floor:** should the scanned color/type remain a *soft* strong preference
-   in ranking so results stay on-theme, or purely up to the agents' votes?
+## Committed scope
+- **Tie-aware Borda** fix (appendix below) — ranks the post-veto survivors.
+- **Random sampling** in retrieval replaces the deterministic id-ordered query.
 
 ---
 
