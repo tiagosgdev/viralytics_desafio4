@@ -142,14 +142,33 @@ class RobotStatusResponse(BaseModel):
 # ── Multi-agent recommendation ────────────────────────────────────────────────
 
 class RecommendRequest(BaseModel):
-    detected_color:     str = ""
-    detected_type:      str = ""
-    detected_body_type: str = ""
-    user_answer:        str = ""
-    user_gender:        str = ""
-    user_height_cm:     Optional[float] = None
+    detected_color:          str = ""
+    detected_type:           str = ""
+    detected_body_type:      str = ""
+    # Real detection confidences (0–1) backing each signal; default 1.0 reproduces
+    # the legacy confidence-agnostic ranking. A low value quiets that agent.
+    detected_color_conf:     float = 1.0
+    detected_type_conf:      float = 1.0
+    detected_body_type_conf: float = 1.0
+    user_answer:             str = ""
+    user_gender:             str = ""
+    user_height_cm:          Optional[float] = None
 
 
 class RecommendResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
     round_id: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    round_id: str
+    item_id:  int
+    size:     str = ""
+    rating:   int = Field(..., ge=1, le=5, description="1–5 emoji satisfaction; 3 = neutral")
+
+
+class FeedbackResponse(BaseModel):
+    ok:      bool
+    applied: bool = False          # False when the rating was neutral (no weight change)
+    reason:  Optional[str] = None  # populated when ok is False
+    policy:  Optional[Dict[str, Any]] = None

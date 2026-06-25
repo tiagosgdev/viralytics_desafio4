@@ -31,8 +31,9 @@ from multi_agent.aggregator import borda_aggregate, build_agent_weights
 from multi_agent.config import (
     COLLECT_TIMEOUT_S,
     JIDS,
-    N_CANDIDATES,
     QUEUE_MAX_SIZE,
+    RL_ENABLED,
+    RL_WEIGHT,
     SCORER_NAMES,
     STOCK_WEIGHT,
     TOP_K,
@@ -46,8 +47,10 @@ from multi_agent.messages import (
     comm_log,
     make_cfp,
     make_request,
+    make_round_result,
     parse,
 )
+from multi_agent.retrieval import get_candidates
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _STOCK_DIR = _REPO_ROOT / "stock_agent"
@@ -76,6 +79,9 @@ _CFP_FIELDS: dict[str, frozenset[str]] = {
     # clothing_agent: counts how many include-filter axes each item satisfies
     "clothing": frozenset({"item_id", "size", "type", "age_group", "occasion",
                            "season", "style", "pattern", "material", "gender", "fit"}),
+    # rl_agent: builds match + normalised inventory/price features from these fields
+    "rl":       frozenset({"item_id", "size", "color", "type", "gender",
+                           "price", "stock_count", "push_score"}),
 }
 
 
@@ -124,7 +130,8 @@ class OrchestratorBehaviour(CyclicBehaviour):
             # ── 2. Retrieve 40 candidates (blocking DB call → executor) ───
             loop = asyncio.get_event_loop()
             candidates_info: list[dict] = await loop.run_in_executor(
-                None, lambda: self._get_candidates(weights_result, context)
+                None,
+                lambda: get_candidates(self.agent._stock_agent, weights_result, context),
             )
             if not candidates_info:
                 logger.warning(f"[{conv_id}] No candidates; resolving with empty list.")
@@ -152,9 +159,25 @@ class OrchestratorBehaviour(CyclicBehaviour):
                          f"missing agents {missing} — redistributing weights")
 
             # ── 5. Weighted Borda count (with redistribution if agents missing) ──
+            # All four weights (colour/clothing/body/stock) derive from the four
+            # conversation-driven emphases in `weights_result["weights"]`
+            # (which now includes a `stock` importance). STOCK_WEIGHT is only a
+            # fallback importance for callers that omit the stock emphasis.
+            # Fold real detection confidence into the four emphasis agents so a
+            # low-confidence detection quiets its agent. stock is not a detection
+            # (always 1.0); the RL fixed slice is never confidence-scaled. With
+            # all-1.0 confidences this is identical to the legacy split.
+            confidences = {
+                "colour":   context.get("detected_color_conf",     1.0),
+                "clothing": context.get("detected_type_conf",      1.0),
+                "body":     context.get("detected_body_type_conf", 1.0),
+                "stock":    1.0,
+            }
             agent_weights = build_agent_weights(
                 weights_result.get("weights", {}),
                 STOCK_WEIGHT,
+                rl_weight=RL_WEIGHT if RL_ENABLED else 0.0,
+                confidences=confidences,
                 present_agents=frozenset(responded),
             )
             top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
@@ -167,6 +190,17 @@ class OrchestratorBehaviour(CyclicBehaviour):
             history.record_complete(conv_id, len(result), responded, missing)
             fut.set_result(result)
             logger.info(f"[{conv_id}] Round complete — top-{TOP_K} resolved.")
+
+            # ── 7. Notify the RL agent of the outcome so it can learn ──────────
+            # (pass-rate reward — see RoundResultBehaviour). Fire-and-forget; it
+            # must not affect the result already returned to the caller.
+            if RL_ENABLED and "rl" in responded:
+                try:
+                    await self.send(make_round_result(JIDS["rl"], conv_id, top_k_keys))
+                    comm_log("orchestrator", "rl", "INFORM", conv_id,
+                             f"round_result — {len(top_k_keys)} final keys")
+                except Exception as exc:
+                    logger.warning(f"[{conv_id}] Could not notify RL agent: {exc}")
 
         except Exception as exc:
             logger.error(f"[{conv_id}] Round failed: {exc}", exc_info=True)
@@ -209,61 +243,19 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 if "weights" in data:
                     return data
 
-        logger.warning(f"[{conv_id}] Weight timeout — using equal fallback.")
+        logger.warning(f"[{conv_id}] Weight timeout — using fallback weights.")
+        # Mirror weight_agent._FALLBACK_WEIGHTS so stock keeps a fair share even
+        # on a timeout (all four importances present and > 0, summing to 100).
         return {
             "query":   "",
             "filters": {"include": {}, "exclude": {}},
             "weights": {
-                "color":    {"importance": 33},
-                "type":     {"importance": 34},
-                "bodyType": {"importance": 33},
+                "color":    {"importance": 30},
+                "type":     {"importance": 30},
+                "bodyType": {"importance": 25},
+                "stock":    {"importance": 15},
             },
         }
-
-    def _get_candidates(self, weights_result: dict, context: dict) -> list[dict]:
-        query_filters: dict = dict(weights_result.get("filters") or {})
-
-        # Inject user gender as a soft include so gender-appropriate items rank first
-        gender = str(context.get("user_gender") or "").strip().lower()
-        if gender in ("male", "female"):
-            inc = dict(query_filters.get("include") or {})
-            if "gender" not in inc:
-                inc["gender"] = [gender, "unisex"]
-                query_filters = {**query_filters, "include": inc}
-
-        stock_agent = self.agent._stock_agent
-
-        # get_candidates raises if the query is completely empty
-        try:
-            pairs = stock_agent.get_candidates(query_filters, n=N_CANDIDATES)
-        except Exception:
-            pairs = stock_agent.stats.get_overstock_items(top_k=N_CANDIDATES)
-
-        info: list[dict] = []
-        for iid, sz in pairs:
-            try:
-                row = stock_agent.stats.get_row(iid, sz)
-            except KeyError:
-                continue
-            info.append({
-                "item_id":    int(iid),
-                "size":       sz,
-                "color":      row.get("color", ""),
-                "type":       row.get("type", ""),
-                "fit":        row.get("fit", ""),
-                "season":     row.get("season", ""),
-                "style":      row.get("style", ""),
-                "pattern":    row.get("pattern", ""),
-                "material":   row.get("material", ""),
-                "gender":     row.get("gender", ""),
-                "age_group":  row.get("age_group", ""),
-                "occasion":   row.get("occasion", ""),
-                "brand":      row.get("brand", ""),
-                "price":      row.get("price"),
-                "stock_count": int(row.get("stock_count", 0)),
-                "push_score": float(row.get("push_score", 0.0)),
-            })
-        return info
 
     async def _broadcast_cfp(
         self,
@@ -319,7 +311,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 logger.debug(
                     f"[{conv_id}] _collect_proposals: discarding stale message "
                     f"(performative={msg.get_metadata('performative')!r}, "
-                    f"conv_id={msg.get_metadata('conv_id')!r[:8]})"
+                    f"conv_id={str(msg.get_metadata('conv_id'))[:8]})"
                 )
 
         return proposals
@@ -384,29 +376,40 @@ class OrchestratorAgent(BaseRecommenderAgent):
     def trigger_round(
         self,
         *,
-        detected_color:      str = "",
-        detected_type:       str = "",
-        detected_body_type:  str = "",
-        user_answer:         str = "",
-        user_gender:         str = "",
-        user_height_cm:      float | None = None,
-        result_future:       asyncio.Future,
+        detected_color:           str = "",
+        detected_type:            str = "",
+        detected_body_type:       str = "",
+        detected_color_conf:      float = 1.0,
+        detected_type_conf:       float = 1.0,
+        detected_body_type_conf:  float = 1.0,
+        user_answer:              str = "",
+        user_gender:              str = "",
+        user_height_cm:           float | None = None,
+        result_future:            asyncio.Future,
     ) -> str:
         """
         Queue a new recommendation round.  Returns the conv_id (UUID hex).
         The caller awaits `result_future` to get the top-10 list.
+
+        The three `*_conf` values are the real detection confidences (0–1) for
+        the colour/type/body signals; they ride in the context to the weight
+        calculation so a low-confidence detection quiets its agent. They default
+        to 1.0, which reproduces the legacy (confidence-agnostic) behaviour.
         """
         conv_id   = uuid4().hex
         context   = {
-            "conv_id":            conv_id,
-            "result_future":      result_future,
-            "queued_at":          time.monotonic(),
-            "detected_color":     detected_color,
-            "detected_type":      detected_type,
-            "detected_body_type": detected_body_type,
-            "user_answer":        user_answer,
-            "user_gender":        user_gender,
-            "user_height_cm":     user_height_cm,
+            "conv_id":                 conv_id,
+            "result_future":           result_future,
+            "queued_at":               time.monotonic(),
+            "detected_color":          detected_color,
+            "detected_type":           detected_type,
+            "detected_body_type":      detected_body_type,
+            "detected_color_conf":     detected_color_conf,
+            "detected_type_conf":      detected_type_conf,
+            "detected_body_type_conf": detected_body_type_conf,
+            "user_answer":             user_answer,
+            "user_gender":             user_gender,
+            "user_height_cm":          user_height_cm,
         }
         history.record_enqueued(conv_id, context)
         try:

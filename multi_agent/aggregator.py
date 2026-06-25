@@ -10,9 +10,14 @@ Protocol:
   5. Top-k items by composite score are returned.
 
 The weight split:
-  - Stock agent receives a fixed `stock_weight` (default 0.20) for inventory health.
-  - The remaining budget (0.80) is distributed among body/clothing/colour agents
-    in proportion to the feature importances returned by FeatureWeightAgent.
+  - The RL agent (when enabled) receives a fixed `rl_weight` (default 0.15) for
+    its learned signal, carved off the top; 0 omits it entirely (legacy behaviour).
+  - The remaining budget (1 - rl_weight) is shared by the FOUR conversation-driven
+    agents — colour/clothing/body/stock — each getting a share proportional to the
+    corresponding emphasis returned by FeatureWeightAgent (color/type/bodyType/stock
+    importances).  There is no fixed stock budget any more; a strong "popular / on
+    sale / trending" intent can push the stock weight up, a very specific request
+    can push it down.
 """
 
 from __future__ import annotations
@@ -31,6 +36,12 @@ def borda_aggregate(
     k             : number of top items to return
 
     Returns a list of item_keys (f"{item_id}:{size}") sorted best-first.
+
+    The result is deduplicated by item_id: only the best-scoring size of each
+    garment is kept, so the top-k is k DISTINCT items. Without this, every size
+    of the same item scores near-identically (colour/clothing/body read the same
+    item_id, only stock/RL vary slightly by size), so the top-k floods with the
+    same garment repeated across sizes — killing perceived diversity.
     """
     all_items = {key for scores in proposals.values() for key in scores}
     if not all_items:
@@ -51,52 +62,143 @@ def borda_aggregate(
             borda_pts = n - rank_0       # n pts for rank 1, down to 1 pt for rank n
             composite[item_key] += weight * borda_pts
 
-    top_items = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
-    return top_items[:k]
+    ranked_keys = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
+
+    # Keep only the best-scoring size per item_id (item_key is "item_id:size").
+    seen_item_ids: set[str] = set()
+    top_items: list[str] = []
+    for item_key in ranked_keys:
+        item_id = item_key.split(":", 1)[0]
+        if item_id in seen_item_ids:
+            continue
+        seen_item_ids.add(item_id)
+        top_items.append(item_key)
+        if len(top_items) >= k:
+            break
+    return top_items
 
 
 def build_agent_weights(
     feature_weights: dict,
     stock_weight: float = 0.20,
+    rl_weight: float = 0.0,
+    confidences: dict[str, float] | None = None,
     present_agents: frozenset[str] | None = None,
 ) -> dict[str, float]:
     """
     Convert FeatureWeightAgent output to per-agent budget.
 
-    feature_weights : {"color": {"importance": N}, "type": {...}, "bodyType": {...}}
+    The four scorer agents are conversation-driven: each derives from one of four
+    emphases returned by FeatureWeightAgent. The feature-id → agent-id mapping is:
+
+        color    → "colour"
+        type     → "clothing"
+        bodyType → "body"
+        stock    → "stock"
+
+    The RL agent (when `rl_weight > 0`) is the one fixed-slice agent: it takes a
+    constant `rl_weight` off the top for its learned signal, and the four emphases
+    share the remaining `1 - rl_weight`.  With `rl_weight = 0` the RL agent never
+    appears and the four emphases share the whole budget (legacy behaviour).
+
+    feature_weights : {"color":    {"importance": N},
+                       "type":     {"importance": N},
+                       "bodyType": {"importance": N},
+                       "stock":    {"importance": N}}
+                      The four importances are normalised to share the emphasis
+                      budget (1 - rl_weight). A missing key (e.g. an older caller
+                      without a `stock` emphasis) falls back to `stock_weight` for
+                      stock, so the function never crashes.
+    stock_weight    : fallback stock *share* (fraction, 0.20 = 20%) used only when
+                      the `feature_weights` dict carries no `stock` emphasis. It is
+                      converted to a comparable importance internally; it is no
+                      longer a fixed budget carve-out.
+    rl_weight       : fixed budget reserved for the RL agent (learned signal),
+                      carved off the top before the emphases are normalised. 0
+                      disables / omits the RL agent.
+    confidences     : optional {agent_id: confidence} for the four emphasis agents
+                      (colour/clothing/body/stock), where the value is the real
+                      detection confidence (0–1) backing that agent's signal. Each
+                      emphasis is multiplied by its confidence *before* the budget
+                      is normalised, so a low-confidence detection quiets its agent.
+                      Missing agents (and the RL fixed slice) default to 1.0, so
+                      `confidences=None` — or all-1.0 — is byte-identical to the
+                      legacy emphasis-only split. stock is not a detection and is
+                      conventionally passed 1.0.
     present_agents  : set of agent ids that actually responded this round.
                       When an agent is absent its weight is redistributed
                       proportionally among the agents that did respond.
-                      Pass None (default) to assume all four agents are present.
-
-    The stock agent gets a fixed `stock_weight` (inventory health signal).
-    The remaining 1 - stock_weight is split among body/clothing/colour agents
-    in proportion to the feature importances (which sum to 100).
+                      Pass None (default) to assume all expected agents are present.
     """
-    try:
-        total = sum(
-            float(v["importance"])
-            for v in feature_weights.values()
-            if isinstance(v, dict) and "importance" in v
-        )
-    except (TypeError, KeyError):
-        total = 0.0
+    # feature-id → agent-id mapping (ordering fixed for the equal-split fallback).
+    feature_to_agent = (
+        ("color",    "colour"),
+        ("type",     "clothing"),
+        ("bodyType", "body"),
+        ("stock",    "stock"),
+    )
 
-    user_budget = 1.0 - stock_weight
+    def _read(feature_id: str) -> float | None:
+        """Return the importance for a feature, or None when it is absent."""
+        block = feature_weights.get(feature_id) if isinstance(feature_weights, dict) else None
+        if isinstance(block, dict) and "importance" in block:
+            try:
+                return max(0.0, float(block["importance"]))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    raw = {agent_id: _read(feature_id) for feature_id, agent_id in feature_to_agent}
+
+    # Backward-compat: an older caller may send only color/type/bodyType and no
+    # `stock` emphasis.
+    # TODO(part-A follow-up): once every caller always emits a `stock` importance
+    # (weight_agent paths + orchestrator fallback already do; verify once the chat
+    # agent forwards intent too), this branch is dead code — re-verify it is
+    # unreachable and remove it. Until then it only affects deprecated callers.
+    # If there is a real signal but stock is missing, synthesise a stock importance
+    # from `stock_weight`. NOTE: `stock_weight` is a *fraction* (0.20 = 20% of the
+    # final budget) while the other emphases are *importances* on a 0–100 scale, so
+    # we convert: to give stock a `frac` share of the total, its importance must be
+    # frac/(1-frac) × (sum of the other importances).
+    has_signal = any(v and v > 0 for v in raw.values())
+    if has_signal and (raw["stock"] is None):
+        others = sum(v for k, v in raw.items() if k != "stock" and v)
+        frac   = min(max(float(stock_weight), 0.0), 0.95)
+        raw["stock"] = (frac / (1.0 - frac)) * others if others > 0 else 0.0
+
+    importances = {agent_id: (raw[agent_id] or 0.0) for _, agent_id in feature_to_agent}
+
+    # Fold in real detection confidence: a low-confidence detection quiets its
+    # agent by scaling its emphasis down *before* the budget is normalised.
+    # confidences=None (or all 1.0) leaves `importances` untouched, so the output
+    # is byte-identical to the legacy emphasis-only split.
+    if confidences:
+        importances = {
+            agent_id: imp * float(confidences.get(agent_id, 1.0))
+            for agent_id, imp in importances.items()
+        }
+
+    total = sum(importances.values())
+
+    # The RL agent (when enabled) takes a fixed slice off the top; the four
+    # conversation emphases share whatever budget remains.
+    rl_slice        = max(0.0, float(rl_weight)) if rl_weight and rl_weight > 0 else 0.0
+    emphasis_budget = max(0.0, 1.0 - rl_slice)
 
     if total <= 0:
-        share = user_budget / 3.0
-        full = {"colour": share, "clothing": share, "body": share, "stock": stock_weight}
+        # No usable emphases at all → equal split of the emphasis budget.
+        share = emphasis_budget / len(feature_to_agent)
+        full = {agent_id: share for _, agent_id in feature_to_agent}
     else:
-        color_imp = float((feature_weights.get("color")    or {}).get("importance", 0) or 0)
-        type_imp  = float((feature_weights.get("type")     or {}).get("importance", 0) or 0)
-        body_imp  = float((feature_weights.get("bodyType") or {}).get("importance", 0) or 0)
         full = {
-            "colour":   color_imp / total * user_budget,
-            "clothing": type_imp  / total * user_budget,
-            "body":     body_imp  / total * user_budget,
-            "stock":    stock_weight,
+            agent_id: imp / total * emphasis_budget
+            for agent_id, imp in importances.items()
         }
+
+    # The RL agent is the only fixed-slice agent, included when it carries weight.
+    if rl_slice > 0:
+        full["rl"] = rl_slice
 
     if present_agents is None:
         return full

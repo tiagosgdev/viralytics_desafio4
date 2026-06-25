@@ -506,6 +506,7 @@ let frozen = false;
 let currentSessionId = null;
 let currentDetectedCategories = [];
 let currentRecommendations = [];
+let currentRoundId = null;   // round_id of the last agent round, for /api/feedback
 let chatHistory = [];
 let chatConversationState = null;
 let currentActiveFilters = {};
@@ -521,6 +522,11 @@ let agentRoundGeneration = 0;
 let currentDetectedBodyType = '';
 let currentDetectedClothingType = '';
 let currentDetectedColor = '';
+// Per-feature detection confidences from the last camera scan. Reused on
+// chat-after-camera rounds so a low-confidence detection stays damped even
+// when the conversation (not the camera) drives the round. 1.0 = no scan yet.
+let currentDetectedTypeColorConf = 1.0;
+let currentDetectedBodyConf = 1.0;
 
 const feed = document.getElementById('feed');
 const landingScreen = document.getElementById('landing-screen');
@@ -784,7 +790,11 @@ function handleCameraMessage(msg) {
     currentDetectedClothingType = (msg.detections || [])[0]?.class_name || '';
     currentDetectedBodyType = msg.body_analysis?.body_shape || '';
     currentDetectedColor = msg.dominant_color?.name || (msg.detections || [])[0]?.color_name || '';
-    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor);
+    // Colour and type share the chosen garment detection's confidence; body has its own.
+    // Persist them so chat-after-camera rounds reuse the same confidences until a re-scan.
+    currentDetectedTypeColorConf = (msg.detections || [])[0]?.confidence ?? 1.0;
+    currentDetectedBodyConf      = msg.body_analysis?.confidence ?? 1.0;
+    triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf);
   } else if (msg.type === 'error') {
     setSt('error', 'Error');
     resetIdle();
@@ -808,6 +818,8 @@ function startScan() {
   currentDetectedBodyType = '';
   currentDetectedClothingType = '';
   currentDetectedColor = '';
+  currentDetectedTypeColorConf = 1.0;
+  currentDetectedBodyConf = 1.0;
   const agentEl = document.getElementById('agent-status');
   if (agentEl) agentEl.hidden = true;
   toggleRecommendationsModal(false);
@@ -946,13 +958,16 @@ function formatAgentRec(item) {
   const typeName = (item.type || '').replace(/_/g, ' ');
   const brandName = item.brand || '';
   const scores = item.agent_scores || {};
+  const rlPart = (scores.rl != null) ? ` · rl ${(scores.rl||0).toFixed(2)}` : '';
   return {
     id:       String(item.item_id || ''),
+    item_id:  item.item_id,
+    size:     item.size || '',
     name:     [brandName, typeName].filter(Boolean).join(' ').trim() || `Item ${item.item_id}`,
     category: item.type || '',
     price:    item.price != null ? `EUR ${Number(item.price).toFixed(2)}` : 'N/A',
     image_url: null,
-    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}`,
+    reason:   `Agent rank ${item.rank} · body ${(scores.body||0).toFixed(2)} · clothing ${(scores.clothing||0).toFixed(2)} · colour ${(scores.colour||0).toFixed(2)} · stock ${(scores.stock||0).toFixed(2)}${rlPart}`,
     score:    Math.round((1 - (item.rank - 1) / 10) * 100) / 100,
     brand:    item.brand || null,
     metadata: Object.fromEntries(
@@ -963,7 +978,7 @@ function formatAgentRec(item) {
   };
 }
 
-async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor) {
+async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor, typeColorConf = 1.0, bodyConf = 1.0, userAnswer = '') {
   const myGen = ++agentRoundGeneration;
   const agentEl = document.getElementById('agent-status');
 
@@ -979,6 +994,10 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
     detected_body_type: detectedBodyType  || '',
     detected_color:     detectedColor     || '',
     user_gender:        genderEl ? (genderEl.value || '') : '',
+    detected_type_conf:      typeColorConf,
+    detected_color_conf:     typeColorConf,
+    detected_body_type_conf: bodyConf,
+    user_answer:             userAnswer || '',
   };
 
   try {
@@ -1008,6 +1027,7 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
     if (agentRecs.length) {
       renderRecs(agentRecs, { autoOpen: false });
       currentRecommendations = agentRecs;
+      currentRoundId = data.round_id || null;   // enables emoji feedback for this round
     }
 
     if (agentEl) {
@@ -1023,6 +1043,9 @@ async function triggerAgentRecommendations(detectedType, detectedBodyType, detec
 
 function renderRecs(recs, options = {}) {
   const autoOpen = Boolean(options.autoOpen);
+  // Any plain render clears the agent round id; triggerAgentRecommendations
+  // re-sets it afterwards so emoji feedback only shows for agent rounds.
+  currentRoundId = null;
 
   if (!recs.length) {
     currentRecommendations = [];
@@ -1130,6 +1153,74 @@ function buildDetailRow(label, value, field, recommendation) {
   return '<div class="rec-detail-row' + highlight + '"><span>' + esc(label) + '</span>' + badge + '<strong>' + esc(value) + '</strong></div>';
 }
 
+// 5-emoji satisfaction scale (rating 1..5; index 2 = neutral).
+const FEEDBACK_EMOJIS = [
+  { e: '😣', label: 'Hate it' },
+  { e: '😕', label: 'Not for me' },
+  { e: '😐', label: 'Neutral' },
+  { e: '🙂', label: 'Like it' },
+  { e: '😍', label: 'Love it' },
+];
+
+// Emoji rating row shown in the item detail view — only for agent rounds
+// (currentRoundId set), since feedback trains the RL agent for that round.
+function buildFeedbackRow(rec, index) {
+  if (!currentRoundId) return '';
+  const selected = Number(rec._rating || 0);
+  const buttons = FEEDBACK_EMOJIS.map((em, i) => {
+    const rating = i + 1;
+    const sel = selected === rating ? ' selected' : '';
+    return '<button type="button" class="emoji-btn' + sel + '" title="' + escAttr(em.label) +
+      '" aria-label="' + escAttr(em.label) + '" onclick="submitItemFeedback(' + index + ',' + rating + ')">' +
+      em.e + '</button>';
+  }).join('');
+  const status = rec._rating ? 'Thanks — feedback recorded.' : 'How happy are you with this pick?';
+  return '<div class="rec-detail-section rec-feedback">' +
+    '<div class="rec-detail-label">Rate this recommendation</div>' +
+    '<div class="emoji-row" id="rec-feedback-row">' + buttons + '</div>' +
+    '<div class="emoji-status" id="rec-feedback-status">' + esc(status) + '</div>' +
+    '</div>';
+}
+
+async function submitItemFeedback(index, rating) {
+  const rec = currentRecommendations[index];
+  if (!rec || !currentRoundId) return;
+  rec._rating = rating;
+
+  const row = document.getElementById('rec-feedback-row');
+  if (row) {
+    Array.from(row.querySelectorAll('.emoji-btn')).forEach((b, i) =>
+      b.classList.toggle('selected', i === rating - 1));
+  }
+  const statusEl = document.getElementById('rec-feedback-status');
+  if (statusEl) statusEl.textContent = 'Sending…';
+
+  try {
+    const resp = await fetch('/api/feedback', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        round_id: currentRoundId,
+        item_id:  Number(rec.item_id || rec.id || 0),
+        size:     rec.size || (rec.metadata && rec.metadata.size) || '',
+        rating:   rating,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (statusEl) {
+      if (data && data.ok) {
+        statusEl.textContent = data.applied
+          ? 'Thanks — the agent is learning from this 🎓'
+          : 'Thanks! Neutral rating — no change.';
+      } else {
+        statusEl.textContent = (data && data.reason) || 'Feedback saved.';
+      }
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Could not send feedback.';
+  }
+}
+
 function openRecommendationDetail(index, openModal = false) {
   if (!currentRecommendations.length || !currentRecommendations[index]) return;
 
@@ -1182,6 +1273,7 @@ function openRecommendationDetail(index, openModal = false) {
     })() +
     '</div></div>' +
     (overviewRows ? '<div class="rec-detail-section"><div class="rec-detail-label">Store details</div><div class="rec-detail-grid">' + overviewRows + '</div></div>' : '') +
+    buildFeedbackRow(rec, index) +
     '<div class="rec-detail-section"><div class="rec-detail-label">Why it fits</div><p>' + esc(rec.reason || 'Recommended from your search context.') + '</p></div>' +
     '<div class="rec-detail-section"><div class="rec-detail-label">Description</div><p>' + esc(rec.description || 'No extra product description is available for this item yet.') + '</p></div>' +
     '<div class="rec-detail-grid">' + (
@@ -1666,6 +1758,18 @@ function extractApiError(data, fallback) {
   return fallback;
 }
 
+// Builds the running user request from the last few user-role chat turns.
+// Confirmation turns like "correct"/"yes" carry no new intent on their own, so the
+// agent round (analyze_intent) must see the accumulated request to keep emphasizing
+// the real preferences. Capped to the last 6 user turns to avoid unbounded growth.
+function accumulatedUserIntent() {
+  const userTurns = chatHistory
+    .filter((entry) => entry && entry.role === 'user' && typeof entry.content === 'string')
+    .map((entry) => entry.content.trim())
+    .filter((content) => content.length > 0);
+  return userTurns.slice(-6).join('. ');
+}
+
 function sendChat() {
   if (!selectedPersona) {
     return;
@@ -1711,7 +1815,14 @@ function sendChat() {
       }
       addChatBubble(reply, 'bot');
       chatHistory.push({ role: 'assistant', content: reply });
+      // Fast fallback: show embedding-search results immediately…
       if (Array.isArray(data.results) && data.results.length) renderRecs(data.results);
+      // …then drive a multi-agent round with the user's message. On success it
+      // overwrites the recs with agent recs; on broker-down it leaves them intact.
+      // Confidences persist from the last scan (1.0 if none yet); the accumulated
+      // user intent drives the importance weights via analyze_intent, so a
+      // confirmation turn ("correct") still carries the real request.
+      triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, accumulatedUserIntent());
     })
     .catch((error) => {
       removeTypingIndicator();
@@ -1910,7 +2021,12 @@ async function toggleVoice() {
                 }
                 addChatBubble(reply, 'bot');
                 chatHistory.push({ role: 'assistant', content: reply });
+                // Fast fallback: show embedding-search results immediately…
                 if (Array.isArray(chatData.results) && chatData.results.length) renderRecs(chatData.results);
+                // …then drive a multi-agent round with the accumulated user intent.
+                // Confidences persist from the last scan; the accumulated request
+                // drives importance, so a confirmation turn still carries the intent.
+                triggerAgentRecommendations(currentDetectedClothingType, currentDetectedBodyType, currentDetectedColor, currentDetectedTypeColorConf, currentDetectedBodyConf, accumulatedUserIntent());
               })
               .catch((error) => {
                 removeTypingIndicator();

@@ -42,6 +42,8 @@ from src.api.schemas import (
     ChatResponse,
     ConversationRequest,
     DetectionResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     HealthResponse,
     LoginRequest,
     RecommendRequest,
@@ -642,20 +644,40 @@ async def _run_multiagent_round(
     detected_type: str,
     detected_body_type: str,
     user_gender: str,
+    detected_color_conf: float = 1.0,
+    detected_type_conf: float = 1.0,
+    detected_body_type_conf: float = 1.0,
 ) -> list[dict] | None:
-    """Fire a multi-agent round and return results, or None on any failure."""
+    """
+    Fire a multi-agent round and return results, or None on any failure.
+
+    The three `*_conf` values are the real detection confidences (0–1) for the
+    colour/type/body signals; a low value quiets the corresponding agent. They
+    default to 1.0 (legacy, confidence-agnostic behaviour).
+
+    NOTE: when a detection-flow caller is wired to this helper, source the real
+    confidences there — colour & type from the primary garment `Detection`
+    (max-confidence `Detection` of the chosen `detected_type`, else the
+    max-confidence detection, else 1.0; colour shares that crop's `d.confidence`),
+    and body from `body_analysis.get("confidence", 1.0)`. There is currently no
+    caller of this helper, so the real values cannot be sourced here yet.
+    """
     if rec_system is None or not rec_system.is_ready:
         return None
     try:
-        return await asyncio.wait_for(
+        _round_id, results = await asyncio.wait_for(
             rec_system.recommend(
-                detected_color     = detected_color,
-                detected_type      = detected_type,
-                detected_body_type = detected_body_type,
-                user_gender        = user_gender,
+                detected_color          = detected_color,
+                detected_type           = detected_type,
+                detected_body_type      = detected_body_type,
+                detected_color_conf     = detected_color_conf,
+                detected_type_conf      = detected_type_conf,
+                detected_body_type_conf = detected_body_type_conf,
+                user_gender             = user_gender,
             ),
             timeout=120,
         )
+        return results
     except Exception as exc:
         print(f"⚠️  Multi-agent round failed: {exc}")
         return None
@@ -1183,13 +1205,16 @@ async def recommend(payload: RecommendRequest):
         )
 
     try:
-        results = await rec_system.recommend(
-            detected_color     = payload.detected_color,
-            detected_type      = payload.detected_type,
-            detected_body_type = payload.detected_body_type,
-            user_answer        = payload.user_answer,
-            user_gender        = payload.user_gender,
-            user_height_cm     = payload.user_height_cm,
+        round_id, results = await rec_system.recommend(
+            detected_color          = payload.detected_color,
+            detected_type           = payload.detected_type,
+            detected_body_type      = payload.detected_body_type,
+            detected_color_conf     = payload.detected_color_conf,
+            detected_type_conf      = payload.detected_type_conf,
+            detected_body_type_conf = payload.detected_body_type_conf,
+            user_answer             = payload.user_answer,
+            user_gender             = payload.user_gender,
+            user_height_cm          = payload.user_height_cm,
         )
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -1197,7 +1222,38 @@ async def recommend(payload: RecommendRequest):
             detail="Recommendation round timed out.",
         )
 
-    return RecommendResponse(recommendations=results)
+    return RecommendResponse(recommendations=results, round_id=round_id)
+
+
+# ── Recommendation feedback (RL emoji rating) ──────────────────────────────────
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+async def feedback(payload: FeedbackRequest):
+    """
+    Record a user's 1–5 emoji satisfaction rating for one recommended item and
+    let the RL agent learn from it.  `round_id` comes from the /api/recommend
+    response; `item_id`/`size` identify the rated item; rating 3 is neutral.
+
+    Returns ok=False (200) when the multi-agent system is unavailable or the
+    round/item is unknown — the frontend treats feedback as best-effort and never
+    blocks the user on it.
+    """
+    if rec_system is None or not rec_system.is_ready:
+        return FeedbackResponse(ok=False, reason="Multi-agent system is not available.")
+
+    result = await run_in_threadpool(
+        rec_system.submit_feedback,
+        round_id = payload.round_id,
+        item_id  = payload.item_id,
+        size     = payload.size,
+        rating   = payload.rating,
+    )
+    return FeedbackResponse(
+        ok      = bool(result.get("ok")),
+        applied = bool(result.get("applied")),
+        reason  = result.get("reason"),
+        policy  = result.get("policy"),
+    )
 
 
 # ── Robot navigation endpoints ────────────────────────────────────────────────

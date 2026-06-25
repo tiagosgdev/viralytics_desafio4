@@ -289,6 +289,21 @@ LNIAGIA/DB/SQLLite/*.db.bak*
 # SQLite WAL sidecars (clothing.db kept tracked; sidecars are transient)
 LNIAGIA/DB/SQLLite/*.db-wal
 LNIAGIA/DB/SQLLite/*.db-shm
+
+# Per-agent write-only memory stores (runtime artefacts; the shared
+# multi_agent/history.db stays tracked, these per-agent DBs do not).
+multi_agent/memory/*.db
+multi_agent/memory/*.db-wal
+multi_agent/memory/*.db-shm
+
+# Experiment harness results store (Part E; runtime artefact, untracked).
+multi_agent/experiments/results.db
+multi_agent/experiments/results.db-wal
+multi_agent/experiments/results.db-shm
+# Generated Markdown reports (regenerable from results.db via report.py).
+multi_agent/experiments/reports/
+
+# Android Gradle lock/probe files (transient build state)
 android_app/.gradle/9.0.0/checksums/checksums.lock
 android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
 android_app/.gradle/buildOutputCleanup/buildOutputCleanup.lock

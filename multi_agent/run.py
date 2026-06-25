@@ -29,9 +29,12 @@ from multi_agent.agents.body_agent     import BodyRecommenderAgent
 from multi_agent.agents.clothing_agent import ClothingRecommenderAgent
 from multi_agent.agents.colour_agent   import ColourRecommenderAgent
 from multi_agent.agents.orchestrator   import OrchestratorAgent
+from multi_agent.agents.rl_agent       import RLRecommenderAgent
 from multi_agent.agents.stock_agent    import StockRecommenderAgent
 from multi_agent.agents.weight_agent   import FeatureWeightAgent
-from multi_agent.config import JIDS, ROUND_TIMEOUT_S, TOP_K, XMPP_PASSWORD
+from multi_agent.config import JIDS, RL_ENABLED, ROUND_TIMEOUT_S, TOP_K, XMPP_PASSWORD
+from multi_agent.rl.policy import rl_policy
+from multi_agent.rl.store import rating_reward, rl_store
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STOCK_DIR = _REPO_ROOT / "stock_agent"
@@ -81,8 +84,13 @@ class RecommendationSystem:
 
         self._agents = [
             weight_agent, body_agent, clothing_agent,
-            colour_agent, stock_agent, orchestrator,
+            colour_agent, stock_agent,
         ]
+        # The learning agent is optional (RL_ENABLED). Start it before the
+        # orchestrator so it is listening when the first round resolves.
+        if RL_ENABLED:
+            self._agents.append(RLRecommenderAgent(JIDS["rl"], XMPP_PASSWORD))
+        self._agents.append(orchestrator)
 
         for agent in self._agents:
             await agent.start(auto_register=True)
@@ -95,21 +103,27 @@ class RecommendationSystem:
     async def recommend(
         self,
         *,
-        detected_color:     str = "",
-        detected_type:      str = "",
-        detected_body_type: str = "",
-        user_answer:        str = "",
-        user_gender:        str = "",
-        user_height_cm:     float | None = None,
-    ) -> list[dict]:
+        detected_color:          str = "",
+        detected_type:           str = "",
+        detected_body_type:      str = "",
+        detected_color_conf:     float = 1.0,
+        detected_type_conf:      float = 1.0,
+        detected_body_type_conf: float = 1.0,
+        user_answer:             str = "",
+        user_gender:             str = "",
+        user_height_cm:          float | None = None,
+    ) -> tuple[str, list[dict]]:
         """
-        Run one recommendation round and return the top-10 list.
+        Run one recommendation round and return (round_id, top-10 list).
+
+        `round_id` is the conv_id of the round — the caller passes it back to
+        submit_feedback() when the user rates an item.
 
         Each dict in the result contains:
             rank, item_id, size, color, type, fit, season, style, pattern,
             material, gender, age_group, occasion, brand, price, stock_count,
-            push_score, agent_scores {body, clothing, colour, stock},
-            agent_weights {body, clothing, colour, stock}
+            push_score, agent_scores {body, clothing, colour, stock, rl},
+            agent_weights {body, clothing, colour, stock, rl}
         """
         if not self._started:
             raise RuntimeError("Call start() before recommend().")
@@ -117,17 +131,60 @@ class RecommendationSystem:
         loop          = asyncio.get_event_loop()
         result_future = loop.create_future()
 
-        self._orchestrator.trigger_round(
-            detected_color     = detected_color,
-            detected_type      = detected_type,
-            detected_body_type = detected_body_type,
-            user_answer        = user_answer,
-            user_gender        = user_gender,
-            user_height_cm     = user_height_cm,
-            result_future      = result_future,
+        round_id = self._orchestrator.trigger_round(
+            detected_color          = detected_color,
+            detected_type           = detected_type,
+            detected_body_type      = detected_body_type,
+            detected_color_conf     = detected_color_conf,
+            detected_type_conf      = detected_type_conf,
+            detected_body_type_conf = detected_body_type_conf,
+            user_answer             = user_answer,
+            user_gender             = user_gender,
+            user_height_cm          = user_height_cm,
+            result_future           = result_future,
         )
 
-        return await asyncio.wait_for(result_future, timeout=ROUND_TIMEOUT_S)
+        results = await asyncio.wait_for(result_future, timeout=ROUND_TIMEOUT_S)
+        return round_id, results
+
+    def submit_feedback(
+        self,
+        *,
+        round_id: str,
+        item_id:  int,
+        size:     str,
+        rating:   int,
+    ) -> dict:
+        """
+        Attribute an emoji satisfaction rating (1–5, 3 = neutral) to the RL policy.
+
+        Adds the rating's reward to the matching round/item transition.  The actual
+        PPO update happens on the agent's event loop when the rollout fills, so this
+        call only mutates a reward (thread-safe) — no torch op runs on the HTTP
+        worker.  Returns a small status dict for the API response.
+        """
+        if not RL_ENABLED:
+            return {"ok": False, "reason": "RL agent is disabled (RL_ENABLED=False)."}
+
+        item_key = f"{int(item_id)}:{size}"
+        reward   = rating_reward(rating)
+        found    = rl_store.add_reward(round_id, item_key, reward)
+        if not found:
+            return {
+                "ok": False,
+                "reason": "Round already consumed by a PPO update, or unknown round/item.",
+            }
+
+        logger.info(
+            f"[{round_id}] RL emoji feedback: item={item_key} rating={rating} "
+            f"→ reward={reward:+.2f} (queued for next PPO update)  policy={rl_policy.snapshot()}"
+        )
+        return {
+            "ok": True,
+            "rating": int(rating),
+            "applied": reward != 0.0,   # rating 3 is neutral → reward 0
+            "policy": rl_policy.snapshot(),
+        }
 
     async def stop(self) -> None:
         """Stop all agents gracefully."""
@@ -171,14 +228,14 @@ async def _cli_demo() -> None:
 
     print("\nRunning sealed-bid round…", flush=True)
     try:
-        results = await system.recommend(
+        round_id, results = await system.recommend(
             detected_color     = color,
             detected_type      = type_,
             detected_body_type = body_type,
             user_answer        = answer,
             user_gender        = gender,
         )
-        print(f"\nTop {TOP_K} recommendations:\n")
+        print(f"\nTop {TOP_K} recommendations (round {round_id[:8]}):\n")
         for item in results:
             w = item.get("agent_weights", {})
             s = item.get("agent_scores",  {})
@@ -188,7 +245,8 @@ async def _cli_demo() -> None:
                 f"      body={s.get('body',0):.2f}(w={w.get('body',0):.2f})  "
                 f"cloth={s.get('clothing',0):.2f}(w={w.get('clothing',0):.2f})  "
                 f"colour={s.get('colour',0):.2f}(w={w.get('colour',0):.2f})  "
-                f"stock={s.get('stock',0):.2f}(w={w.get('stock',0):.2f})"
+                f"stock={s.get('stock',0):.2f}(w={w.get('stock',0):.2f})  "
+                f"rl={s.get('rl',0):.2f}(w={w.get('rl',0):.2f})"
             )
     except asyncio.TimeoutError:
         print(f"Timeout: round did not complete within {ROUND_TIMEOUT_S}s.")

@@ -5,7 +5,12 @@ Receives a CFP from the Orchestrator with 40 candidate items.
 Scores each item by how well its `body_type` field (stored in clothing.db)
 matches the detected body shape, and returns a sealed PROPOSE.
 
-Scoring:
+The agent owns the DB IO: it fetches each item's body shapes from clothing.db
+and enriches the candidate dicts with a ``body_shapes`` field, then hands the
+enriched candidates to a swappable scoring strategy (personality) selected via
+``AGENT_STRATEGIES["body"]``. The pure strategy never opens the DB.
+
+Scoring (strict / baseline):
   exact match   → 1.0   (item is designed for this body shape)
   adjacent shape → 0.55  (neighbouring shape on the body-shape graph)
   no data        → 0.20  (item has no body_type metadata — neutral low score)
@@ -21,9 +26,11 @@ from pathlib import Path
 from spade.behaviour import CyclicBehaviour
 from spade.template import Template
 
+from multi_agent import config
 from multi_agent.agents.base import BaseRecommenderAgent
-from multi_agent.history import history
+from multi_agent.memory import AgentMemory
 from multi_agent.messages import parse, make_propose, comm_log, CFP
+from multi_agent.strategies.registry import get_strategy
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DB_PATH   = _REPO_ROOT / "LNIAGIA" / "DB" / "SQLLite" / "clothing.db"
@@ -43,24 +50,6 @@ def _get_db_conn() -> sqlite3.Connection | None:
     if _db_conn is None:
         _db_conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
     return _db_conn
-
-# Shapes considered "close enough" to get partial credit.
-# Symmetric: if A is adjacent to B then B is adjacent to A.
-_ADJACENT: dict[str, frozenset] = {
-    "hourglass":         frozenset({"pear", "rectangle"}),
-    "pear":              frozenset({"hourglass", "triangle"}),
-    "triangle":          frozenset({"pear", "rectangle"}),
-    "rectangle":         frozenset({"hourglass", "triangle", "trapezoid", "inverted_triangle"}),
-    "inverted_triangle": frozenset({"trapezoid", "rectangle"}),
-    "apple":             frozenset({"rectangle", "oval"}),
-    "trapezoid":         frozenset({"rectangle", "inverted_triangle"}),
-    "oval":              frozenset({"apple", "rectangle"}),
-}
-
-
-def _item_key(item_id: int, size: str) -> str:
-    return f"{item_id}:{size}"
-
 
 def _load_body_types(item_ids: list[int]) -> dict[int, frozenset[str]]:
     """Batch-fetch body_type column from clothing.db for the given item ids."""
@@ -90,16 +79,6 @@ def _load_body_types(item_ids: list[int]) -> dict[int, frozenset[str]]:
     return result
 
 
-def _score(detected: str, item_shapes: frozenset[str]) -> float:
-    if not item_shapes:
-        return 0.20
-    if detected in item_shapes:
-        return 1.0
-    if item_shapes & _ADJACENT.get(detected, frozenset()):
-        return 0.55
-    return 0.0
-
-
 class BodyScoreBehaviour(CyclicBehaviour):
     async def run(self) -> None:
         msg = await self.receive(timeout=60)
@@ -110,24 +89,27 @@ class BodyScoreBehaviour(CyclicBehaviour):
         conv_id         = data.get("conv_id", "")
         candidates_info = data.get("candidates", [])
         context         = data.get("context", {})
+        weights_result  = data.get("weights_result", {})
         detected        = str(context.get("detected_body_type") or "").lower().strip()
 
         item_ids = [int(c["item_id"]) for c in candidates_info]
 
+        # IO stays in the agent: fetch body shapes and enrich each candidate so
+        # the pure strategy can read them off the candidate dict (body_shapes).
         loop = asyncio.get_event_loop()
         body_types: dict[int, frozenset] = await loop.run_in_executor(
             None, lambda: _load_body_types(item_ids)
         )
-
-        scores: dict[str, float] = {}
         for c in candidates_info:
-            iid = int(c["item_id"])
-            sz  = c["size"]
-            if detected:
-                raw = _score(detected, body_types.get(iid, frozenset()))
-            else:
-                raw = 0.5   # no body type context → neutral
-            scores[_item_key(iid, sz)] = round(raw, 6)
+            c["body_shapes"] = list(body_types.get(int(c["item_id"]), frozenset()))
+
+        strategy_name = config.AGENT_STRATEGIES["body"]
+        score_fn, params = get_strategy("body", strategy_name)
+        params.update(config.AGENT_STRATEGY_PARAMS.get("body", {}))
+
+        scores: dict[str, float] = score_fn(
+            candidates_info, context, weights_result, params
+        )
 
         propose = make_propose(
             to_jid   = str(msg.sender),
@@ -136,6 +118,10 @@ class BodyScoreBehaviour(CyclicBehaviour):
             scores   = scores,
         )
         await self.send(propose)
+        # Write-only per-agent memory (course requirement; never read for
+        # decisions). Defensive: must not break the round if _memory is absent.
+        if mem := getattr(self.agent, "_memory", None):
+            mem.record(conv_id, context, scores)
         top3 = sorted(scores.items(), key=lambda x: -x[1])[:3]
         top_str = "  ".join(f"{k}={v:.2f}" for k, v in top3)
         comm_log("body", "orchestrator", "PROPOSE", conv_id,
@@ -148,6 +134,8 @@ class BodyRecommenderAgent(BaseRecommenderAgent):
         template = Template()
         template.set_metadata("performative", CFP)
         self.add_behaviour(BodyScoreBehaviour(), template)
-        if summary := history.agent_context_summary("body"):
+        self._memory = AgentMemory("body")
+        summary = self._memory.summary()
+        if summary:
             logger.info(summary)
         logger.info("BodyRecommenderAgent ready.")
