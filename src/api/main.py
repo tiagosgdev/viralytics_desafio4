@@ -1305,7 +1305,14 @@ async def robot_door_sensor(direction: str = "entering"):
             detail="direction must be 'entering' or 'leaving'",
         )
     if direction.lower() == "leaving":
-        return {"status": "ignored", "direction": "leaving", "reason": "person leaving — no action taken"}
+        if robot_bridge is None or not robot_bridge.connected:
+            return {"status": "ignored", "direction": "leaving", "reason": "robot offline"}
+        await run_in_threadpool(
+            robot_bridge.farewell,
+            "Goodbye! Hope to see you again soon!",
+            "goodbye",
+        )
+        return {"status": "sent", "direction": "leaving", "sequence": ["speak", "gesture"]}
 
     if robot_bridge is None or not robot_bridge.connected:
         _robot_unavailable()

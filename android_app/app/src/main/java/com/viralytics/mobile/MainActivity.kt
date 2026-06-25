@@ -97,6 +97,16 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var pendingGreetText  = "Welcome! I'm Cruzr, your personal fashion assistant. Come closer and let me help you find the perfect outfit!"
     @Volatile private var pendingGreetGesture = "wave"
 
+    // Customer session — blocks new greet commands while serving; returns robot to entrance when done
+    @Volatile private var isServingCustomer = false
+    private var entranceX = 0f
+    private var entranceY = 0f
+    private var entranceTheta = 0f
+    private var entranceCoordsSet = false
+    private val sessionHandler = Handler(Looper.getMainLooper())
+    private val sessionTimeoutRunnable = Runnable { endCustomerSession("timeout") }
+    private val SESSION_TIMEOUT_MS = 10 * 60 * 1000L // 10 minutes
+
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
@@ -121,15 +131,6 @@ class MainActivity : AppCompatActivity() {
         try {
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
-
-            try {
-                Robot.initialize(applicationContext)
-            } catch (e: Exception) {
-                android.util.Log.e("CruzrApp", "Robot SDK Offline: ${e.message}")
-                Toast.makeText(this, "Robot OS Offline: ${e.message}", Toast.LENGTH_LONG).show()
-            } catch (e: Error) {
-                Toast.makeText(this, "Fatal Hardware Error.", Toast.LENGTH_LONG).show()
-            }
 
             initCruzrHardware()
             setStatus("Connecting to MQTT…")
@@ -891,15 +892,19 @@ class MainActivity : AppCompatActivity() {
                             // Compound greeting sequence:
                             //   navigate to entrance → LIDAR detects person → speak + gesture
                             "greet" -> {
-                                if (isBusy) {
+                                if (isBusy || isServingCustomer) {
                                     publishStatus("robot_busy", JSONObject()
                                         .put("command", "greet")
-                                        .put("reason", "robot is currently engaged with a customer"))
+                                        .put("reason", if (isServingCustomer) "robot is serving a customer" else "robot is currently busy"))
                                     runOnUiThread { setStatus("Greet ignored — robot is busy") }
                                 } else {
                                     val x       = json.optDouble("x", 0.0).toFloat()
                                     val y       = json.optDouble("y", 0.0).toFloat()
                                     val theta   = json.optDouble("theta", 0.0).toFloat()
+                                    entranceX = x
+                                    entranceY = y
+                                    entranceTheta = theta
+                                    entranceCoordsSet = true
                                     pendingGreetText    = json.optString("text", pendingGreetText)
                                     pendingGreetGesture = json.optString("gesture", "wave")
                                     runOnUiThread { setStatus("Greeting sequence: moving to entrance…") }
@@ -911,6 +916,18 @@ class MainActivity : AppCompatActivity() {
                             "gesture" -> {
                                 val name = json.optString("name", "wave")
                                 doGesture(name)
+                            }
+
+                            // Farewell to a departing customer — only fires if robot is idle at entrance.
+                            "farewell" -> {
+                                if (!isBusy && !isServingCustomer) {
+                                    val text = json.optString("text", "Goodbye! Hope to see you again soon!")
+                                    val gesture = json.optString("gesture", "goodbye")
+                                    speakText(text)
+                                    Handler(Looper.getMainLooper()).postDelayed({
+                                        doGesture(gesture)
+                                    }, 1000L)
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -1138,6 +1155,7 @@ class MainActivity : AppCompatActivity() {
                                 setStatus("Arrived at $targetItem!")
                                 speakText("Here is the item you are looking for.")
                             }
+                            endCustomerSession("arrived_at_stand")
                         }
                         .progress { p ->
                             android.util.Log.d("CruzrNav", "Nav progress: $p")
@@ -1276,12 +1294,33 @@ class MainActivity : AppCompatActivity() {
             doGesture(pendingGreetGesture)
         }, 1500L)
 
-        // Release busy flag after ~6 s so a new customer can trigger the flow again
+        // Lock the session — blocks new greet commands until the robot returns to entrance.
+        // The 10-minute timeout is a safety net if the customer never triggers a stand navigation.
+        isServingCustomer = true
+        sessionHandler.postDelayed(sessionTimeoutRunnable, SESSION_TIMEOUT_MS)
+
+        // Release movement lock after ~6 s so the AI can send guide_user / move_to_stand.
         Handler(Looper.getMainLooper()).postDelayed({
             isBusy = false
             publishStatus("greeting_complete", JSONObject().put("ready_for_scan", true))
             runOnUiThread { setStatus("Greeting done — ready for customer scan") }
         }, 6000L)
+    }
+
+    // ── Customer session ──────────────────────────────────────────────────────
+
+    private fun endCustomerSession(reason: String) {
+        if (!isServingCustomer) return
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        isServingCustomer = false
+        publishStatus("session_ended", JSONObject().put("reason", reason))
+        runOnUiThread { setStatus("Session ended ($reason) — returning to entrance") }
+        returnToEntrance()
+    }
+
+    private fun returnToEntrance() {
+        if (!entranceCoordsSet || isBusy) return
+        sendRawCoordinateCommand(entranceX, entranceY, entranceTheta)
     }
 
     // ── Gestures ──────────────────────────────────────────────────────────────
@@ -1344,6 +1383,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         isAtEntrance = false
+        isServingCustomer = false
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
         stopHumanDetection()
         try { mqttClient?.disconnect() } catch (_: Exception) {}
         if (::textToSpeech.isInitialized) {

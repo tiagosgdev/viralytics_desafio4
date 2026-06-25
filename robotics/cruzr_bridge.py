@@ -182,6 +182,13 @@ class CruzrBridge:
         """Play a named body gesture (wave, bow, nod, …) without navigation."""
         return self._publish({"action": "gesture", "name": name})
 
+    def farewell(self, text: str = "Goodbye! Hope to see you again soon!", gesture: str = "goodbye") -> bool:
+        """
+        Say goodbye to a departing customer.  The Android only acts on this if the
+        robot is idle at the entrance (not navigating and not serving another customer).
+        """
+        return self._publish({"action": "farewell", "text": text, "gesture": gesture})
+
     def stop_navigation(self) -> bool:
         """Request the robot to abort its current navigation."""
         return self._publish({"action": "stop_navigation"})
