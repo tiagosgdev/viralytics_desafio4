@@ -37,6 +37,27 @@ if RL_ENABLED:
 N_CANDIDATES      = 40    # items retrieved from DB before the debate round
 TOP_K             = 10    # final recommendations returned to the user
 
+# ── Selection mechanism (legacy Borda vs random-batch + weighted veto) ────────
+# SELECTION_MODE switches the whole selection path. "borda" (default) is the
+# legacy single-round retrieve→CFP→Borda behaviour, byte-identical to before
+# (modulo the tie-aware Borda fix). "veto_batch" enables the new random-batch +
+# weighted-veto loop. All flags are env-overridable so the experiment harness
+# can A/B test without code changes.
+SELECTION_MODE    = os.environ.get("SELECTION_MODE", "borda")          # "borda" | "veto_batch"
+
+# How vetoes combine to eliminate an item. "weighted" (default): eliminate when
+# Σ(weight of vetoing agents) ≥ VETO_TAU. "blackball": any single veto eliminates
+# (the τ→0+ special case).
+VETO_MODE         = os.environ.get("VETO_MODE", "weighted")            # "weighted" | "blackball"
+
+# Weighted-veto elimination threshold (reject-mass cutoff).
+VETO_TAU          = float(os.environ.get("VETO_TAU", "0.5"))
+
+# Batch loop bounds (veto_batch mode): draw up to MAX_BATCHES random batches of
+# BATCH_SIZE in-stock items from the broad relevance band until ≥ TOP_K survive.
+MAX_BATCHES       = int(os.environ.get("MAX_BATCHES", "5"))
+BATCH_SIZE        = int(os.environ.get("BATCH_SIZE", str(N_CANDIDATES)))
+
 # Fallback emphases (NOT a hard budget split any more). The four scorer weights
 # are conversation-driven: build_agent_weights normalises the four emphases
 # (color/type/bodyType/stock) returned by FeatureWeightAgent across the budget

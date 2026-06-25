@@ -23,30 +23,25 @@ The weight split:
 from __future__ import annotations
 
 
-def borda_aggregate(
+def _tie_aware_composite(
     proposals: dict[str, dict[str, float]],
     agent_weights: dict[str, float],
-    k: int = 10,
-) -> list[str]:
+    all_items: set[str],
+) -> dict[str, float]:
+    """Weighted **tie-aware** Borda points per item over `all_items`.
+
+    Borda gives rank-1 of N items N points … rank-N 1 point. The tie-aware
+    variant gives every item in a group of equal scores the AVERAGE of the
+    points its group spans (fractional/average ranking), instead of breaking
+    ties by item_key. Consequences:
+
+    * A fully-flat agent (all items tied) hands every item the same constant
+      ((N+1)/2 points) → it adds a uniform offset that does NOT change the
+      relative ranking → an indifferent agent is genuinely neutral, no longer
+      an arbitrary item-id-ordered ramp.
+    * A partially-tied agent keeps real preference (the groups are still
+      separated) but injects no fake order WITHIN a tied group.
     """
-    Aggregate sealed proposals via weighted Borda count.
-
-    proposals     : {agent_id: {item_key: raw_score}}  — higher score = agent prefers item
-    agent_weights : {agent_id: weight}                 — should sum to ~1.0
-    k             : number of top items to return
-
-    Returns a list of item_keys (f"{item_id}:{size}") sorted best-first.
-
-    The result is deduplicated by item_id: only the best-scoring size of each
-    garment is kept, so the top-k is k DISTINCT items. Without this, every size
-    of the same item scores near-identically (colour/clothing/body read the same
-    item_id, only stock/RL vary slightly by size), so the top-k floods with the
-    same garment repeated across sizes — killing perceived diversity.
-    """
-    all_items = {key for scores in proposals.values() for key in scores}
-    if not all_items:
-        return []
-
     n = len(all_items)
     composite: dict[str, float] = {key: 0.0 for key in all_items}
 
@@ -55,16 +50,35 @@ def borda_aggregate(
         if weight <= 0:
             continue
 
-        # Rank items by this agent's score (descending); ties broken by item_key
-        ranked = sorted(all_items, key=lambda ik: (scores.get(ik, 0.0), ik), reverse=True)
+        # Group items by score (descending). Each group of size g occupies a
+        # contiguous block of ranks; every member gets the AVERAGE Borda points
+        # the block spans. For ranks rank_0 = start … start+g-1 (0-based), the
+        # Borda points are (n - rank_0), so the group average is
+        #   (sum over the block of (n - rank_0)) / g
+        #   = n - (start + (g-1)/2).
+        ranked = sorted(all_items, key=lambda ik: scores.get(ik, 0.0), reverse=True)
 
-        for rank_0, item_key in enumerate(ranked):
-            borda_pts = n - rank_0       # n pts for rank 1, down to 1 pt for rank n
-            composite[item_key] += weight * borda_pts
+        start = 0
+        while start < n:
+            end = start
+            cur_score = scores.get(ranked[start], 0.0)
+            while end + 1 < n and scores.get(ranked[end + 1], 0.0) == cur_score:
+                end += 1
+            group_size = end - start + 1
+            avg_pts = n - (start + (group_size - 1) / 2.0)
+            for i in range(start, end + 1):
+                composite[ranked[i]] += weight * avg_pts
+            start = end + 1
 
-    ranked_keys = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
+    return composite
 
-    # Keep only the best-scoring size per item_id (item_key is "item_id:size").
+
+def _dedup_top_k(ranked_keys: list[str], k: int) -> list[str]:
+    """Keep only the best-ranked size per item_id, capped at k DISTINCT items.
+
+    `ranked_keys` is already sorted best-first; item_key is "item_id:size".
+    Deduping by item_id stops every size of the same garment flooding the top-k.
+    """
     seen_item_ids: set[str] = set()
     top_items: list[str] = []
     for item_key in ranked_keys:
@@ -76,6 +90,132 @@ def borda_aggregate(
         if len(top_items) >= k:
             break
     return top_items
+
+
+def borda_aggregate(
+    proposals: dict[str, dict[str, float]],
+    agent_weights: dict[str, float],
+    k: int = 10,
+) -> list[str]:
+    """
+    Aggregate sealed proposals via weighted **tie-aware** Borda count.
+
+    proposals     : {agent_id: {item_key: raw_score}}  — higher score = agent prefers item
+    agent_weights : {agent_id: weight}                 — should sum to ~1.0
+    k             : number of top items to return
+
+    Returns a list of item_keys (f"{item_id}:{size}") sorted best-first.
+
+    Tied scores share the average of the Borda points their group spans, so a
+    flat/indifferent agent contributes a uniform offset (zero differentiation)
+    rather than an arbitrary item-id ramp.
+
+    The result is deduplicated by item_id: only the best-scoring size of each
+    garment is kept, so the top-k is k DISTINCT items.
+    """
+    all_items = {key for scores in proposals.values() for key in scores}
+    if not all_items:
+        return []
+
+    composite = _tie_aware_composite(proposals, agent_weights, all_items)
+    ranked_keys = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
+    return _dedup_top_k(ranked_keys, k)
+
+
+def reject_mass(
+    item_key: str,
+    vetoes: dict[str, list[str]],
+    agent_weights: dict[str, float],
+    *,
+    mode: str = "weighted",
+) -> float:
+    """Combined veto weight against `item_key`.
+
+    weighted → Σ(weight of the agents vetoing it); blackball → ``inf`` as soon as
+    ANY agent vetoes it (else 0.0). Shared by `select_with_veto` and the
+    orchestrator's per-batch veto loop so the reject-mass rule lives in exactly
+    one place (no inline re-implementation that could drift).
+    """
+    mass = 0.0
+    for agent_id, vetoed in (vetoes or {}).items():
+        if item_key in vetoed:
+            if mode == "blackball":
+                return float("inf")
+            mass += agent_weights.get(agent_id, 0.0)
+    return mass
+
+
+def survives_from_mass(mass: float, *, mode: str = "weighted", tau: float = 0.5) -> bool:
+    """Survival decision from a PRECOMPUTED reject-mass.
+
+    weighted → survives while reject-mass < `tau`; blackball → survives only with
+    zero reject-mass (no agent vetoed it; `reject_mass` returns ``inf`` otherwise).
+    Both `survives_veto` and the orchestrator's per-batch veto loop call this so
+    the mass-to-survival rule lives in exactly one place (no inline drift).
+    """
+    if mode == "blackball":
+        return mass == 0.0
+    return mass < tau
+
+
+def survives_veto(
+    item_key: str,
+    vetoes: dict[str, list[str]],
+    agent_weights: dict[str, float],
+    *,
+    mode: str = "weighted",
+    tau: float = 0.5,
+) -> bool:
+    """True when `item_key` is NOT eliminated by the veto.
+
+    weighted → survives while reject-mass < `tau`; blackball → survives only with
+    zero reject-mass (no agent vetoed it).
+    """
+    return survives_from_mass(
+        reject_mass(item_key, vetoes, agent_weights, mode=mode), mode=mode, tau=tau
+    )
+
+
+def select_with_veto(
+    proposals: dict[str, dict[str, float]],
+    vetoes: dict[str, list[str]],
+    agent_weights: dict[str, float],
+    k: int = 10,
+    *,
+    mode: str = "weighted",
+    tau: float = 0.5,
+) -> list[str]:
+    """
+    Veto-then-rank selection: eliminate vetoed items, then tie-aware Borda the rest.
+
+    proposals     : {agent_id: {item_key: raw_score}}
+    vetoes        : {agent_id: [item_key, ...]}  — items this agent rejects
+    agent_weights : {agent_id: weight}
+    k             : number of top items to return
+    mode          : "weighted" → eliminate item when Σ(weight of vetoing agents)
+                    ≥ `tau`; "blackball" → eliminate when ANY agent vetoes it.
+    tau           : reject-mass threshold for weighted mode.
+
+    Returns the top-k surviving item_keys (best-first, deduped by item_id) ranked
+    with the same tie-aware weighted Borda used by `borda_aggregate`.
+    """
+    all_items = {key for scores in proposals.values() for key in scores}
+    if not all_items:
+        return []
+
+    # Eliminate vetoed items via the shared per-item survival rule (same rule the
+    # orchestrator's per-batch veto loop applies).
+    survivors = {
+        ik for ik in all_items
+        if survives_veto(ik, vetoes, agent_weights, mode=mode, tau=tau)
+    }
+
+    if not survivors:
+        return []
+
+    composite = _tie_aware_composite(proposals, agent_weights, survivors)
+    ranked_keys = sorted(composite.keys(), key=lambda ik: composite[ik], reverse=True)
+    return _dedup_top_k(ranked_keys, k)
 
 
 def build_agent_weights(

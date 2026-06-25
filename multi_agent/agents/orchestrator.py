@@ -27,16 +27,26 @@ from uuid import uuid4
 from spade.behaviour import CyclicBehaviour
 
 from multi_agent.agents.base import BaseRecommenderAgent
-from multi_agent.aggregator import borda_aggregate, build_agent_weights
+from multi_agent.aggregator import (
+    borda_aggregate,
+    build_agent_weights,
+    reject_mass,
+    survives_from_mass,
+)
 from multi_agent.config import (
+    BATCH_SIZE,
     COLLECT_TIMEOUT_S,
     JIDS,
+    MAX_BATCHES,
     QUEUE_MAX_SIZE,
     RL_ENABLED,
     RL_WEIGHT,
     SCORER_NAMES,
+    SELECTION_MODE,
     STOCK_WEIGHT,
     TOP_K,
+    VETO_MODE,
+    VETO_TAU,
     WEIGHTS_TIMEOUT_S,
 )
 from multi_agent.history import history
@@ -50,7 +60,7 @@ from multi_agent.messages import (
     make_round_result,
     parse,
 )
-from multi_agent.retrieval import get_candidates
+from multi_agent.retrieval import get_candidates, get_random_candidates
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _STOCK_DIR = _REPO_ROOT / "stock_agent"
@@ -127,60 +137,25 @@ class OrchestratorBehaviour(CyclicBehaviour):
             # ── 1. Request weights ────────────────────────────────────────
             weights_result = await self._request_weights(context, conv_id)
 
-            # ── 2. Retrieve 40 candidates (blocking DB call → executor) ───
-            loop = asyncio.get_event_loop()
-            candidates_info: list[dict] = await loop.run_in_executor(
-                None,
-                lambda: get_candidates(self.agent._stock_agent, weights_result, context),
-            )
-            if not candidates_info:
+            # ── 2-5. Selection: legacy single-round Borda, or random-batch +
+            #         weighted-veto loop, depending on SELECTION_MODE. Both
+            #         return the same (top_k_keys, candidates_info, proposals,
+            #         agent_weights, responded, missing) shape for the result
+            #         builder below.
+            if SELECTION_MODE == "veto_batch":
+                outcome = await self._run_veto_batch(context, conv_id, weights_result)
+            else:
+                outcome = await self._run_legacy_borda(context, conv_id, weights_result)
+
+            if outcome is None:
+                # No candidates / no survivors — resolve with an empty list.
                 logger.warning(f"[{conv_id}] No candidates; resolving with empty list.")
                 history.record_complete(conv_id, 0, [], list(SCORER_NAMES))
                 fut.set_result([])
                 return
 
-            logger.info(f"[{conv_id}] {len(candidates_info)} candidates retrieved.")
-
-            # ── 3. Broadcast CFP to all scorers (sealed bid) ───────────────
-            await self._broadcast_cfp(conv_id, candidates_info, weights_result, context)
-            logger.info(f"[{conv_id}] CFP broadcast to {SCORER_NAMES}.")
-
-            # ── 4. Collect sealed proposals ────────────────────────────────
-            proposals = await self._collect_proposals(conv_id)
-            responded = sorted(proposals.keys())
-            missing   = sorted(set(SCORER_NAMES) - set(responded))
-            logger.info(f"[{conv_id}] Proposals from: {responded}.")
-            if missing:
-                logger.warning(
-                    f"[{conv_id}] Agents did not respond: {missing}. "
-                    f"Redistributing their weight among: {responded}."
-                )
-                comm_log("orchestrator", "—", "WARN", conv_id,
-                         f"missing agents {missing} — redistributing weights")
-
-            # ── 5. Weighted Borda count (with redistribution if agents missing) ──
-            # All four weights (colour/clothing/body/stock) derive from the four
-            # conversation-driven emphases in `weights_result["weights"]`
-            # (which now includes a `stock` importance). STOCK_WEIGHT is only a
-            # fallback importance for callers that omit the stock emphasis.
-            # Fold real detection confidence into the four emphasis agents so a
-            # low-confidence detection quiets its agent. stock is not a detection
-            # (always 1.0); the RL fixed slice is never confidence-scaled. With
-            # all-1.0 confidences this is identical to the legacy split.
-            confidences = {
-                "colour":   context.get("detected_color_conf",     1.0),
-                "clothing": context.get("detected_type_conf",      1.0),
-                "body":     context.get("detected_body_type_conf", 1.0),
-                "stock":    1.0,
-            }
-            agent_weights = build_agent_weights(
-                weights_result.get("weights", {}),
-                STOCK_WEIGHT,
-                rl_weight=RL_WEIGHT if RL_ENABLED else 0.0,
-                confidences=confidences,
-                present_agents=frozenset(responded),
-            )
-            top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
+            (top_k_keys, candidates_info, proposals,
+             agent_weights, responded, missing) = outcome
 
             # ── 6. Build rich result ───────────────────────────────────────
             result = _build_result(
@@ -257,6 +232,242 @@ class OrchestratorBehaviour(CyclicBehaviour):
             },
         }
 
+    def _compute_agent_weights(
+        self,
+        context: dict,
+        weights_result: dict,
+        responded: list[str],
+    ) -> dict[str, float]:
+        """Per-agent budget from the conversation emphases + detection confidence.
+
+        All four weights (colour/clothing/body/stock) derive from the four
+        conversation-driven emphases in ``weights_result["weights"]``. STOCK_WEIGHT
+        is only a fallback importance for callers that omit the stock emphasis.
+        Real detection confidence quiets a low-confidence agent (stock=1.0, RL
+        never confidence-scaled). With all-1.0 confidences this is identical to
+        the legacy split. Missing agents have their weight redistributed.
+        """
+        confidences = {
+            "colour":   context.get("detected_color_conf",     1.0),
+            "clothing": context.get("detected_type_conf",      1.0),
+            "body":     context.get("detected_body_type_conf", 1.0),
+            "stock":    1.0,
+        }
+        return build_agent_weights(
+            weights_result.get("weights", {}),
+            STOCK_WEIGHT,
+            rl_weight=RL_WEIGHT if RL_ENABLED else 0.0,
+            confidences=confidences,
+            present_agents=frozenset(responded),
+        )
+
+    async def _retrieve_candidates(
+        self,
+        context: dict,
+        weights_result: dict,
+        *,
+        random_batch: bool = False,
+        exclude_item_ids=None,
+    ) -> list[dict]:
+        """Run the (blocking) DB retrieval off the event loop.
+
+        random_batch=False → legacy exact-filter retrieval (get_candidates).
+        random_batch=True  → broad-random batch (get_random_candidates), excluding
+                             item_ids already seen in earlier batches.
+        """
+        loop = asyncio.get_event_loop()
+        if random_batch:
+            return await loop.run_in_executor(
+                None,
+                lambda: get_random_candidates(
+                    self.agent._stock_agent, weights_result, context,
+                    n=BATCH_SIZE, exclude_item_ids=exclude_item_ids,
+                ),
+            )
+        return await loop.run_in_executor(
+            None,
+            lambda: get_candidates(self.agent._stock_agent, weights_result, context),
+        )
+
+    async def _run_legacy_borda(self, context: dict, conv_id: str, weights_result: dict):
+        """Legacy single-round path: retrieve → CFP → collect → tie-aware Borda."""
+        candidates_info = await self._retrieve_candidates(context, weights_result)
+        if not candidates_info:
+            return None
+
+        logger.info(f"[{conv_id}] {len(candidates_info)} candidates retrieved.")
+
+        await self._broadcast_cfp(conv_id, candidates_info, weights_result, context)
+        logger.info(f"[{conv_id}] CFP broadcast to {SCORER_NAMES}.")
+
+        proposals, _vetoes = await self._collect_proposals(conv_id)
+        responded = sorted(proposals.keys())
+        missing   = sorted(set(SCORER_NAMES) - set(responded))
+        logger.info(f"[{conv_id}] Proposals from: {responded}.")
+        if missing:
+            logger.warning(
+                f"[{conv_id}] Agents did not respond: {missing}. "
+                f"Redistributing their weight among: {responded}."
+            )
+            comm_log("orchestrator", "—", "WARN", conv_id,
+                     f"missing agents {missing} — redistributing weights")
+
+        agent_weights = self._compute_agent_weights(context, weights_result, responded)
+        top_k_keys = borda_aggregate(proposals, agent_weights, k=TOP_K)
+        return top_k_keys, candidates_info, proposals, agent_weights, responded, missing
+
+    async def _run_veto_batch(self, context: dict, conv_id: str, weights_result: dict):
+        """Random-batch + weighted-veto loop.
+
+        Repeatedly draws a random broad batch (excluding seen items), broadcasts a
+        CFP, collects proposals+vetoes, eliminates items via the veto rule, and
+        accumulates the survivors (with their per-agent raw scores) into a running
+        pool until ≥ TOP_K survive or MAX_BATCHES is reached. The accumulated pool
+        is then ranked once with tie-aware weighted Borda → top-TOP_K. If still
+        short, best-effort fills from the least-vetoed / highest-ranked items seen.
+        """
+        # Accumulated across batches:
+        pool_proposals: dict[str, dict[str, float]] = {}  # agent → {item_key: score} (survivors)
+        pool_candidates: dict[str, dict] = {}             # item_key → candidate dict (survivors)
+        seen_item_ids: set[int] = set()
+        responded_union: set[str] = set()
+        # Best-effort fill pool: every item ever scored, with reject_mass, kept so
+        # we can backfill if too few survive.
+        fallback_proposals: dict[str, dict[str, float]] = {}
+        fallback_candidates: dict[str, dict] = {}
+        fallback_reject: dict[str, float] = {}
+
+        last_weights: dict[str, float] = {}
+
+        for batch_no in range(1, MAX_BATCHES + 1):
+            candidates_info = await self._retrieve_candidates(
+                context, weights_result,
+                random_batch=True, exclude_item_ids=seen_item_ids,
+            )
+            if not candidates_info:
+                logger.info(f"[{conv_id}] veto_batch: batch {batch_no} empty; stopping.")
+                break
+
+            for c in candidates_info:
+                seen_item_ids.add(int(c["item_id"]))
+
+            logger.info(
+                f"[{conv_id}] veto_batch: batch {batch_no}/{MAX_BATCHES} — "
+                f"{len(candidates_info)} candidates."
+            )
+
+            await self._broadcast_cfp(conv_id, candidates_info, weights_result, context)
+
+            proposals, vetoes = await self._collect_proposals(conv_id)
+            responded = sorted(proposals.keys())
+            responded_union.update(responded)
+
+            agent_weights = self._compute_agent_weights(context, weights_result, responded)
+            last_weights = agent_weights
+
+            batch_keys = {k for sc in proposals.values() for k in sc}
+            info_by_key = {f"{c['item_id']}:{c['size']}": c for c in candidates_info}
+
+            # Surface each responding agent's veto count for THIS batch.
+            for agent_id in responded:
+                n_vetoed = len(vetoes.get(agent_id, []))
+                comm_log(agent_id, "orchestrator", "VETO", conv_id,
+                         f"vetoed {n_vetoed}/{len(proposals.get(agent_id, {}))}")
+
+            # Reject-mass per item for THIS batch (shared survival rule).
+            batch_survived = 0
+            batch_eliminated = 0
+            for item_key in batch_keys:
+                mass = reject_mass(item_key, vetoes, agent_weights, mode=VETO_MODE)
+                # Track every scored item for best-effort fill.
+                fallback_reject[item_key] = mass
+                if item_key in info_by_key:
+                    fallback_candidates[item_key] = info_by_key[item_key]
+                for agent_id, sc in proposals.items():
+                    if item_key in sc:
+                        fallback_proposals.setdefault(agent_id, {})[item_key] = sc[item_key]
+
+                survives = survives_from_mass(mass, mode=VETO_MODE, tau=VETO_TAU)
+                if survives:
+                    batch_survived += 1
+                    if item_key in info_by_key:
+                        pool_candidates[item_key] = info_by_key[item_key]
+                    for agent_id, sc in proposals.items():
+                        if item_key in sc:
+                            pool_proposals.setdefault(agent_id, {})[item_key] = sc[item_key]
+                else:
+                    batch_eliminated += 1
+
+            # How many items the weighted veto eliminated vs survived this batch.
+            logger.info(
+                f"[{conv_id}] veto_batch: batch {batch_no}: {batch_eliminated} "
+                f"vetoed-out, {batch_survived} survived "
+                f"(mode={VETO_MODE}, τ={VETO_TAU})."
+            )
+
+            # Distinct surviving item_ids so far.
+            distinct_survivors = {k.split(":", 1)[0] for k in pool_candidates}
+            logger.info(
+                f"[{conv_id}] veto_batch: {len(distinct_survivors)} distinct "
+                f"survivors after batch {batch_no}."
+            )
+            if len(distinct_survivors) >= TOP_K:
+                break
+
+        if not last_weights:
+            # No batch ever produced proposals.
+            return None
+
+        responded = sorted(responded_union)
+        missing   = sorted(set(SCORER_NAMES) - responded_union)
+
+        # Rank the accumulated survivor pool with tie-aware weighted Borda.
+        # NOTE: the pool spans every batch, but is ranked with the LAST batch's
+        # agent_weights — an accepted approximation when earlier batches had a
+        # different responded set (and thus a slightly different weight split).
+        top_k_keys = borda_aggregate(pool_proposals, last_weights, k=TOP_K) if pool_proposals else []
+        n_from_pool = len(top_k_keys)
+
+        # Best-effort fill: if short, backfill from the least-vetoed / highest-Borda
+        # items seen across all batches (distinct by item_id, skipping ones taken).
+        if len(top_k_keys) < TOP_K and fallback_proposals:
+            taken_ids = {k.split(":", 1)[0] for k in top_k_keys}
+            ranked_fallback = borda_aggregate(
+                fallback_proposals, last_weights, k=len(fallback_candidates) or TOP_K
+            )
+            # Order the fallback list by (reject_mass asc, borda rank) — the borda
+            # call already orders by score; we re-sort by reject_mass first so the
+            # least-vetoed items fill first.
+            ranked_fallback.sort(key=lambda ik: fallback_reject.get(ik, float("inf")))
+            for item_key in ranked_fallback:
+                if len(top_k_keys) >= TOP_K:
+                    break
+                iid = item_key.split(":", 1)[0]
+                if iid in taken_ids:
+                    continue
+                taken_ids.add(iid)
+                top_k_keys.append(item_key)
+
+        if not top_k_keys:
+            return None
+
+        # Round end: survivor pool size, how many slots came from best-effort fill,
+        # and the veto mode/τ in effect.
+        distinct_pool = {k.split(":", 1)[0] for k in pool_candidates}
+        logger.info(
+            f"[{conv_id}] veto_batch: round end — {len(distinct_pool)} distinct "
+            f"survivors in pool, {len(top_k_keys) - n_from_pool} filled, "
+            f"{len(top_k_keys)} final (mode={VETO_MODE}, τ={VETO_TAU})."
+        )
+
+        # Candidate dicts for whatever ended up in the top-k (survivors + fills).
+        candidates_info = list({**fallback_candidates, **pool_candidates}.values())
+        proposals = {
+            agent_id: {**fallback_proposals.get(agent_id, {}), **pool_proposals.get(agent_id, {})}
+            for agent_id in responded_union
+        }
+        return top_k_keys, candidates_info, proposals, last_weights, responded, missing
+
     async def _broadcast_cfp(
         self,
         conv_id: str,
@@ -281,8 +492,11 @@ class OrchestratorBehaviour(CyclicBehaviour):
             comm_log("orchestrator", name, "CFP", conv_id,
                      f"{len(candidates_info)} candidates ({len(payload_candidates[0]) if payload_candidates else 0} fields/item)")
 
-    async def _collect_proposals(self, conv_id: str) -> dict[str, dict[str, float]]:
+    async def _collect_proposals(
+        self, conv_id: str
+    ) -> tuple[dict[str, dict[str, float]], dict[str, list[str]]]:
         proposals: dict[str, dict[str, float]] = {}
+        vetoes: dict[str, list[str]] = {}
         expected  = len(SCORER_NAMES)
         loop      = asyncio.get_event_loop()
         deadline  = loop.time() + COLLECT_TIMEOUT_S
@@ -306,6 +520,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 agent_id = data.get("agent_id") or str(msg.sender).split("@")[0]
                 if agent_id not in proposals:
                     proposals[agent_id] = data.get("scores", {})
+                    vetoes[agent_id]    = data.get("vetoes", []) or []
             else:
                 # Stale message from a previous round or wrong type — discard.
                 logger.debug(
@@ -314,7 +529,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
                     f"conv_id={(msg.get_metadata('conv_id') or '')[:8]!r})"
                 )
 
-        return proposals
+        return proposals, vetoes
 
 
 
