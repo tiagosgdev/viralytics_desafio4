@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default: small phones (< sw480dp, e.g. 360dp wide) -->
+<resources>
+    <dimen name="content_padding">13dp</dimen>
+    <dimen name="card_padding">14dp</dimen>
+    <dimen name="card_corner">18dp</dimen>
+    <dimen name="scan_image_height">150dp</dimen>
+    <dimen name="rec_scroll_height">175dp</dimen>
+    <dimen name="rec_card_width">155dp</dimen>
+    <dimen name="rec_card_image_height">90dp</dimen>
+    <dimen name="tab_button_height">42dp</dimen>
+    <dimen name="capture_button_min_height">46dp</dimen>
+    <dimen name="header_title_size">19sp</dimen>
+    <dimen name="section_label_size">9sp</dimen>
+</resources>
