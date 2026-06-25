@@ -125,6 +125,24 @@ def test_store_mean_review_excludes_null_reviews(tmp_path):
     store.close()
 
 
+# ── persona blurb (fixed mood + tastes traits) ─────────────────────────────────
+
+def test_persona_blurb_includes_mood_and_tastes():
+    # Mood and tastes are fixed per-persona traits read straight from the dict.
+    blurb = shopper._persona_blurb(
+        {"temperament": "picky", "mood": "in a bad mood today",
+         "tastes": "loves metallics"}
+    )
+    assert "in a bad mood today" in blurb
+    assert "loves metallics" in blurb
+
+
+def test_persona_blurb_defaults_when_traits_absent():
+    # A persona lacking mood/tastes still works and defaults to a neutral mood.
+    blurb = shopper._persona_blurb({"temperament": "neutral"})
+    assert "neutral" in blurb
+
+
 # ── shopper JSON parsing / fallbacks ───────────────────────────────────────────
 
 def test_extract_json_strips_fence():

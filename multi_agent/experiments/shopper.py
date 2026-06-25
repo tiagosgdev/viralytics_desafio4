@@ -135,13 +135,23 @@ def _extract_json(raw: str) -> dict[str, Any]:
 # ── prompt builders ───────────────────────────────────────────────────────────
 
 def _persona_blurb(persona: dict) -> str:
-    return (
+    blurb = (
         f"You are a {persona.get('temperament', 'neutral')} shopper "
         f"(gender: {persona.get('gender', 'unspecified')}). "
         f"Your hidden goal: {persona.get('hidden_goal', 'find something you like')}. "
+    )
+    tastes = persona.get("tastes")
+    if isinstance(tastes, str) and tastes.strip():
+        blurb += f"Your personal tastes: {tastes.strip()} "
+    mood = persona.get("mood")
+    mood = (mood or "").strip() if isinstance(mood, str) else ""
+    mood = mood or "neutral"
+    blurb += f"Right now you are {mood}. "
+    blurb += (
         f"You were scanned wearing a {persona.get('detected_color', '')} "
         f"{persona.get('detected_type', '')}."
     )
+    return blurb
 
 
 def _format_recs(last_recs: list[dict]) -> str:
@@ -180,12 +190,17 @@ def next_message(
     is satisfied or has given up — the episode ends after this and goes to the
     review. On any LLM / parse failure, returns a neutral non-stopping message
     so the loop continues (and MAX_TURNS still bounds it).
+
+    The persona's fixed ``mood`` and ``tastes`` (read from the persona dict via
+    :func:`_persona_blurb`) lightly colour how the shopper steers.
     """
     system_prompt = (
         _persona_blurb(persona)
         + " You are chatting with a clothing-store assistant that keeps showing you "
         "items. Reply with ONE short, natural shopping message that nudges it toward "
         "your hidden goal (mention a colour, style, fit, occasion, etc. you want). "
+        "Let your personal tastes (and, lightly, your current mood) colour how you "
+        "steer. "
         "If the current items already satisfy your goal, OR you have clearly given up, "
         'set "stop" to true. '
         'Respond ONLY as JSON: {"message": "<your next line>", "stop": <true|false>}.'
@@ -224,13 +239,23 @@ def final_review(
 
     Returns ``{"rating": int in 1..5, "reason": str}``. On any LLM / parse
     failure (or an out-of-range rating) falls back to a neutral rating of 3.
+
+    The persona's fixed ``mood`` (read from the persona dict via
+    :func:`_persona_blurb`) biases how generous or harsh the rating is — a good
+    mood makes it more forgiving, a bad mood harsher — while the persona's
+    ``tastes`` shape what is liked, but the stated reason must still cite the
+    actual recommended item attributes so the review stays diagnostic.
     """
     system_prompt = (
         _persona_blurb(persona)
         + " The shopping session is over. Rate how well the assistant's FINAL "
         "recommendations met your hidden goal, on a 1-5 scale "
         "(1 = terrible, 3 = ok, 5 = perfect). Be honest and consistent with your "
-        "temperament. "
+        "temperament. Let your current MOOD bias how generous or harsh the number "
+        "is (a good mood is more forgiving, a bad mood harsher) and let your personal "
+        "TASTES shape what you like, but your one-sentence REASON must still cite the "
+        "actual attributes (colour, type, fit, style, etc.) of the recommended items "
+        "so the review stays diagnostic. "
         'Respond ONLY as JSON: {"rating": <1-5 integer>, "reason": "<one sentence>"}.'
     )
     user_prompt = (
