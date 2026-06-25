@@ -62,6 +62,7 @@ import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
@@ -203,7 +204,7 @@ class MainActivity : AppCompatActivity() {
                     binding.chatInput.text?.clear()
                 }
                 is UiEvent.AgentRecsComplete -> {
-                    renderRecommendations()
+                    if (appMode == AppMode.TABLET) renderRecommendations()
                 }
                 is UiEvent.ChatError -> showChatReply(event.message)
             }
@@ -941,7 +942,17 @@ class MainActivity : AppCompatActivity() {
                     isAutomaticReconnect = true
                 }
 
-                mqttClient?.setCallback(object : MqttCallback {
+                mqttClient?.setCallback(object : MqttCallbackExtended {
+                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                        if (!reconnect) return
+                        mqttClient?.subscribe("cruzr/persona", 1)
+                        if (appMode == AppMode.TABLET) {
+                            mqttClient?.subscribe("cruzr/commands")
+                            mqttClient?.subscribe("cruzr/scan_result", 1)
+                        }
+                        runOnUiThread { setStatus("MQTT reconnected to $serverURI") }
+                    }
+
                     override fun connectionLost(cause: Throwable?) {
                         runOnUiThread { setStatus("MQTT lost — reconnecting…") }
                     }
