@@ -86,7 +86,11 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
   (`get_candidates`, line 118): add a broad-random sampling path (random N within a broad
   band; e.g. `ORDER BY RANDOM()` over a relaxed filter, or `random.sample` over the broad
   set). Gate behind a `SELECTION_MODE` config flag so the legacy exact-filter path stays
-  for comparison.
+  for comparison. **NB — today the query returns items `match_count desc, item_id asc`, so
+  the same scan yields the *identical* 40 every round.** Random sampling fixes this *only if
+  the broad band holds ≫ 40 items* — sampling 40 of ~45 still returns ~the same set
+  (decision #2 governs this). This is a *separate* id-ordering issue from the aggregation
+  one below; both must be fixed (see "Two id-ordering bugs").
 - **`multi_agent/strategies/*.py`** (colour/body/clothing/stock): add a `veto_threshold`
   param to each strategy's params (no change to the score functions themselves).
 - **`multi_agent/messages.py`** (`make_propose` line 82, `parse` line 130): carry `vetoes`.
@@ -98,8 +102,15 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
   scores+vetoes → eliminate (Option A/B) → accumulate survivors → repeat until 10 or
   `MAX_BATCHES`, then best-effort fill from highest-weighted non-eliminated items.
 - **`multi_agent/aggregator.py`**: add a `select_with_veto(proposals, vetoes, weights, k)`
-  helper (reuse the weighted ranking; apply elimination first). Also apply the **tie-aware
-  Borda** fix — see the appendix below.
+  helper (reuse the weighted ranking; apply elimination first). **Included in this work:**
+  the **tie-aware Borda** fix — see the appendix below.
+
+### Two id-ordering bugs (both fixed here, different layers)
+1. **Retrieval order** — query returns `id`-sorted, deterministic → same 40 every round.
+   Fix: **random sampling** in retrieval (effective only with a broad band, decision #2).
+2. **Aggregation tie-break** — Borda breaks score-ties by `item_key`, so even a *different*
+   random batch is internally ranked by item-id among ties. Fix: **tie-aware Borda**.
+   Random sampling does NOT fix this layer; the two fixes are complementary and both ship.
 - **`multi_agent/config.py`**: add `SELECTION_MODE` (`borda` | `veto_batch`), `VETO_MODE`
   (`blackball` | `weighted`), `VETO_TAU`, `MAX_BATCHES`, `BATCH_SIZE`.
 
@@ -116,13 +127,17 @@ Each vetoing agent adds **its weight** to a `reject_mass`; eliminate the item if
   `python -m multi_agent.experiments.report`. Success = per-agent marginal spread now
   exceeds noise (Δ ≫ 0.04 SE), i.e. personalities separate.
 
-## Open decisions (all TBD)
+## Committed (not open)
+- **Tie-aware Borda** fix ships as part of this work (appendix below).
+- **Random sampling** in retrieval replaces the deterministic id-ordered query.
+
+## Open decisions (TBD)
 1. **Veto combination:** Option A (blackball) vs B (weighted). See note above.
 2. **Broad band width:** how loose is "broad relevance" — same garment family? any one
-   scanned attribute? fully random in-stock? (controls relevance vs variety + speed).
+   scanned attribute? fully random in-stock? (controls relevance vs variety + speed, and
+   also whether random sampling actually varies the slate — needs ≫ 40 items in band).
 3. **Relevance floor:** should the scanned color/type remain a *soft* strong preference
    in ranking so results stay on-theme, or purely up to the agents' votes?
-4. **Tie-aware Borda:** ship the fix below as part of this work, or separately?
 
 ---
 
