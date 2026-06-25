@@ -298,48 +298,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun captureFromServer() {
-        val baseUrl = normalizedBaseUrl() ?: return
-        setStatus("Capturing from camera…")
-        val request = Request.Builder()
-            .url("$baseUrl/api/mobile/capture")
-            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
-            .build()
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        runOnUiThread {
-                            setStatus("Capture failed: HTTP ${response.code}")
-                            binding.chatReplyText.text = bodyText.ifBlank { "No error body returned." }
-                        }
-                        return@use
-                    }
-                    val json = JSONObject(bodyText)
-                    currentSessionId = json.optString("session_id").ifBlank { null }
-                    currentConversationState = null
-                    currentIncludeFilters = null
-                    updateDetections(json.optJSONArray("detections"))
-                    updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
-                    updateAnnotatedImage(json.optString("annotated_frame"))
-                    extendSession()
-                    runOnUiThread {
-                        switchTab("scan")
-                        updateSessionLabel("Vision-led")
-                        binding.chatReplyText.text = "Scan complete. Tap a recommendation to inspect it, or refine with chat."
-                        setStatus("Scan complete.")
-                    }
-                }
-            } catch (exc: Exception) {
-                runOnUiThread {
-                    setStatus("Capture request failed.")
-                    binding.chatReplyText.text = exc.message ?: "Unknown error"
-                }
-            }
-        }.start()
-    }
-
     private fun launchCamera() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
