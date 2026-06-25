@@ -62,7 +62,6 @@ import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.MqttCallback
-import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
@@ -983,27 +982,17 @@ class MainActivity : AppCompatActivity() {
             val rawUrl = loadServerUrl().replace("http://", "").replace("https://", "")
             val ipAddress = rawUrl.split(":")[0]
             val brokerUri = "tcp://$ipAddress:1883"
-            val clientId = "Cruzr_${(1000..9999).random()}"
+            val clientId = "viralytics_${if (appMode == AppMode.TABLET) "tablet" else "phone"}"
 
             try {
                 mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
                 val options = MqttConnectOptions().apply {
-                    isCleanSession = true
+                    isCleanSession = false
                     connectionTimeout = 10
                     isAutomaticReconnect = true
                 }
 
-                mqttClient?.setCallback(object : MqttCallbackExtended {
-                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
-                        if (!reconnect) return
-                        mqttClient?.subscribe("cruzr/persona", 1)
-                        if (appMode == AppMode.TABLET) {
-                            mqttClient?.subscribe("cruzr/commands")
-                            mqttClient?.subscribe("cruzr/scan_result", 1)
-                        }
-                        runOnUiThread { setStatus("MQTT reconnected to $serverURI") }
-                    }
-
+                mqttClient?.setCallback(object : MqttCallback {
                     override fun connectionLost(cause: Throwable?) {
                         runOnUiThread { setStatus("MQTT lost — reconnecting…") }
                     }
