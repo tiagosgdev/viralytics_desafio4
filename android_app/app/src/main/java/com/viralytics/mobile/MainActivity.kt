@@ -62,6 +62,30 @@ import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
+/**
+ * Main activity for the Viralytics tablet app running on the Cruzr robot.
+ *
+ * Architecture overview:
+ *   PC Server (FastAPI)  ──MQTT──►  This app  ──UBTech SDK──►  Robot hardware
+ *
+ * Communication:
+ *   - Subscribes to MQTT topic "cruzr/commands" to receive navigation/speech/gesture commands
+ *   - Publishes to MQTT topic "cruzr/status" to report navigation events back to the server
+ *   - MQTT broker: test.mosquitto.org:8883 (TLS encrypted, no auth — demo only)
+ *   - HTTP: calls the FastAPI server directly for outfit scanning and chat
+ *
+ * Robot control (UBTech Cruzr SDK v2.8.0):
+ *   - NavigationManager: navigates to map markers or raw (x, y, theta) coordinates
+ *   - MotionManager:     plays gesture animations (raise arms, wave, goodbye…)
+ *   - SensorManager:     reads the LIDAR human-detection sensor
+ *   - SpeechManager/TTS: speaks text using the robot's onboard TTS engine
+ *
+ * Customer session lifecycle:
+ *   door sensor → greet command → navigate to entrance → LIDAR detects person
+ *   → speak + gesture → session starts (3-min idle timer) → customer scans outfit
+ *   → each scan/chat resets the timer → AI sends guide_user → navigate to stand
+ *   → arrive → speak → session ends → robot returns to entrance
+ */
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val httpClient = OkHttpClient()
@@ -70,8 +94,8 @@ class MainActivity : AppCompatActivity() {
     private val APP_VERSION = "v2.3"
 
     // --- NAVIGATION CONFIG ---
-    private val TRACK_MODE = false
-    private val NAV_MAX_SPEED = 0.5f
+    private val TRACK_MODE = false       // false = point-to-point; true = follow path polyline
+    private val NAV_MAX_SPEED = 0.5f    // metres/second
     private val NAV_RETRY_COUNT = 2
     private val NAV_RETRY_INTERVAL = 2000
 
@@ -82,21 +106,24 @@ class MainActivity : AppCompatActivity() {
     private var currentIncludeFilters: JSONObject? = null
     private var currentTab: String = "scan"
 
+    // MQTT client — connects to test.mosquitto.org on a background thread
     private var mqttClient: MqttClient? = null
 
-    // Hardware Managers (V2.8.0 Architecture)
+    // UBTech SDK hardware managers — obtained from Robot singleton after Robot.initialize()
     private var navigationManager: NavigationManager? = null
     private var speechManager: SpeechManager? = null
     private var motionManager: MotionManager? = null
     private var cruzrSensorManager: CruzrSensorManager? = null
     private lateinit var textToSpeech: TextToSpeech
 
-    // Greeting flow state — guards against duplicate door triggers
+    // isBusy: true while any navigation is in progress — blocks stacking navigation commands.
+    // isAtEntrance: true after arriving at the entrance position, while waiting for LIDAR detection.
+    // Both are @Volatile because the MQTT background thread reads them while the main thread writes.
     @Volatile private var isBusy = false
     @Volatile private var isAtEntrance = false
     private var humanDetectListener: SensorListener? = null
-    @Volatile private var pendingGreetText  = "Welcome! I'm Cruzr, your personal fashion assistant. Come closer and let me help you find the perfect outfit!"
-    @Volatile private var pendingGreetGesture = "wave"
+    @Volatile private var pendingGreetText  = "Bem-vindo! Sou o Cruzr, o seu assistente de moda pessoal. Aproxime-se e deixe-me ajudá-lo a encontrar o outfit perfeito!"
+    @Volatile private var pendingGreetGesture = "raise"
 
     // Customer session — blocks new greet commands while serving; returns robot to entrance when done
     @Volatile private var isServingCustomer = false
@@ -106,7 +133,19 @@ class MainActivity : AppCompatActivity() {
     private var entranceCoordsSet = false
     private val sessionHandler = Handler(Looper.getMainLooper())
     private val sessionTimeoutRunnable = Runnable { endCustomerSession("timeout") }
-    private val SESSION_TIMEOUT_MS = 10 * 60 * 1000L // 10 minutes
+    private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L  // 3 minutes — customer greeted but not interacting
+    private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L       // 25 seconds — nobody showed up at entrance
+    private val lidarWaitHandler = Handler(Looper.getMainLooper())
+    private val lidarWaitTimeoutRunnable = Runnable {
+        if (isAtEntrance) {
+            android.util.Log.i("CruzrApp", "LIDAR wait timeout — nobody arrived, releasing busy lock")
+            isAtEntrance = false
+            stopHumanDetection()
+            isBusy = false
+            publishStatus("lidar_timeout", null)
+            runOnUiThread { setStatus("Nobody arrived — ready for next customer") }
+        }
+    }
 
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -117,13 +156,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private var photoUri: android.net.Uri? = null
+
     private val cameraLauncher =
-        registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-            if (bitmap == null) {
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+            if (!success) {
                 setStatus("Capture cancelled.")
                 return@registerForActivityResult
             }
-            uploadScan(bitmap)
+            val uri = photoUri ?: return@registerForActivityResult
+            uploadScanFromUri(uri)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,7 +189,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            binding.captureButton.setOnClickListener { launchCamera() }
+            binding.captureButton.setOnClickListener { captureFromServer() }
             binding.sendChatButton.setOnClickListener { sendChat() }
             binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
             binding.recommendationsRightButton.setOnClickListener { scrollRecommendations(1) }
@@ -165,12 +207,110 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun captureFromServer() {
+        val baseUrl = normalizedBaseUrl() ?: return
+        setStatus("Capturing from camera…")
+        val request = Request.Builder()
+            .url("$baseUrl/api/mobile/capture")
+            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+            .build()
+        Thread {
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyText = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        runOnUiThread {
+                            setStatus("Capture failed: HTTP ${response.code}")
+                            binding.chatReplyText.text = bodyText.ifBlank { "No error body returned." }
+                        }
+                        return@use
+                    }
+                    val json = JSONObject(bodyText)
+                    currentSessionId = json.optString("session_id").ifBlank { null }
+                    currentConversationState = null
+                    currentIncludeFilters = null
+                    updateDetections(json.optJSONArray("detections"))
+                    updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
+                    updateAnnotatedImage(json.optString("annotated_frame"))
+                    extendSession()
+                    runOnUiThread {
+                        switchTab("scan")
+                        updateSessionLabel("Vision-led")
+                        binding.chatReplyText.text = "Scan complete. Tap a recommendation to inspect it, or refine with chat."
+                        setStatus("Scan complete.")
+                    }
+                }
+            } catch (exc: Exception) {
+                runOnUiThread {
+                    setStatus("Capture request failed.")
+                    binding.chatReplyText.text = exc.message ?: "Unknown error"
+                }
+            }
+        }.start()
+    }
+
     private fun launchCamera() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            cameraLauncher.launch(null)
+            val photoFile = java.io.File(cacheDir, "photos/scan_${System.currentTimeMillis()}.jpg")
+                .also { it.parentFile?.mkdirs() }
+            photoUri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", photoFile
+            )
+            cameraLauncher.launch(photoUri)
         } else {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    private fun uploadScanFromUri(uri: android.net.Uri) {
+        setStatus("Uploading scan...")
+        val baseUrl = normalizedBaseUrl() ?: return
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: run {
+            setStatus("Failed to read photo.")
+            return
+        }
+        val imageBody = bytes.toRequestBody("image/jpeg".toMediaType())
+        val multipartBody = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", "scan.jpg", imageBody)
+            .build()
+        val request = Request.Builder()
+            .url("$baseUrl/api/mobile/scan")
+            .post(multipartBody)
+            .build()
+        Thread {
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val bodyText = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        runOnUiThread {
+                            setStatus("Scan failed: HTTP ${response.code}")
+                            binding.chatReplyText.text = bodyText.ifBlank { "No error body returned." }
+                        }
+                        return@use
+                    }
+                    val json = JSONObject(bodyText)
+                    currentSessionId = json.optString("session_id").ifBlank { null }
+                    currentConversationState = null
+                    currentIncludeFilters = null
+                    updateDetections(json.optJSONArray("detections"))
+                    updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
+                    updateAnnotatedImage(json.optString("annotated_frame"))
+                    extendSession()
+                    runOnUiThread {
+                        switchTab("scan")
+                        updateSessionLabel("Vision-led")
+                        binding.chatReplyText.text = "Scan complete. Tap a recommendation to inspect it, or refine with chat."
+                        setStatus("Scan complete.")
+                    }
+                }
+            } catch (exc: Exception) {
+                runOnUiThread {
+                    setStatus("Scan request failed.")
+                    binding.chatReplyText.text = exc.message ?: "Unknown error"
+                }
+            }
+        }.start()
     }
 
     private fun uploadScan(bitmap: Bitmap) {
@@ -208,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                     updateDetections(json.optJSONArray("detections"))
                     updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
                     updateAnnotatedImage(json.optString("annotated_frame"))
+                    extendSession()
 
                     runOnUiThread {
                         switchTab("scan")
@@ -267,6 +408,7 @@ class MainActivity : AppCompatActivity() {
                     currentConversationState = json.optJSONObject("state")
                     currentIncludeFilters = extractIncludeFilters(json)
                     updateRecommendations(parseRecommendations(json.optJSONArray("results")))
+                    extendSession()
 
                     runOnUiThread {
                         switchTab("refine")
@@ -350,7 +492,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildRecommendationCard(item: RecommendationItem, index: Int): View {
-        val isCruella = viewModel.selectedPersona == "cruella"
         val cardWidth = resources.getDimensionPixelSize(R.dimen.rec_card_width)
         val card = MaterialCardView(this).apply {
             layoutParams = LinearLayout.LayoutParams(cardWidth, LinearLayout.LayoutParams.MATCH_PARENT).also {
@@ -803,10 +944,8 @@ class MainActivity : AppCompatActivity() {
                 override fun connectComplete(reconnect: Boolean, serverURI: String?) {
                     if (!reconnect) return
                     mqttClient?.subscribe("cruzr/persona", 1)
-                    if (appMode == AppMode.TABLET) {
-                        mqttClient?.subscribe("cruzr/commands")
-                        mqttClient?.subscribe("cruzr/scan_result", 1)
-                    }
+                    mqttClient?.subscribe("cruzr/commands")
+                    mqttClient?.subscribe("cruzr/scan_result", 1)
                     runOnUiThread { setStatus("MQTT reconnected to $serverURI") }
                 }
 
@@ -1068,9 +1207,9 @@ class MainActivity : AppCompatActivity() {
 
         if (!skipIntroSpeech) {
             val textToSpeak = if (reason.isNotBlank()) {
-                "I found a great match! $reason. Let me show you where it is."
+                "Encontrei uma ótima opção! $reason. Siga-me, vou mostrar-lhe onde está."
             } else {
-                "Let me show you where the $targetItem is."
+                "Siga-me, vou mostrar-lhe onde fica o $targetItem."
             }
             speakText(textToSpeak)
         }
@@ -1166,7 +1305,7 @@ class MainActivity : AppCompatActivity() {
                             publishStatus("navigation_arrived", JSONObject().put("target", targetItem))
                             runOnUiThread {
                                 setStatus("Arrived at $targetItem!")
-                                speakText("Here is the item you are looking for.")
+                                speakText("Aqui está o artigo que procurava!")
                             }
                             endCustomerSession("arrived_at_stand")
                         }
@@ -1271,6 +1410,7 @@ class MainActivity : AppCompatActivity() {
             }
             sm.registerListener("human_detect", humanDetectListener!!)
             android.util.Log.i("CruzrApp", "LIDAR human detection active")
+            lidarWaitHandler.postDelayed(lidarWaitTimeoutRunnable, LIDAR_WAIT_TIMEOUT_MS)
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "registerListener failed: ${e.message}")
             onPersonDetectedByLidar()  // fall back to immediate greet
@@ -1295,6 +1435,7 @@ class MainActivity : AppCompatActivity() {
     private fun onPersonDetectedByLidar() {
         if (!isAtEntrance) return       // guard against duplicate fires
         isAtEntrance = false
+        lidarWaitHandler.removeCallbacks(lidarWaitTimeoutRunnable)
         stopHumanDetection()
 
         runOnUiThread { setStatus("Customer detected! Greeting…") }
@@ -1321,6 +1462,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ── Customer session ──────────────────────────────────────────────────────
+
+    private fun extendSession() {
+        if (!isServingCustomer) return
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        sessionHandler.postDelayed(sessionTimeoutRunnable, SESSION_TIMEOUT_MS)
+    }
 
     private fun endCustomerSession(reason: String) {
         if (!isServingCustomer) return

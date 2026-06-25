@@ -133,9 +133,9 @@ rec_system = None
 robot_bridge = None
 _COORDS_FILE          = PROJECT_ROOT / "robotics" / "coordinates.json"
 _CATEGORY_LOCS_FILE   = PROJECT_ROOT / "robotics" / "category_locations.json"
-_ENTRANCE_LOCATION    = "entrance"   # must be surveyed; robot goes here on door trigger
-_GREETING_TEXT        = "Welcome! I'm Cruzr, your personal fashion assistant. Let me help you find the perfect outfit today."
-_GREETING_GESTURE     = "wave"
+_ENTRANCE_LOCATION    = "Entrance"   # must be surveyed; robot goes here on door trigger
+_GREETING_TEXT        = "Bem-vindo! Sou a ROSE, o seu assistente de moda pessoal. Aproxime-se e deixe-me ajudá-lo a encontrar o outfit perfeito!"
+_GREETING_GESTURE     = "raise"
 
 
 def _load_robot_coords() -> dict:
@@ -683,28 +683,12 @@ async def _run_multiagent_round(
         return None
 
 
-async def _detect_image_impl(
-    file: UploadFile,
+async def _detect_frame_impl(
+    frame,
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
 ) -> DetectionResponse:
-    """
-    Shared implementation for image/mobile scan uploads.
-
-    When `user_profile` is provided (logged-in user), it is:
-      1. Stored on the search session so every subsequent refinement query
-         is enriched with the user's style preferences.
-      2. Used to pre-filter recommendations toward the user's preferred
-         colors, styles, materials, seasons and occasions.
-    """
     persona = normalize_persona(persona)
-    contents = await file.read()
-    arr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-    if frame is None:
-        raise HTTPException(status_code=400, detail="Could not decode image")
-
     active_detector = _resolve_detector(persona)
     result = active_detector.detect(frame)
     cats = list({
@@ -768,6 +752,33 @@ async def _detect_image_impl(
         session_id=session.id,
         persona=persona,
     )
+
+
+async def _detect_image_impl(
+    file: UploadFile,
+    persona: str = "cruella",
+    user_profile: Optional[dict] = None,
+) -> DetectionResponse:
+    contents = await file.read()
+    arr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+    return await _detect_frame_impl(frame, persona=persona, user_profile=user_profile)
+
+
+@app.post("/api/mobile/capture", response_model=DetectionResponse)
+async def mobile_capture(
+    persona: str = "cruella",
+    user_id: Optional[int] = Depends(get_optional_user_id),
+):
+    """Grab a frame from the PC-connected camera and run detection — no upload needed."""
+    active_camera = _resolve_camera(persona)
+    frame = active_camera.snapshot()
+    if frame is None:
+        raise HTTPException(status_code=503, detail="Camera not ready — no frames captured yet")
+    user_profile = await run_in_threadpool(_get_user_profile, user_id)
+    return await _detect_frame_impl(frame, persona=persona, user_profile=user_profile)
 
 
 @app.post("/api/detect/image", response_model=DetectionResponse)
@@ -1365,7 +1376,7 @@ async def robot_door_sensor(direction: str = "entering"):
             return {"status": "ignored", "direction": "leaving", "reason": "robot offline"}
         await run_in_threadpool(
             robot_bridge.farewell,
-            "Goodbye! Hope to see you again soon!",
+            "Até logo! Esperamos vê-lo em breve!",
             "goodbye",
         )
         return {"status": "sent", "direction": "leaving", "sequence": ["speak", "gesture"]}

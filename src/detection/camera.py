@@ -569,8 +569,11 @@ class CameraStream:
             self._is_warm = False
         self._frame_deque.clear()
 
-    def _read_frame(self) -> Optional[np.ndarray]:
-        """Return the latest camera frame without blocking."""
+    def snapshot(self) -> Optional[np.ndarray]:
+        """Return the latest camera frame without blocking. Returns None if no frame yet."""
         if self._frame_deque:
             return self._frame_deque[-1].copy()
         return None
+
+    def _read_frame(self) -> Optional[np.ndarray]:
+        return self.snapshot()

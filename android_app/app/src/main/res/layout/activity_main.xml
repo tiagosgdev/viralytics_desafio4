@@ -52,7 +52,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:gravity="center_vertical"
-                android:background="@drawable/mobile_status_pill"
+                android:background="@color/brand_surface_soft"
                 android:paddingStart="10dp"
                 android:paddingEnd="14dp"
                 android:layout_marginEnd="8dp">
@@ -61,7 +61,7 @@
                     android:id="@+id/statusDot"
                     android:layout_width="8dp"
                     android:layout_height="8dp"
-                    android:background="@drawable/mobile_status_dot" />
+                    android:background="@color/brand_accent" />
 
                 <TextView
                     android:id="@+id/statusText"
@@ -98,7 +98,7 @@
                 android:id="@+id/personaChip"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/mobile_persona_chip"
+                android:background="@color/brand_text"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
                 android:paddingTop="4dp"
@@ -113,7 +113,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
-                android:text="@string/switch_stylist"
+                android:text="Switch Stylist"
                 android:textColor="@color/brand_muted"
                 android:textSize="11sp"
                 app:rippleColor="@color/brand_surface_soft" />
@@ -136,7 +136,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
             android:layout_marginBottom="12dp"
-            android:background="@drawable/mobile_status_pill"
+            android:background="@color/brand_surface_soft"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:paddingTop="3dp"
@@ -152,7 +152,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
-            android:background="@drawable/mobile_tab_bar_bg"
+            android:background="@color/brand_surface"
             android:padding="4dp"
             android:orientation="horizontal">
 
@@ -164,7 +164,7 @@
                 android:text="@string/tab_scan"
                 android:textSize="13sp"
                 android:textColor="@color/white"
-                app:icon="@drawable/ic_camera"
+                app:icon="@android:drawable/ic_menu_camera"
                 app:iconGravity="start"
                 app:iconSize="16dp"
                 app:backgroundTint="@color/brand_text"
@@ -181,7 +181,7 @@
                 android:text="@string/tab_refine"
                 android:textSize="13sp"
                 android:textColor="@color/brand_text"
-                app:icon="@drawable/ic_chat"
+                app:icon="@android:drawable/ic_menu_share"
                 app:iconGravity="start"
                 app:iconSize="16dp"
                 app:cornerRadius="14dp"
@@ -238,7 +238,7 @@
                         android:minHeight="@dimen/capture_button_min_height"
                         android:text="@string/capture_outfit"
                         android:textColor="@color/white"
-                        app:icon="@drawable/ic_camera"
+                        app:icon="@android:drawable/ic_menu_camera"
                         app:iconGravity="start"
                         app:iconSize="18dp"
                         app:backgroundTint="@color/brand_text"
@@ -444,7 +444,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@string/chat_welcome_title"
+                            android:text="What are you looking for?"
                             android:textColor="@color/brand_text"
                             android:textSize="15sp"
                             android:textStyle="bold"
@@ -455,7 +455,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
                             android:tag="color_muted"
-                            android:text="@string/chat_welcome_sub"
+                            android:text="Describe your style and I will find the perfect match."
                             android:textColor="@color/brand_muted"
                             android:textSize="12sp"
                             android:gravity="center" />
@@ -506,7 +506,7 @@
                                 android:id="@+id/chatInput"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:hint="@string/chat_input_hint"
+                                android:hint="Describe what you are looking for…"
                                 android:inputType="text"
                                 android:maxLines="1"
                                 android:imeOptions="actionSend"
@@ -519,10 +519,10 @@
                             android:layout_width="50dp"
                             android:layout_height="50dp"
                             android:layout_marginStart="10dp"
-                            android:background="@drawable/mobile_send_button"
+                            android:background="@color/brand_text"
                             android:contentDescription="@string/send_refinement"
                             android:padding="14dp"
-                            android:src="@drawable/ic_send"
+                            android:src="@android:drawable/ic_menu_send"
                             android:tint="@color/white" />
                     </LinearLayout>
                 </LinearLayout>
