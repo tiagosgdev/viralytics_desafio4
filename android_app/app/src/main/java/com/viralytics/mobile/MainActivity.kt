@@ -332,8 +332,9 @@ class MainActivity : AppCompatActivity() {
         val accentColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent_strong else R.color.brand_accent_strong)
         val borderColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border else R.color.brand_border)
 
+        val cardWidth = resources.getDimensionPixelSize(R.dimen.rec_card_width)
         val card = MaterialCardView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(200), LinearLayout.LayoutParams.MATCH_PARENT).also {
+            layoutParams = LinearLayout.LayoutParams(cardWidth, LinearLayout.LayoutParams.MATCH_PARENT).also {
                 it.marginEnd = dp(12)
             }
             radius = dp(22).toFloat()
@@ -358,8 +359,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Image area
+        val recImageHeight = resources.getDimensionPixelSize(R.dimen.rec_card_image_height)
         val imageView = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(120))
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, recImageHeight)
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(surfaceSoftColor)
         }

@@ -5,15 +5,15 @@
   --surface: rgba(255, 255, 255, 0.82);
   --surface-strong: #fffdf8;
   --surface-soft: #efe8dc;
-  --border: rgba(65, 52, 33, 0.14);
-  --text: #241b10;
-  --muted: #6f6251;
+  --border: rgba(0, 0, 0, 0.13);
+  --text: #0d0d0d;
+  --muted: #555555;
   --accent: #9f7b49;
   --accent-strong: #7e6037;
   --green: #2d8a64;
   --red: #b14f44;
-  --shadow-sm: 0 14px 32px rgba(58, 43, 22, 0.08);
-  --shadow-lg: 0 24px 50px rgba(58, 43, 22, 0.12);
+  --shadow-sm: 0 14px 32px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 24px 50px rgba(0, 0, 0, 0.12);
   --radius-sm: 14px;
   --radius-md: 22px;
   --radius-lg: 30px;
@@ -24,14 +24,14 @@
 
 body[data-persona='cruella'] {
   --bg: #130b0d;
-  --surface: rgba(34, 16, 20, 0.84);
-  --surface-strong: #1c1013;
-  --surface-soft: #2a161a;
-  --border: rgba(255, 97, 97, 0.18);
+  --surface: rgba(34, 19, 22, 0.84);
+  --surface-strong: #221316;
+  --surface-soft: #301b20;
+  --border: rgba(200, 80, 110, 0.35);
   --text: #f8ece8;
-  --muted: #c9a7a2;
+  --muted: #d8bcb7;
   --accent: #c54242;
-  --accent-strong: #ff9090;
+  --accent-strong: #ff9e9e;
   --green: #57b88f;
   --red: #ff6767;
   --shadow-sm: 0 14px 32px rgba(0, 0, 0, 0.28);

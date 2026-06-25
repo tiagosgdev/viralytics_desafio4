@@ -99,7 +99,7 @@ body[data-persona='cruella'] .idle {
 
 .idle-icon {
   font-size: 3rem;
-  color: rgba(36, 27, 16, 0.25);
+  color: rgba(0, 0, 0, 0.22);
 }
 
 .idle-title {

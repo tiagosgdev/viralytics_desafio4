@@ -5,10 +5,10 @@
     <color name="brand_bg">#F4F1EA</color>
     <color name="brand_surface">#FFFDF8</color>
     <color name="brand_surface_soft">#EFE8DC</color>
-    <color name="brand_text">#241B10</color>
+    <color name="brand_text">#0D0D0D</color>
     <color name="brand_accent">#9F7B49</color>
     <color name="brand_accent_strong">#7E6037</color>
-    <color name="brand_muted">#6F6251</color>
+    <color name="brand_muted">#1F1F1F</color>
     <color name="brand_border">#D9CDBA</color>
     <color name="brand_match_bg">#F1E4CF</color>
     <color name="brand_match_border">#9F7B49</color>
@@ -17,11 +17,11 @@
 
     <!-- Cruella persona theme (mirrors web CSS body[data-persona='cruella']) -->
     <color name="cruella_bg">#130B0D</color>
-    <color name="cruella_surface">#1C1013</color>
-    <color name="cruella_surface_soft">#2A161A</color>
+    <color name="cruella_surface">#221316</color>
+    <color name="cruella_surface_soft">#301B20</color>
     <color name="cruella_text">#F8ECE8</color>
-    <color name="cruella_muted">#C9A7A2</color>
+    <color name="cruella_muted">#D8BCB7</color>
     <color name="cruella_accent">#C54242</color>
-    <color name="cruella_accent_strong">#FF9090</color>
-    <color name="cruella_border">#3D1C1E</color>
+    <color name="cruella_accent_strong">#FF9E9E</color>
+    <color name="cruella_border">#7A3040</color>
 </resources>

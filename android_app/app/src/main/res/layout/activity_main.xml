@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="@dimen/content_padding">
 
         <!-- ── HEADER ─────────────────────────────────────────────── -->
         <LinearLayout
@@ -19,7 +19,6 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <!-- Logo: "FashionSense  OUTFIT SCANNER" inline -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -32,7 +31,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
                     android:textColor="@color/brand_text"
-                    android:textSize="22sp"
+                    android:textSize="@dimen/header_title_size"
                     android:textStyle="bold"
                     android:fontFamily="serif" />
 
@@ -43,7 +42,7 @@
                     android:tag="color_accent"
                     android:text="OUTFIT SCANNER"
                     android:textColor="@color/brand_accent"
-                    android:textSize="8sp"
+                    android:textSize="@dimen/section_label_size"
                     android:textStyle="bold"
                     android:letterSpacing="0.10" />
             </LinearLayout>
@@ -85,7 +84,7 @@
                 android:tint="@color/brand_text" />
         </LinearLayout>
 
-        <!-- Persona chip + switch button (hidden until persona chosen) -->
+        <!-- Persona chip + switch button -->
         <LinearLayout
             android:id="@+id/personaRow"
             android:layout_width="match_parent"
@@ -130,13 +129,13 @@
             android:textColor="@color/brand_muted"
             android:textSize="11sp" />
 
-        <!-- Mode indicator (shows CAMERA MODE / DISPLAY MODE) -->
+        <!-- Mode indicator -->
         <TextView
             android:id="@+id/modeIndicatorText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="3dp"
-            android:layout_marginBottom="14dp"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/mobile_status_pill"
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
@@ -152,7 +151,7 @@
             android:id="@+id/tabBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="14dp"
+            android:layout_marginBottom="12dp"
             android:background="@drawable/mobile_tab_bar_bg"
             android:padding="4dp"
             android:orientation="horizontal">
@@ -160,7 +159,7 @@
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/tabScanButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="@dimen/tab_button_height"
                 android:layout_weight="1"
                 android:text="@string/tab_scan"
                 android:textSize="13sp"
@@ -176,7 +175,7 @@
                 android:id="@+id/tabRefineButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="@dimen/tab_button_height"
                 android:layout_marginStart="6dp"
                 android:layout_weight="1"
                 android:text="@string/tab_refine"
@@ -200,9 +199,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -211,7 +210,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
@@ -219,7 +218,7 @@
                         android:tag="color_muted"
                         android:text="SCAN CONTROLS"
                         android:textColor="@color/brand_muted"
-                        android:textSize="10sp"
+                        android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
                         android:letterSpacing="0.12" />
 
@@ -235,8 +234,8 @@
                         android:id="@+id/captureButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="14dp"
-                        android:minHeight="50dp"
+                        android:layout_marginTop="12dp"
+                        android:minHeight="@dimen/capture_button_min_height"
                         android:text="@string/capture_outfit"
                         android:textColor="@color/white"
                         app:icon="@drawable/ic_camera"
@@ -249,10 +248,10 @@
                         android:id="@+id/scanWaitingText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="14dp"
+                        android:layout_marginTop="12dp"
                         android:background="@drawable/mobile_empty_state"
                         android:gravity="center"
-                        android:padding="18dp"
+                        android:padding="16dp"
                         android:text="Waiting for scan from phone…"
                         android:textColor="@color/brand_muted"
                         android:visibility="gone" />
@@ -260,8 +259,8 @@
                     <ImageView
                         android:id="@+id/resultImage"
                         android:layout_width="match_parent"
-                        android:layout_height="220dp"
-                        android:layout_marginTop="14dp"
+                        android:layout_height="@dimen/scan_image_height"
+                        android:layout_marginTop="12dp"
                         android:adjustViewBounds="true"
                         android:background="@drawable/mobile_camera_surface"
                         android:contentDescription="@string/annotated_scan"
@@ -273,9 +272,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -284,7 +283,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
@@ -292,7 +291,7 @@
                         android:tag="color_muted"
                         android:text="DETECTED CLOTHING"
                         android:textColor="@color/brand_muted"
-                        android:textSize="10sp"
+                        android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
                         android:letterSpacing="0.12" />
 
@@ -302,13 +301,13 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         app:chipSpacingHorizontal="8dp"
-                        app:chipSpacingVertical="8dp"
+                        app:chipSpacingVertical="6dp"
                         app:singleLine="false" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
 
-        <!-- ── RECOMMENDATIONS (shown in both tabs) ────────────────── -->
+        <!-- ── RECOMMENDATIONS ─────────────────────────────────────── -->
         <LinearLayout
             android:id="@+id/recommendationsSection"
             android:layout_width="match_parent"
@@ -318,9 +317,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -329,7 +328,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="@dimen/card_padding">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -344,7 +343,7 @@
                             android:tag="color_muted"
                             android:text="STORE RECOMMENDATIONS"
                             android:textColor="@color/brand_muted"
-                            android:textSize="10sp"
+                            android:textSize="@dimen/section_label_size"
                             android:textStyle="bold"
                             android:letterSpacing="0.12" />
 
@@ -373,8 +372,8 @@
                     <HorizontalScrollView
                         android:id="@+id/recommendationsScroll"
                         android:layout_width="match_parent"
-                        android:layout_height="220dp"
-                        android:layout_marginTop="12dp"
+                        android:layout_height="@dimen/rec_scroll_height"
+                        android:layout_marginTop="10dp"
                         android:fillViewport="true"
                         android:overScrollMode="never"
                         android:scrollbars="none">
@@ -390,10 +389,10 @@
                         android:id="@+id/recommendationsEmptyText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="8dp"
                         android:background="@drawable/mobile_empty_state"
                         android:gravity="center"
-                        android:padding="18dp"
+                        android:padding="16dp"
                         android:text="@string/recommendations_empty"
                         android:textColor="@color/brand_muted" />
                 </LinearLayout>
@@ -411,9 +410,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
+                android:layout_marginBottom="12dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -422,7 +421,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
@@ -430,18 +429,17 @@
                         android:tag="color_muted"
                         android:text="REFINE SEARCH"
                         android:textColor="@color/brand_muted"
-                        android:textSize="10sp"
+                        android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
                         android:letterSpacing="0.12" />
 
-                    <!-- Welcome state (chat-welcome) -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
                         android:gravity="center"
-                        android:paddingTop="16dp"
-                        android:paddingBottom="8dp">
+                        android:paddingTop="14dp"
+                        android:paddingBottom="6dp">
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -463,7 +461,6 @@
                             android:gravity="center" />
                     </LinearLayout>
 
-                    <!-- Assistant reply bubble -->
                     <TextView
                         android:id="@+id/chatReplyText"
                         android:layout_width="match_parent"
@@ -484,7 +481,6 @@
                         android:text="@string/replace_vision"
                         android:textColor="@color/brand_text" />
 
-                    <!-- Chat input bar: text field + send button side by side -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
