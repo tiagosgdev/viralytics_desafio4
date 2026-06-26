@@ -34,6 +34,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.ViewGroup
 import android.widget.ImageView
 import coil.load
@@ -357,14 +358,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildDetectionChip(label: String): Chip {
+        val isCruella = viewModel.selectedPersona == "cruella"
         return Chip(this).apply {
             text = label.replaceFirstChar { it.uppercase() }
             isClickable = false
             isCheckable = false
-            chipBackgroundColor = ContextCompat.getColorStateList(context, R.color.brand_surface_soft)
-            chipStrokeColor = ContextCompat.getColorStateList(context, R.color.brand_border)
+            chipBackgroundColor = ContextCompat.getColorStateList(context,
+                if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+            chipStrokeColor = ContextCompat.getColorStateList(context,
+                if (isCruella) R.color.cruella_border else R.color.brand_border)
             chipStrokeWidth = dp(1f)
-            setTextColor(ContextCompat.getColor(context, R.color.brand_text))
+            setTextColor(ContextCompat.getColor(context,
+                if (isCruella) R.color.cruella_text else R.color.brand_text))
         }
     }
 
@@ -903,8 +908,9 @@ class MainActivity : AppCompatActivity() {
         val surfaceSoft = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
         val textCol     = ContextCompat.getColor(this, if (isCruella) R.color.cruella_text         else R.color.brand_text)
         val muted       = ContextCompat.getColor(this, if (isCruella) R.color.cruella_muted        else R.color.brand_muted)
-        val accent      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent       else R.color.brand_accent)
-        val border      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border       else R.color.brand_border)
+        val accent      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent        else R.color.brand_accent)
+        val accentText  = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent_strong else R.color.brand_accent)
+        val border      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border        else R.color.brand_border)
         val btnPrimary  = if (isCruella) accent else textCol
 
         // System chrome
@@ -920,8 +926,8 @@ class MainActivity : AppCompatActivity() {
         binding.root.setBackgroundColor(bg)
         binding.tabBar?.backgroundTintList = ColorStateList.valueOf(surfaceSoft)
 
-        // Walk the view tree: cards + text
-        tintViews(binding.root, textCol, muted, accent, surface, border)
+        // Walk the view tree: cards + text (accentText is brighter than accent for legibility on dark bg)
+        tintViews(binding.root, textCol, muted, accentText, surface, border)
 
         // ID-specific overrides for muted elements (walk defaults them to textCol)
         binding.sessionText?.setTextColor(muted)
@@ -947,6 +953,22 @@ class MainActivity : AppCompatActivity() {
         }
         binding.chatInput?.setTextColor(textCol)
         binding.chatInput?.setHintTextColor(muted)
+
+        // Retheme fixed-color drawable backgrounds (shapes baked in brand colors in XML).
+        // We replace them with equivalent programmatic shapes so fill + stroke match persona.
+        fun roundRect(fill: Int, strokeCol: Int, cornerDp: Float): GradientDrawable =
+            GradientDrawable().apply {
+                cornerRadius = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP, cornerDp, resources.displayMetrics)
+                setColor(fill)
+                setStroke(dp(1), strokeCol)
+            }
+        binding.statusPill?.background               = roundRect(surface,     border, 999f)
+        binding.modeIndicatorText?.background        = roundRect(surfaceSoft, border, 20f)
+        binding.chatReplyText?.background            = roundRect(surfaceSoft, border, 20f)
+        binding.scanWaitingText?.background          = roundRect(surfaceSoft, border, 22f)
+        binding.recommendationsEmptyText?.background = roundRect(surfaceSoft, border, 22f)
+        binding.resultImage?.background              = roundRect(surfaceSoft, border, 24f)
 
         // Re-style tab buttons with new persona colors
         switchTab(currentTab)

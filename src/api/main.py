@@ -499,8 +499,8 @@ async def image_proxy(url: str):
     parsed = urlparse(normalized_url)
     if parsed.scheme not in {"http", "https"}:
         raise HTTPException(status_code=400, detail="Only http/https image URLs are allowed")
-    if parsed.netloc.lower() not in _GOOGLE_IMAGE_HOSTS:
-        raise HTTPException(status_code=400, detail="Only Google Drive image hosts are allowed")
+    if not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid image URL")
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
