@@ -6,8 +6,14 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class HistoryEntry(val role: String, val content: String)
 
@@ -200,6 +206,30 @@ class MainViewModel : ViewModel() {
             recommendations = recommendations,
             annotatedFrameBase64 = annotatedFrameBase64,
         ))
+    }
+
+    fun navigateByCategory(baseUrl: String, category: String) {
+        viewModelScope.launch {
+            _events.value = UiEvent.SetStatus("Sending navigation request…")
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val body = JSONObject().put("category", category).toString()
+                        .toRequestBody("application/json".toMediaType())
+                    val request = Request.Builder()
+                        .url("$baseUrl/api/robot/navigate-by-category")
+                        .post(body)
+                        .build()
+                    httpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            val msg = response.body?.string() ?: "HTTP ${response.code}"
+                            throw Exception(msg)
+                        }
+                    }
+                }
+            }.onFailure { e ->
+                _events.value = UiEvent.SetStatus("Navigation request failed: ${e.message}")
+            }
+        }
     }
 
     fun clearSession() {

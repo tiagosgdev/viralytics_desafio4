@@ -145,6 +145,17 @@ def _load_robot_coords() -> dict:
     return {}
 
 
+def _lookup_coord(coords: dict, target: str):
+    """Case-insensitive lookup in the coords dict. Returns the entry or None."""
+    if target in coords:
+        return coords[target]
+    target_lc = target.lower()
+    for key, value in coords.items():
+        if key.lower() == target_lc:
+            return value
+    return None
+
+
 def _load_category_locations() -> dict:
     if _CATEGORY_LOCS_FILE.exists():
         with open(_CATEGORY_LOCS_FILE, encoding="utf-8") as f:
@@ -1307,13 +1318,13 @@ async def robot_navigate(payload: RobotNavigateRequest):
         _robot_unavailable()
 
     coords = _load_robot_coords()
-    if payload.target not in coords:
+    loc = _lookup_coord(coords, payload.target)
+    if loc is None:
         raise HTTPException(
             status_code=404,
             detail=f"'{payload.target}' not found. Known: {list(coords.keys())}",
         )
 
-    loc = coords[payload.target]
     x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
     ok = await run_in_threadpool(robot_bridge.navigate_to_coords, x, y, theta)
     if not ok:
@@ -1340,13 +1351,13 @@ async def robot_navigate_by_category(payload: RobotNavigateByCategoryRequest):
         )
 
     coords = _load_robot_coords()
-    if target not in coords:
+    loc = _lookup_coord(coords, target)
+    if loc is None:
         raise HTTPException(
             status_code=404,
             detail=f"Category '{payload.category}' maps to '{target}' but that location hasn't been surveyed yet.",
         )
 
-    loc = coords[target]
     x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
     ok = await run_in_threadpool(robot_bridge.navigate_to_coords, x, y, theta)
     if not ok:
