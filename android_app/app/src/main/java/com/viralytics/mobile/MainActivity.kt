@@ -34,6 +34,7 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.ViewGroup
 import android.widget.ImageView
 import coil.load
@@ -103,6 +104,41 @@ class MainActivity : AppCompatActivity() {
     private val NAV_MAX_SPEED = 0.5f    // metres/second
     private val NAV_RETRY_COUNT = 2
     private val NAV_RETRY_INTERVAL = 2000
+
+    // Loaded from assets/coordinates.json at startup: stand name → (x, y, theta)
+    private var standCoordinates: Map<String, Triple<Float, Float, Float>> = emptyMap()
+
+    // Maps vision-model category codes → actual marker names on the robot's nav map.
+    // Marker names must match coordinates.json / the labels placed in the UBTECH dashboard.
+    private val CATEGORY_STAND_MAP = mapOf(
+        // Tops
+        "short_sleeve_top"    to "T-shirt Stand",
+        "long_sleeve_top"     to "T-shirt Stand",
+        "vest"                to "T-shirt Stand",
+        "top"                 to "T-shirt Stand",
+        "tops"                to "T-shirt Stand",
+        // Outerwear
+        "long_sleeve_outwear" to "Jacket Stand",
+        "outwear"             to "Jacket Stand",
+        "jacket"              to "Jacket Stand",
+        "coat"                to "Jacket Stand",
+        "hoodie"              to "Jacket Stand",
+        "sweater"             to "Jacket Stand",
+        // Bottoms
+        "trousers"            to "Pants Stand",
+        "shorts"              to "Pants Stand",
+        "jeans"               to "Pants Stand",
+        "bottom"              to "Pants Stand",
+        "bottoms"             to "Pants Stand",
+        // Dresses / Skirts
+        "skirt"               to "Dress Stand",
+        "short_sleeve_dress"  to "Dress Stand",
+        "long_sleeve_dress"   to "Dress Stand",
+        "vest_dress"          to "Dress Stand",
+        "sling_dress"         to "Dress Stand",
+        "dress"               to "Dress Stand",
+        "dresses"             to "Dress Stand",
+    )
 
     private var currentTab: String = "scan"
 
@@ -195,6 +231,8 @@ class MainActivity : AppCompatActivity() {
 
         appMode = detectAppMode()
         setupUiForMode(appMode)
+
+        standCoordinates = loadStandCoordinates()
 
         if (appMode == AppMode.TABLET) {
             initCruzrHardware()
@@ -357,14 +395,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildDetectionChip(label: String): Chip {
+        val isCruella = viewModel.selectedPersona == "cruella"
         return Chip(this).apply {
             text = label.replaceFirstChar { it.uppercase() }
             isClickable = false
             isCheckable = false
-            chipBackgroundColor = ContextCompat.getColorStateList(context, R.color.brand_surface_soft)
-            chipStrokeColor = ContextCompat.getColorStateList(context, R.color.brand_border)
+            chipBackgroundColor = ContextCompat.getColorStateList(context,
+                if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+            chipStrokeColor = ContextCompat.getColorStateList(context,
+                if (isCruella) R.color.cruella_border else R.color.brand_border)
             chipStrokeWidth = dp(1f)
-            setTextColor(ContextCompat.getColor(context, R.color.brand_text))
+            setTextColor(ContextCompat.getColor(context,
+                if (isCruella) R.color.cruella_text else R.color.brand_text))
         }
     }
 
@@ -561,7 +603,14 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setPositiveButton("Take me there!") { _, _ ->
-                sendRobotNavigationCommand(item.category, item.reason)
+                val baseUrl = normalizedBaseUrl()
+                if (baseUrl == null) { setStatus("Server URL not configured."); return@setPositiveButton }
+                speakText(if (item.reason.isNotBlank())
+                    "Encontrei uma ótima opção! ${item.reason}. Siga-me, vou mostrar-lhe onde está."
+                else
+                    "Siga-me, vou mostrar-lhe onde fica o ${item.category.replace('_', ' ')}.")
+                publishStatus("navigation_started", JSONObject().put("category", item.category))
+                viewModel.navigateByCategory(baseUrl, item.category)
             }
             .setNegativeButton("Close", null)
             .show()
@@ -903,8 +952,9 @@ class MainActivity : AppCompatActivity() {
         val surfaceSoft = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
         val textCol     = ContextCompat.getColor(this, if (isCruella) R.color.cruella_text         else R.color.brand_text)
         val muted       = ContextCompat.getColor(this, if (isCruella) R.color.cruella_muted        else R.color.brand_muted)
-        val accent      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent       else R.color.brand_accent)
-        val border      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border       else R.color.brand_border)
+        val accent      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent        else R.color.brand_accent)
+        val accentText  = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent_strong else R.color.brand_accent)
+        val border      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border        else R.color.brand_border)
         val btnPrimary  = if (isCruella) accent else textCol
 
         // System chrome
@@ -920,8 +970,8 @@ class MainActivity : AppCompatActivity() {
         binding.root.setBackgroundColor(bg)
         binding.tabBar?.backgroundTintList = ColorStateList.valueOf(surfaceSoft)
 
-        // Walk the view tree: cards + text
-        tintViews(binding.root, textCol, muted, accent, surface, border)
+        // Walk the view tree: cards + text (accentText is brighter than accent for legibility on dark bg)
+        tintViews(binding.root, textCol, muted, accentText, surface, border)
 
         // ID-specific overrides for muted elements (walk defaults them to textCol)
         binding.sessionText?.setTextColor(muted)
@@ -947,6 +997,22 @@ class MainActivity : AppCompatActivity() {
         }
         binding.chatInput?.setTextColor(textCol)
         binding.chatInput?.setHintTextColor(muted)
+
+        // Retheme fixed-color drawable backgrounds (shapes baked in brand colors in XML).
+        // We replace them with equivalent programmatic shapes so fill + stroke match persona.
+        fun roundRect(fill: Int, strokeCol: Int, cornerDp: Float): GradientDrawable =
+            GradientDrawable().apply {
+                cornerRadius = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP, cornerDp, resources.displayMetrics)
+                setColor(fill)
+                setStroke(dp(1), strokeCol)
+            }
+        binding.statusPill?.background               = roundRect(surface,     border, 999f)
+        binding.modeIndicatorText?.background        = roundRect(surfaceSoft, border, 20f)
+        binding.chatReplyText?.background            = roundRect(surfaceSoft, border, 20f)
+        binding.scanWaitingText?.background          = roundRect(surfaceSoft, border, 22f)
+        binding.recommendationsEmptyText?.background = roundRect(surfaceSoft, border, 22f)
+        binding.resultImage?.background              = roundRect(surfaceSoft, border, 24f)
 
         // Re-style tab buttons with new persona colors
         switchTab(currentTab)
@@ -1350,107 +1416,88 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun findMarkerAndNavigate(nav: NavigationManager, targetItem: String) {
-        runOnUiThread { setStatus("Loading internal map...") }
+        // Resolve clothing category codes → stand name, then look up surveyed coordinates.
+        val resolvedTarget = CATEGORY_STAND_MAP[targetItem.lowercase()] ?: targetItem
+        android.util.Log.d("CruzrNav", "Target '$targetItem' → stand '$resolvedTarget'")
 
-        nav.currentNavMap.done { navMap ->
-            val scale = navMap.scale
-            android.util.Log.d("CruzrNav", "=== MAP SCALE = $scale ===")
+        val entry = standCoordinates.entries.find { it.key.equals(resolvedTarget, ignoreCase = true) }
+        if (entry == null) {
+            isBusy = false
+            runOnUiThread { setStatus("No coordinates for '$resolvedTarget'. Add it to coordinates.json.") }
+            publishStatus("nav_no_coords", JSONObject().put("target", resolvedTarget).put("raw_category", targetItem))
+            return
+        }
 
-            try {
-                val here = nav.currentLocation
-                android.util.Log.d("CruzrNav", "CURRENT LOCATION (meters): x=${here?.position?.x} y=${here?.position?.y} rot=${here?.rotation}")
-            } catch (e: Exception) {
-                android.util.Log.w("CruzrNav", "getCurrentLocation threw: ${e.message}")
-            }
+        val (x, y, theta) = entry.value
+        android.util.Log.d("CruzrNav", "Navigating to '${entry.key}' @ x=$x y=$y theta=$theta (trackMode=$TRACK_MODE)")
+        runOnUiThread { setStatus("Navigating to ${entry.key}...") }
 
-            val polys = navMap.polylineList
-            android.util.Log.d("CruzrNav", "=== MAP POLYLINES (${polys?.size ?: 0}) ===")
-            polys?.forEachIndexed { i, poly ->
-                android.util.Log.d("CruzrNav", " Poly[$i] name='${poly.name}' points=${poly.locationList?.size ?: 0}")
-                poly.locationList?.forEachIndexed { j, loc ->
-                    android.util.Log.d("CruzrNav", " [$j] x=${loc.position?.x} y=${loc.position?.y}")
+        try {
+            val location = Location.Builder(Point(x, y))
+                .setRotation(theta)
+                .build()
+            val option = NavigationOption.Builder(location)
+                .setTrackMode(TRACK_MODE)
+                .setMaxSpeed(NAV_MAX_SPEED)
+                .setRetryCount(NAV_RETRY_COUNT)
+                .setRetryInterval(NAV_RETRY_INTERVAL)
+                .build()
+
+            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            })
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                nav.navigate(option)
+                    .done {
+                        android.util.Log.d("CruzrNav", "Navigation DONE — arrived at ${entry.key}!")
+                        isBusy = false
+                        publishStatus("navigation_arrived", JSONObject().put("target", entry.key))
+                        runOnUiThread {
+                            setStatus("Arrived at ${entry.key}!")
+                            speakText("Aqui está o artigo que procurava!")
+                        }
+                        endCustomerSession("arrived_at_stand")
+                    }
+                    .progress { p ->
+                        android.util.Log.d("CruzrNav", "Nav progress: $p")
+                        publishStatus("navigation_progress", JSONObject().put("target", entry.key).put("data", p.toString()))
+                    }
+                    .fail { error ->
+                        val errCode = error?.code ?: -1
+                        val errMsg = error?.message ?: "unknown"
+                        android.util.Log.e("CruzrNav", "Navigation FAILED: $errMsg / code: $errCode")
+                        isBusy = false
+                        publishStatus("navigation_failed", JSONObject()
+                            .put("target", entry.key)
+                            .put("error_code", errCode)
+                            .put("error_message", errMsg))
+                        runOnUiThread { setStatus("Navigation failed: $errMsg (code $errCode)") }
+                    }
+            }, 500L)
+
+        } catch (e: Exception) {
+            isBusy = false
+            android.util.Log.e("CruzrNav", "Nav crash: ${e.message}")
+            runOnUiThread { setStatus("Nav crash: ${e.message}") }
+        }
+    }
+
+    private fun loadStandCoordinates(): Map<String, Triple<Float, Float, Float>> {
+        return try {
+            val json = JSONObject(assets.open("coordinates.json").bufferedReader().readText())
+            buildMap {
+                json.keys().forEach { key ->
+                    val obj = json.optJSONObject(key) ?: return@forEach
+                    val x     = obj.optDouble("x",     0.0).toFloat()
+                    val y     = obj.optDouble("y",     0.0).toFloat()
+                    val theta = obj.optDouble("theta", 0.0).toFloat()
+                    put(key, Triple(x, y, theta))
                 }
             }
-            android.util.Log.d("CruzrNav", "=== MAP MARKERS (${navMap.markerList?.size ?: 0}) ===")
-            navMap.markerList?.forEach { m ->
-                android.util.Log.d("CruzrNav", " Marker '${m.title}' x=${m.position?.x} y=${m.position?.y}")
-            }
-
-            val markers = navMap.markerList
-
-            if (markers.isNullOrEmpty()) {
-                isBusy = false
-                runOnUiThread { setStatus("Map has no markers.") }
-                publishStatus("marker_not_found", JSONObject().put("target", targetItem).put("reason", "map has no markers"))
-                return@done
-            }
-
-            val targetMarker = markers.find { it.title.equals(targetItem, ignoreCase = true) }
-
-            if (targetMarker == null) {
-                isBusy = false
-                runOnUiThread { setStatus("Marker '$targetItem' not found on map.") }
-                publishStatus("marker_not_found", JSONObject().put("target", targetItem))
-                return@done
-            }
-
-            android.util.Log.d("CruzrNav", "Marker found: ${targetMarker.title} @ ${targetMarker.position}")
-
-            try {
-                val option = NavigationOption.Builder(targetMarker)
-                    .setTrackMode(TRACK_MODE)
-                    .setMaxSpeed(NAV_MAX_SPEED)
-                    .setRetryCount(NAV_RETRY_COUNT)
-                    .setRetryInterval(NAV_RETRY_INTERVAL)
-                    .build()
-
-                android.util.Log.d("CruzrNav", "Navigating (trackMode=$TRACK_MODE) to ${targetMarker.title}")
-                runOnUiThread { setStatus("Navigating to $targetItem...") }
-
-                startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                })
-
-                Handler(Looper.getMainLooper()).postDelayed(Runnable {
-                    nav.navigate(option)
-                        .done {
-                            android.util.Log.d("CruzrNav", "Navigation DONE - arrived!")
-                            isBusy = false
-                            publishStatus("navigation_arrived", JSONObject().put("target", targetItem))
-                            runOnUiThread {
-                                setStatus("Arrived at $targetItem!")
-                                speakText("Aqui está o artigo que procurava!")
-                            }
-                            endCustomerSession("arrived_at_stand")
-                        }
-                        .progress { p ->
-                            android.util.Log.d("CruzrNav", "Nav progress: $p")
-                            publishStatus("navigation_progress", JSONObject().put("target", targetItem).put("data", p.toString()))
-                        }
-                        .fail { error ->
-                            val errCode = error?.code ?: -1
-                            val errMsg = error?.message ?: "unknown"
-                            android.util.Log.e("CruzrNav", "Navigation FAILED: $errMsg / code: $errCode")
-                            isBusy = false
-                            publishStatus("navigation_failed", JSONObject()
-                                .put("target", targetItem)
-                                .put("error_code", errCode)
-                                .put("error_message", errMsg))
-                            runOnUiThread { setStatus("Navigation jammed: $errMsg (code $errCode)") }
-                        }
-                }, 500L)
-
-            } catch (e: Exception) {
-                isBusy = false
-                android.util.Log.e("CruzrNav", "CRASH building option or navigating: ${e.message}")
-                runOnUiThread { setStatus("Nav crash: ${e.message}") }
-            }
-
-        }.fail { error ->
-            val errMsg = error?.message ?: "unknown"
-            isBusy = false
-            runOnUiThread { setStatus("Map access failed: $errMsg") }
-            publishStatus("error", JSONObject().put("message", "Map access failed: $errMsg"))
+        } catch (e: Exception) {
+            android.util.Log.e("CruzrNav", "Failed to load coordinates.json: ${e.message}")
+            emptyMap()
         }
     }
 

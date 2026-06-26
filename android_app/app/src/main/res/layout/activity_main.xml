@@ -49,6 +49,7 @@
 
             <!-- Status pill: dot + label -->
             <LinearLayout
+                android:id="@+id/statusPill"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:gravity="center_vertical"
