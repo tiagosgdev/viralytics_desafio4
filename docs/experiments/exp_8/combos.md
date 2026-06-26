@@ -1,0 +1,90 @@
+# Combos ranked — experiment #8
+
+All 81 combos, best mean review first. `std` is the sample standard
+deviation across the combo's episodes; `range` is min–max review.
+
+| rank | combo | mean | n | std | range |
+|:----:|-------|:----:|:-:|:---:|:-----:|
+| 1 | `colour=purist|body=strict|clothing=match_count|stock=push` | 1.56 | 9 | 0.53 | 1–2 |
+| 2 | `colour=purist|body=lenient|clothing=match_count|stock=overstock_aggressive` | 1.56 | 9 | 0.53 | 1–2 |
+| 3 | `colour=purist|body=lenient|clothing=weighted_axes|stock=push` | 1.56 | 9 | 0.53 | 1–2 |
+| 4 | `colour=purist|body=lenient|clothing=strict_type|stock=overstock_aggressive` | 1.56 | 9 | 0.53 | 1–2 |
+| 5 | `colour=purist|body=strict|clothing=weighted_axes|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 6 | `colour=purist|body=strict|clothing=strict_type|stock=overstock_aggressive` | 1.44 | 9 | 0.53 | 1–2 |
+| 7 | `colour=purist|body=lenient|clothing=match_count|stock=push` | 1.44 | 9 | 0.53 | 1–2 |
+| 8 | `colour=purist|body=lenient|clothing=match_count|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 9 | `colour=purist|body=lenient|clothing=strict_type|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 10 | `colour=purist|body=flattering_only|clothing=match_count|stock=overstock_aggressive` | 1.44 | 9 | 0.53 | 1–2 |
+| 11 | `colour=harmonizer|body=strict|clothing=match_count|stock=bestsellers` | 1.44 | 9 | 0.73 | 1–3 |
+| 12 | `colour=harmonizer|body=strict|clothing=weighted_axes|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 13 | `colour=harmonizer|body=strict|clothing=strict_type|stock=overstock_aggressive` | 1.44 | 9 | 0.88 | 1–3 |
+| 14 | `colour=harmonizer|body=lenient|clothing=match_count|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 15 | `colour=harmonizer|body=flattering_only|clothing=weighted_axes|stock=push` | 1.44 | 9 | 0.53 | 1–2 |
+| 16 | `colour=adventurous|body=strict|clothing=weighted_axes|stock=overstock_aggressive` | 1.44 | 9 | 0.53 | 1–2 |
+| 17 | `colour=adventurous|body=lenient|clothing=weighted_axes|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 18 | `colour=adventurous|body=lenient|clothing=strict_type|stock=bestsellers` | 1.44 | 9 | 0.53 | 1–2 |
+| 19 | `colour=purist|body=strict|clothing=match_count|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 20 | `colour=purist|body=strict|clothing=weighted_axes|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 21 | `colour=purist|body=lenient|clothing=weighted_axes|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 22 | `colour=purist|body=flattering_only|clothing=match_count|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 23 | `colour=purist|body=flattering_only|clothing=weighted_axes|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 24 | `colour=purist|body=flattering_only|clothing=weighted_axes|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 25 | `colour=purist|body=flattering_only|clothing=strict_type|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 26 | `colour=purist|body=flattering_only|clothing=strict_type|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 27 | `colour=harmonizer|body=strict|clothing=match_count|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 28 | `colour=harmonizer|body=strict|clothing=weighted_axes|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 29 | `colour=harmonizer|body=strict|clothing=strict_type|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 30 | `colour=harmonizer|body=strict|clothing=strict_type|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 31 | `colour=harmonizer|body=lenient|clothing=match_count|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 32 | `colour=harmonizer|body=lenient|clothing=weighted_axes|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 33 | `colour=harmonizer|body=lenient|clothing=strict_type|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 34 | `colour=harmonizer|body=lenient|clothing=strict_type|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 35 | `colour=harmonizer|body=lenient|clothing=strict_type|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 36 | `colour=harmonizer|body=flattering_only|clothing=weighted_axes|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 37 | `colour=harmonizer|body=flattering_only|clothing=weighted_axes|stock=bestsellers` | 1.33 | 9 | 0.50 | 1–2 |
+| 38 | `colour=harmonizer|body=flattering_only|clothing=strict_type|stock=push` | 1.33 | 9 | 0.71 | 1–3 |
+| 39 | `colour=adventurous|body=flattering_only|clothing=match_count|stock=push` | 1.33 | 9 | 0.50 | 1–2 |
+| 40 | `colour=adventurous|body=flattering_only|clothing=strict_type|stock=overstock_aggressive` | 1.33 | 9 | 0.50 | 1–2 |
+| 41 | `colour=purist|body=strict|clothing=match_count|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 42 | `colour=purist|body=strict|clothing=weighted_axes|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 43 | `colour=purist|body=strict|clothing=strict_type|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 44 | `colour=purist|body=strict|clothing=strict_type|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 45 | `colour=purist|body=lenient|clothing=weighted_axes|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 46 | `colour=purist|body=lenient|clothing=strict_type|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 47 | `colour=purist|body=flattering_only|clothing=match_count|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 48 | `colour=purist|body=flattering_only|clothing=strict_type|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 49 | `colour=harmonizer|body=strict|clothing=match_count|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 50 | `colour=harmonizer|body=lenient|clothing=match_count|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 51 | `colour=harmonizer|body=lenient|clothing=weighted_axes|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 52 | `colour=harmonizer|body=lenient|clothing=weighted_axes|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 53 | `colour=harmonizer|body=flattering_only|clothing=match_count|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 54 | `colour=adventurous|body=strict|clothing=weighted_axes|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 55 | `colour=adventurous|body=strict|clothing=strict_type|stock=push` | 1.22 | 9 | 0.44 | 1–2 |
+| 56 | `colour=adventurous|body=strict|clothing=strict_type|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 57 | `colour=adventurous|body=lenient|clothing=weighted_axes|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 58 | `colour=adventurous|body=flattering_only|clothing=match_count|stock=overstock_aggressive` | 1.22 | 9 | 0.44 | 1–2 |
+| 59 | `colour=adventurous|body=flattering_only|clothing=match_count|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 60 | `colour=adventurous|body=flattering_only|clothing=strict_type|stock=bestsellers` | 1.22 | 9 | 0.44 | 1–2 |
+| 61 | `colour=purist|body=flattering_only|clothing=weighted_axes|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 62 | `colour=harmonizer|body=strict|clothing=weighted_axes|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 63 | `colour=harmonizer|body=flattering_only|clothing=match_count|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 64 | `colour=harmonizer|body=flattering_only|clothing=strict_type|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 65 | `colour=harmonizer|body=flattering_only|clothing=strict_type|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 66 | `colour=adventurous|body=strict|clothing=match_count|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 67 | `colour=adventurous|body=strict|clothing=match_count|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 68 | `colour=adventurous|body=strict|clothing=match_count|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 69 | `colour=adventurous|body=strict|clothing=weighted_axes|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 70 | `colour=adventurous|body=strict|clothing=strict_type|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 71 | `colour=adventurous|body=lenient|clothing=match_count|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 72 | `colour=adventurous|body=lenient|clothing=match_count|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 73 | `colour=adventurous|body=lenient|clothing=match_count|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 74 | `colour=adventurous|body=lenient|clothing=strict_type|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 75 | `colour=adventurous|body=lenient|clothing=strict_type|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 76 | `colour=adventurous|body=flattering_only|clothing=weighted_axes|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 77 | `colour=adventurous|body=flattering_only|clothing=weighted_axes|stock=overstock_aggressive` | 1.11 | 9 | 0.33 | 1–2 |
+| 78 | `colour=adventurous|body=flattering_only|clothing=weighted_axes|stock=bestsellers` | 1.11 | 9 | 0.33 | 1–2 |
+| 79 | `colour=adventurous|body=flattering_only|clothing=strict_type|stock=push` | 1.11 | 9 | 0.33 | 1–2 |
+| 80 | `colour=harmonizer|body=flattering_only|clothing=match_count|stock=overstock_aggressive` | 1 | 9 | 0.00 | 1–1 |
+| 81 | `colour=adventurous|body=lenient|clothing=weighted_axes|stock=push` | 1 | 9 | 0.00 | 1–1 |
+
+[← back to README](README.md)
