@@ -526,7 +526,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 logger.debug(
                     f"[{conv_id}] _collect_proposals: discarding stale message "
                     f"(performative={msg.get_metadata('performative')!r}, "
-                    f"conv_id={str(msg.get_metadata('conv_id'))[:8]})"
+                    f"conv_id={(msg.get_metadata('conv_id') or '')[:8]!r})"
                 )
 
         return proposals, vetoes

@@ -199,7 +199,7 @@ class PoseAnalyzer:
             min_pose_detection_confidence=self.min_pose_detection_confidence,
             min_pose_presence_confidence=self.min_pose_presence_confidence,
             min_tracking_confidence=self.min_tracking_confidence,
-            output_segmentation_masks=True,
+            output_segmentation_masks=False,
         )
         self._landmarker = vision.PoseLandmarker.create_from_options(options)
         return self._landmarker

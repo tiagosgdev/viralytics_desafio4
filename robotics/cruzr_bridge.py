@@ -1,20 +1,42 @@
 """
 CruzrBridge — bidirectional MQTT link between the PC server / AI agents and the CRUZR robot.
 
-  PC → Robot   topic: cruzr/commands   (commands)
-  Robot → PC   topic: cruzr/status     (status events)
+MQTT topics
+───────────
+  cruzr/commands  PC → Robot   All commands: greet, guide_user, move_to_stand,
+                               move_to_coords, speak, gesture, farewell, locate_self,
+                               get_status, stop_navigation.
+                               Payload: JSON object with at minimum {"action": "<name>"}.
+
+  cruzr/status    Robot → PC   Navigation events, errors, position reports.
+                               Payload: JSON object with at minimum {"event": "<name>"}.
+                               Known events: greeting_started, greeting_at_entrance,
+                               person_detected, navigation_arrived, navigation_failed,
+                               session_ended, lidar_timeout, status_report, error.
+
+  cruzr/persona   PC → Robot   Active persona configuration (QoS 1).
+  cruzr/scan_result PC → Robot  Scan results to display on the tablet (QoS 1).
+
+Broker
+──────
+  Default: test.mosquitto.org:8883 (TLS, public, no authentication).
+  TLS is used for wire encryption but certificate verification is disabled because
+  test.mosquitto.org uses a custom CA that predates modern Python/Android requirements.
+  This is acceptable for a university demo. For production, use a private broker
+  (e.g. self-hosted Mosquitto, HiveMQ Cloud, AWS IoT Core) with proper cert verification
+  and username/password or client-certificate authentication.
 
 Usage (standalone):
-    bridge = CruzrBridge(broker_host="192.168.1.80")
+    bridge = CruzrBridge()
     bridge.on_status(lambda evt: print(evt))
     bridge.connect()
-    bridge.speak("Hello!")
-    bridge.navigate_to("Teste 3")
+    bridge.speak("Bem-vindo!")
+    bridge.navigate_to("T-shirt Stand")
     bridge.disconnect()
 
 Usage (context manager):
-    with CruzrBridge("192.168.1.80") as bridge:
-        bridge.guide_to("Teste 3", "Let me show you something great!")
+    with CruzrBridge() as bridge:
+        bridge.guide_to("T-shirt Stand", "Siga-me!")
 
 AI agent integration:
     Instantiate once, share the reference, call command methods as needed.
@@ -181,6 +203,13 @@ class CruzrBridge:
     def gesture(self, name: str) -> bool:
         """Play a named body gesture (wave, bow, nod, …) without navigation."""
         return self._publish({"action": "gesture", "name": name})
+
+    def farewell(self, text: str = "Até logo! Esperamos vê-lo em breve!", gesture: str = "goodbye") -> bool:
+        """
+        Say goodbye to a departing customer.  The Android only acts on this if the
+        robot is idle at the entrance (not navigating and not serving another customer).
+        """
+        return self._publish({"action": "farewell", "text": text, "gesture": gesture})
 
     def stop_navigation(self) -> bool:
         """Request the robot to abort its current navigation."""

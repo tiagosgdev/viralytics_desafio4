@@ -7,7 +7,7 @@ Thumbs.db
 desktop.ini
 
 # =============================================================================
-# IDEs
+# IDEs & AI tools
 # =============================================================================
 
 # JetBrains (PyCharm, IntelliJ, etc.)
@@ -15,6 +15,9 @@ desktop.ini
 
 # Visual Studio Code
 .vscode/
+
+# Claude Code (project-level settings / memory)
+.claude/
 
 # Vim swap files
 *.swp
@@ -289,7 +292,6 @@ LNIAGIA/DB/SQLLite/*.db.bak*
 # SQLite WAL sidecars (clothing.db kept tracked; sidecars are transient)
 LNIAGIA/DB/SQLLite/*.db-wal
 LNIAGIA/DB/SQLLite/*.db-shm
-
 # Per-agent write-only memory stores (runtime artefacts; the shared
 # multi_agent/history.db stays tracked, these per-agent DBs do not).
 multi_agent/memory/*.db
@@ -307,3 +309,6 @@ multi_agent/experiments/reports/
 android_app/.gradle/9.0.0/checksums/checksums.lock
 android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
 android_app/.gradle/buildOutputCleanup/buildOutputCleanup.lock
+android_app/.gradle/9.0.0/fileHashes/fileHashes.lock
+=======
+*.lockandroid_app/local.properties

@@ -32,6 +32,11 @@
     <string name="no_description">No extra product description is available for this item yet.</string>
     <string name="no_attribute_rows">No extra attributes available for this recommendation.</string>
     <string name="detections_empty">Nothing detected yet.</string>
-    <string name="tab_scan">Outfit Scan</string>
-    <string name="tab_refine">Refine Search</string>
+    <string name="tab_scan">Scan</string>
+    <string name="tab_refine">Chat</string>
+    <string name="chat_input_hint">Type a message…</string>
+    <string name="chat_welcome_title">FashionSense Assistant</string>
+    <string name="chat_welcome_sub">Ask for different colors, styles, formality, or tell it to ignore the scan.</string>
+    <string name="persona_dialog_title">Choose Your Stylist</string>
+    <string name="switch_stylist">Switch Stylist</string>
 </resources>

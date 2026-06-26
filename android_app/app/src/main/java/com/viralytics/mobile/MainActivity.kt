@@ -3,14 +3,17 @@ package com.viralytics.mobile
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
+import java.io.File
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.TypedValue
@@ -21,6 +24,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
@@ -28,15 +32,16 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.view.ViewGroup
+import android.widget.ImageView
+import coil.load
+import coil.transform.RoundedCornersTransformation
+import com.google.android.material.textfield.TextInputLayout
 import com.viralytics.mobile.databinding.ActivityMainBinding
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 
 // V2.8.0 UBTech Robot Imports
 import com.ubtrobot.Robot
@@ -45,7 +50,6 @@ import com.ubtrobot.navigation.NavigationOption
 import com.ubtrobot.navigation.Location
 import com.ubtrobot.speech.SpeechManager
 import com.ubtrobot.navigation.Point
-import com.ubtrobot.navigation.NavigationException
 import android.net.Uri
 import com.ubtrobot.motion.MotionManager
 import com.ubtrobot.motion.PerformingOption
@@ -57,256 +61,297 @@ import com.ubtrobot.sensor.SensorDevice
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
-import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
+/**
+ * Main activity for the Viralytics tablet app running on the Cruzr robot.
+ *
+ * Architecture overview:
+ *   PC Server (FastAPI)  ──MQTT──►  This app  ──UBTech SDK──►  Robot hardware
+ *
+ * Communication:
+ *   - Subscribes to MQTT topic "cruzr/commands" to receive navigation/speech/gesture commands
+ *   - Publishes to MQTT topic "cruzr/status" to report navigation events back to the server
+ *   - MQTT broker: test.mosquitto.org:8883 (TLS encrypted, no auth — demo only)
+ *   - HTTP: calls the FastAPI server directly for outfit scanning and chat
+ *
+ * Robot control (UBTech Cruzr SDK v2.8.0):
+ *   - NavigationManager: navigates to map markers or raw (x, y, theta) coordinates
+ *   - MotionManager:     plays gesture animations (raise arms, wave, goodbye…)
+ *   - SensorManager:     reads the LIDAR human-detection sensor
+ *   - SpeechManager/TTS: speaks text using the robot's onboard TTS engine
+ *
+ * Customer session lifecycle:
+ *   door sensor → greet command → navigate to entrance → LIDAR detects person
+ *   → speak + gesture → session starts (3-min idle timer) → customer scans outfit
+ *   → each scan/chat resets the timer → AI sends guide_user → navigate to stand
+ *   → arrive → speak → session ends → robot returns to entrance
+ */
+enum class AppMode { TABLET, PHONE_CAMERA }
+
+
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private val httpClient = OkHttpClient()
+    private val viewModel: MainViewModel by viewModels()
 
-    // --- VERSION TRACKER ---
-    private val APP_VERSION = "v2.3"
+    private var appMode: AppMode = AppMode.PHONE_CAMERA
 
     // --- NAVIGATION CONFIG ---
-    private val TRACK_MODE = false
-    private val NAV_MAX_SPEED = 0.5f
+    private val TRACK_MODE = false       // false = point-to-point; true = follow path polyline
+    private val NAV_MAX_SPEED = 0.5f    // metres/second
     private val NAV_RETRY_COUNT = 2
     private val NAV_RETRY_INTERVAL = 2000
 
-    private var currentSessionId: String? = null
-    private val detectedCategories = mutableListOf<String>()
-    private val currentRecommendations = mutableListOf<RecommendationItem>()
-    private var currentConversationState: JSONObject? = null
-    private var currentIncludeFilters: JSONObject? = null
     private var currentTab: String = "scan"
 
+    // MQTT client — connects to test.mosquitto.org on a background thread
     private var mqttClient: MqttClient? = null
 
-    // Hardware Managers (V2.8.0 Architecture)
+    // Fallback reconnect: if paho's isAutomaticReconnect silently fails (known Android/TLS issue),
+    // this fires 15 s after connectionLost and fully restarts the MQTT stack.
+    private val mqttReconnectHandler = Handler(Looper.getMainLooper())
+    private val mqttReconnectRunnable = Runnable {
+        if (mqttClient?.isConnected == true) return@Runnable
+        Thread {
+            try { mqttClient?.close() } catch (_: Exception) {}
+            mqttClient = null
+            startMqttListener()
+        }.start()
+    }
+
+    // UBTech SDK hardware managers — obtained from Robot singleton after Robot.initialize()
     private var navigationManager: NavigationManager? = null
     private var speechManager: SpeechManager? = null
     private var motionManager: MotionManager? = null
     private var cruzrSensorManager: CruzrSensorManager? = null
     private lateinit var textToSpeech: TextToSpeech
 
-    // Greeting flow state — guards against duplicate door triggers
+    // isBusy: true while any navigation is in progress — blocks stacking navigation commands.
+    // isAtEntrance: true after arriving at the entrance position, while waiting for LIDAR detection.
+    // Both are @Volatile because the MQTT background thread reads them while the main thread writes.
     @Volatile private var isBusy = false
     @Volatile private var isAtEntrance = false
     private var humanDetectListener: SensorListener? = null
-    @Volatile private var pendingGreetText  = "Welcome! I'm Cruzr, your personal fashion assistant. Come closer and let me help you find the perfect outfit!"
-    @Volatile private var pendingGreetGesture = "wave"
+    @Volatile private var pendingGreetText  = "Bem-vindo! Sou o Cruzr, o seu assistente de moda pessoal. Aproxime-se e deixe-me ajudá-lo a encontrar o outfit perfeito!"
+    @Volatile private var pendingGreetGesture = "raise"
+
+    // Customer session — blocks new greet commands while serving; returns robot to entrance when done
+    @Volatile private var isServingCustomer = false
+    private var entranceX = 0f
+    private var entranceY = 0f
+    private var entranceTheta = 0f
+    private var entranceCoordsSet = false
+    private val sessionHandler = Handler(Looper.getMainLooper())
+    private val sessionTimeoutRunnable = Runnable { endCustomerSession("timeout") }
+    private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L   // 3 minutes
+    private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L      // 25 seconds — nobody showed up at entrance
+    private val lidarWaitHandler = Handler(Looper.getMainLooper())
+    private val lidarWaitTimeoutRunnable = Runnable {
+        if (isAtEntrance) {
+            android.util.Log.i("CruzrApp", "LIDAR wait timeout — nobody arrived, releasing busy lock")
+            isAtEntrance = false
+            stopHumanDetection()
+            isBusy = false
+            publishStatus("lidar_timeout", null)
+            runOnUiThread { setStatus("Nobody arrived — ready for next customer") }
+        }
+    }
 
     private val cameraPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
-                cameraLauncher.launch(null)
+                openCameraActivity()
             } else {
                 setStatus("Camera permission denied.")
             }
         }
 
-    private val cameraLauncher =
-        registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-            if (bitmap == null) {
+    private val cameraActivityLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != RESULT_OK) {
                 setStatus("Capture cancelled.")
                 return@registerForActivityResult
             }
-            uploadScan(bitmap)
+            val path = result.data?.getStringExtra(CameraActivity.RESULT_IMAGE_PATH) ?: run {
+                setStatus("Capture failed.")
+                return@registerForActivityResult
+            }
+            val bitmap = BitmapFactory.decodeFile(path)?.applyExifRotation(path)
+            File(path).delete()
+            if (bitmap == null) {
+                setStatus("Failed to decode captured image.")
+                return@registerForActivityResult
+            }
+            val baseUrl = normalizedBaseUrl() ?: return@registerForActivityResult
+            viewModel.uploadScan(bitmap, baseUrl, loadPersona())
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        try {
-            binding = ActivityMainBinding.inflate(layoutInflater)
-            setContentView(binding.root)
+        appMode = detectAppMode()
+        setupUiForMode(appMode)
 
-            try {
-                Robot.initialize(applicationContext)
-            } catch (e: Exception) {
-                android.util.Log.e("CruzrApp", "Robot SDK Offline: ${e.message}")
-                Toast.makeText(this, "Robot OS Offline: ${e.message}", Toast.LENGTH_LONG).show()
-            } catch (e: Error) {
-                Toast.makeText(this, "Fatal Hardware Error.", Toast.LENGTH_LONG).show()
-            }
-
+        if (appMode == AppMode.TABLET) {
             initCruzrHardware()
-            setStatus("Connecting to MQTT…")
-            startMqttListener()
-            updateSessionLabel()
-            renderDetections()
-            renderRecommendations()
-            switchTab("scan")
+        }
+        startMqttListener()
 
-            textToSpeech = TextToSpeech(this) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    textToSpeech.language = java.util.Locale.US
-                }
+        observeViewModel()
+
+        setStatus(if (appMode == AppMode.TABLET) "Waiting for scan from phone…" else "Ready to scan.")
+        updateSessionLabel()
+        renderDetections()
+        renderRecommendations()
+        switchTab("scan")
+
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech.language = java.util.Locale.US
+                android.util.Log.d("CruzrApp", "TTS Ready!")
             }
+        }
 
-            binding.captureButton.setOnClickListener { launchCamera() }
-            binding.sendChatButton.setOnClickListener { sendChat() }
-            binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
-            binding.recommendationsRightButton.setOnClickListener { scrollRecommendations(1) }
-            binding.connectionSettingsButton.setOnClickListener { showConnectionSettingsDialog() }
-            binding.tabScanButton.setOnClickListener { switchTab("scan") }
-            binding.tabRefineButton.setOnClickListener { switchTab("refine") }
+        binding.captureButton.setOnClickListener {
+            if (loadPersona().isBlank()) { showPersonaDialog(); return@setOnClickListener }
+            launchCamera()
+        }
+        binding.sendChatButton.setOnClickListener { sendChat() }
+        binding.chatInput.setOnEditorActionListener { _, _, _ -> sendChat(); true }
+        binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
+        binding.recommendationsRightButton.setOnClickListener { scrollRecommendations(1) }
+        binding.connectionSettingsButton.setOnClickListener { showConnectionSettingsDialog() }
+        binding.switchPersonaButton?.setOnClickListener { showPersonaDialog() }
+        binding.tabScanButton.setOnClickListener { switchTab("scan") }
+        binding.tabRefineButton.setOnClickListener { switchTab("refine") }
 
-        } catch (e: Throwable) {
-            if (::binding.isInitialized) {
-                binding.statusText.text = "APP CRASHED ON STARTUP"
-                binding.chatReplyText.text = "CRASH LOG:\n${e.stackTraceToString()}"
-            } else {
-                Toast.makeText(this, "CRASH: ${e.message}", Toast.LENGTH_LONG).show()
+        val storedPersona = loadPersona()
+        if (storedPersona.isNotBlank()) {
+            applyPersona(storedPersona)
+        } else {
+            showPersonaDialog()
+        }
+    }
+
+    private fun observeViewModel() {
+        viewModel.events.observe(this) { event ->
+            when (event) {
+                is UiEvent.SetStatus -> setStatus(event.message)
+                is UiEvent.ShowToast -> toast(event.message)
+                is UiEvent.ScanComplete -> {
+                    if (appMode == AppMode.PHONE_CAMERA) {
+                        toast("Scan sent to tablet!")
+                    } else {
+                        setStatus("Scan received from phone.")
+                        renderDetections()
+                        renderRecommendations()
+                        updateAnnotatedImage(event.annotatedFrameBase64)
+                        switchTab("scan")
+                        updateSessionLabel("Vision-led")
+                        showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
+                        extendSession()
+                    }
+                }
+                is UiEvent.ScanError -> showChatReply(event.message)
+                is UiEvent.ChatComplete -> {
+                    renderRecommendations()
+                    switchTab("refine")
+                    val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
+                    updateSessionLabel(mode)
+                    showChatReply(event.reply)
+                    binding.chatInput.text?.clear()
+                    extendSession()
+                }
+                is UiEvent.AgentRecsComplete -> {
+                    if (appMode == AppMode.TABLET) renderRecommendations()
+                }
+                is UiEvent.ChatError -> showChatReply(event.message)
+            }
+        }
+    }
+
+    private fun detectAppMode(): AppMode {
+        val override = getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .getString("device_mode_override", null)
+        if (override == "tablet") return AppMode.TABLET
+        if (override == "phone") return AppMode.PHONE_CAMERA
+
+        return try {
+            if (Robot.globalContext() != null) AppMode.TABLET else AppMode.PHONE_CAMERA
+        } catch (_: Throwable) {
+            AppMode.PHONE_CAMERA
+        }
+    }
+
+    private fun saveDeviceModeOverride(mode: AppMode) {
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .edit()
+            .putString("device_mode_override", if (mode == AppMode.TABLET) "tablet" else "phone")
+            .apply()
+    }
+
+    private fun setupUiForMode(mode: AppMode) {
+        when (mode) {
+            AppMode.PHONE_CAMERA -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                binding.tabBar?.isVisible = false
+                binding.refineSection.isVisible = false
+                binding.modeIndicatorText?.text = "CAMERA MODE"
+            }
+            AppMode.TABLET -> {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                binding.captureButton.isVisible = false
+                binding.scanWaitingText?.isVisible = true
+                binding.modeIndicatorText?.text = "DISPLAY MODE"
             }
         }
     }
 
     private fun launchCamera() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            cameraLauncher.launch(null)
-        } else {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            return
         }
+        openCameraActivity()
     }
 
-    private fun uploadScan(bitmap: Bitmap) {
-        setStatus("Uploading scan...")
-        val baseUrl = normalizedBaseUrl() ?: return
-        val jpegBytes = bitmap.toJpegBytes()
-
-        val imageBody = jpegBytes.toRequestBody("image/jpeg".toMediaType())
-        val multipartBody = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("file", "scan.jpg", imageBody)
-            .build()
-
-        val request = Request.Builder()
-            .url("$baseUrl/api/mobile/scan")
-            .post(multipartBody)
-            .build()
-
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        runOnUiThread {
-                            setStatus("Scan failed: HTTP ${response.code}")
-                            binding.chatReplyText.text = bodyText.ifBlank { "No error body returned." }
-                        }
-                        return@use
-                    }
-
-                    val json = JSONObject(bodyText)
-                    currentSessionId = json.optString("session_id").ifBlank { null }
-                    currentConversationState = null
-                    currentIncludeFilters = null
-                    updateDetections(json.optJSONArray("detections"))
-                    updateRecommendations(parseRecommendations(json.optJSONArray("recommendations")))
-                    updateAnnotatedImage(json.optString("annotated_frame"))
-
-                    runOnUiThread {
-                        switchTab("scan")
-                        updateSessionLabel("Vision-led")
-                        binding.chatReplyText.text = "Scan complete. Tap a recommendation to inspect it, or refine with chat."
-                        setStatus("Scan complete.")
-                    }
-                }
-            } catch (exc: Exception) {
-                runOnUiThread {
-                    setStatus("Scan request failed.")
-                    binding.chatReplyText.text = exc.message ?: "Unknown error"
-                }
-            }
-        }.start()
+    private fun openCameraActivity() {
+        cameraActivityLauncher.launch(Intent(this, CameraActivity::class.java))
     }
 
     private fun sendChat() {
+        val persona = loadPersona()
+        if (persona.isBlank()) {
+            showPersonaDialog()
+            return
+        }
         val message = binding.chatInput.text.toString().trim()
         if (message.isBlank()) {
             toast("Enter a refinement message first.")
             return
         }
-
         val baseUrl = normalizedBaseUrl() ?: return
-        setStatus("Sending refinement...")
-
-        val payload = JSONObject().apply {
-            put("message", message)
-            put("session_id", currentSessionId)
-            put("replace_vision", binding.replaceVisionSwitch.isChecked)
-            put("detected_categories", JSONArray(detectedCategories))
-            put("history", JSONArray())
-            put("recommendations", JSONArray(currentRecommendations.map { it.toJson() }))
-            currentConversationState?.let { put("state", it) }
-        }
-
-        val request = Request.Builder()
-            .url("$baseUrl/api/chat")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-
-        Thread {
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) {
-                        runOnUiThread {
-                            setStatus("Chat failed: HTTP ${response.code}")
-                            binding.chatReplyText.text = extractErrorMessage(bodyText)
-                        }
-                        return@use
-                    }
-
-                    val json = JSONObject(bodyText)
-                    currentSessionId = json.optString("session_id").ifBlank { currentSessionId }
-                    currentConversationState = json.optJSONObject("state")
-                    currentIncludeFilters = extractIncludeFilters(json)
-                    updateRecommendations(parseRecommendations(json.optJSONArray("results")))
-
-                    runOnUiThread {
-                        switchTab("refine")
-                        val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
-                        updateSessionLabel(mode)
-                        binding.chatReplyText.text = json.optString("reply", "No reply returned.")
-                        setStatus("Refinement complete.")
-                        binding.chatInput.text?.clear()
-                    }
-                }
-            } catch (exc: Exception) {
-                runOnUiThread {
-                    setStatus("Chat request failed.")
-                    binding.chatReplyText.text = exc.message ?: "Unknown error"
-                }
-            }
-        }.start()
-    }
-
-    private fun updateDetections(detections: JSONArray?) {
-        detectedCategories.clear()
-        if (detections != null) {
-            for (i in 0 until detections.length()) {
-                val det = detections.optJSONObject(i) ?: continue
-                val name = det.optString("class_name", "").trim()
-                if (name.isNotBlank()) {
-                    detectedCategories.add(name)
-                }
-            }
-        }
-        runOnUiThread { renderDetections() }
+        viewModel.sendChat(
+            message = message,
+            baseUrl = baseUrl,
+            replaceVision = binding.replaceVisionSwitch.isChecked,
+            persona = persona,
+        )
     }
 
     private fun renderDetections() {
         binding.detectionsGroup.removeAllViews()
-        if (detectedCategories.isEmpty()) {
+        val categories = viewModel.detectedCategories
+        if (categories.isEmpty()) {
             val chip = buildDetectionChip(getString(R.string.detections_empty))
             binding.detectionsGroup.addView(chip)
             return
         }
-
-        detectedCategories.distinct().forEach { category ->
+        categories.distinct().forEach { category ->
             binding.detectionsGroup.addView(buildDetectionChip(category.replace("_", " ")))
         }
     }
@@ -323,15 +368,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateRecommendations(items: List<RecommendationItem>) {
-        currentRecommendations.clear()
-        currentRecommendations.addAll(items)
-        runOnUiThread { renderRecommendations() }
-    }
-
     private fun renderRecommendations() {
+        val recommendations = viewModel.currentRecommendations
         binding.recommendationsStrip.removeAllViews()
-        val hasItems = currentRecommendations.isNotEmpty()
+        val hasItems = recommendations.isNotEmpty()
         binding.recommendationsEmptyText.isVisible = !hasItems
         binding.recommendationsScroll.isVisible = hasItems
         binding.recommendationsLeftButton.isEnabled = hasItems
@@ -339,7 +379,7 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasItems) return
 
-        currentRecommendations.forEachIndexed { index, item ->
+        recommendations.forEachIndexed { index, item ->
             binding.recommendationsStrip.addView(buildRecommendationCard(item, index))
         }
         binding.recommendationsScroll.post {
@@ -348,15 +388,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildRecommendationCard(item: RecommendationItem, index: Int): View {
+        val isCruella = viewModel.selectedPersona == "cruella"
+        val surfaceColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface else R.color.brand_surface)
+        val surfaceSoftColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+        val textColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_text else R.color.brand_text)
+        val mutedColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_muted else R.color.brand_muted)
+        val accentColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent_strong else R.color.brand_accent_strong)
+        val borderColor = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border else R.color.brand_border)
+
+
+        val cardWidth = resources.getDimensionPixelSize(R.dimen.rec_card_width)
         val card = MaterialCardView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(220), LinearLayout.LayoutParams.MATCH_PARENT).also {
+            layoutParams = LinearLayout.LayoutParams(cardWidth, LinearLayout.LayoutParams.MATCH_PARENT).also {
                 it.marginEnd = dp(12)
             }
             radius = dp(22).toFloat()
             strokeWidth = dp(1)
-            setStrokeColor(ContextCompat.getColor(context, R.color.brand_border))
+            setStrokeColor(borderColor)
             cardElevation = 0f
-            setCardBackgroundColor(ContextCompat.getColor(context, R.color.white))
+            setCardBackgroundColor(surfaceColor)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 foreground = ContextCompat.getDrawable(context, android.R.drawable.list_selector_background)
             }
@@ -365,51 +415,91 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showRecommendationDetail(item) }
         }
 
-        val content = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.MATCH_PARENT
             )
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+        }
+
+        // Image area
+        val recImageHeight = resources.getDimensionPixelSize(R.dimen.rec_card_image_height)
+        val imageView = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, recImageHeight)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(surfaceSoftColor)
+        }
+        val proxyUrl = imageProxyUrl(item.imageUrl)
+        if (proxyUrl != null) {
+            imageView.load(proxyUrl) {
+                crossfade(true)
+                error(android.R.drawable.ic_menu_gallery)
+            }
+        }
+        root.addView(imageView)
+
+        // Text content
+        val content = LinearLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(12))
         }
 
         content.addView(TextView(this).apply {
-            text = item.name
-            setTextColor(ContextCompat.getColor(context, R.color.brand_text))
+            text = item.category.replace("_", " ").uppercase()
+            setTextColor(mutedColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
             setTypeface(typeface, Typeface.BOLD)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            letterSpacing = 0.08f
         })
 
         content.addView(TextView(this).apply {
-            text = item.category.replace("_", " ").uppercase()
-            setTextColor(ContextCompat.getColor(context, R.color.brand_muted))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            text = item.name
+            setTextColor(textColor)
+            setTypeface(typeface, Typeface.BOLD)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dp(3), 0, 0)
+        })
+
+        if (!item.description.isNullOrBlank()) {
+            content.addView(TextView(this).apply {
+                text = item.description
+                setTextColor(mutedColor)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+
+        content.addView(TextView(this).apply {
+            text = item.price
+            setTextColor(accentColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(6), 0, 0)
         })
 
-        content.addView(TextView(this).apply {
-            text = item.reason.ifBlank { "Recommended from your search context." }
-            setTextColor(ContextCompat.getColor(context, R.color.brand_muted))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(0, dp(10), 0, 0)
-        })
+        root.addView(content)
 
-        content.addView(TextView(this).apply {
-            text = item.price
-            setTextColor(ContextCompat.getColor(context, R.color.brand_accent_strong))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(14), 0, 0)
-        })
-
-        if (index == currentRecommendations.lastIndex) {
+        if (index == viewModel.currentRecommendations.lastIndex) {
             (card.layoutParams as LinearLayout.LayoutParams).marginEnd = 0
         }
 
-        card.addView(content)
+        card.addView(root)
         return card
+    }
+
+    private fun imageProxyUrl(imageUrl: String?): String? {
+        if (imageUrl.isNullOrBlank()) return null
+        val base = loadServerUrl().trimEnd('/')
+        return "$base/api/image-proxy?url=${java.net.URLEncoder.encode(imageUrl, "UTF-8")}"
     }
 
     private fun scrollRecommendations(direction: Int) {
@@ -428,6 +518,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun showRecommendationDetail(item: RecommendationItem) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_recommendation_detail, null)
+
+        val detailImage = dialogView.findViewById<ImageView>(R.id.detailImage)
+        val proxyUrl = imageProxyUrl(item.imageUrl)
+        if (proxyUrl != null) {
+            detailImage.visibility = View.VISIBLE
+            detailImage.load(proxyUrl) {
+                crossfade(true)
+                error(android.R.drawable.ic_menu_gallery)
+            }
+        }
 
         dialogView.findViewById<TextView>(R.id.detailName).text = item.name
         dialogView.findViewById<TextView>(R.id.detailCategory).text = item.category.replace("_", " ").uppercase()
@@ -532,10 +632,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getActiveIncludeFilters(): JSONObject? {
-        val direct = extractIncludeFilters(currentIncludeFilters)
+        val direct = extractIncludeFilters(viewModel.currentIncludeFilters)
         if (direct != null && direct.length() > 0) return direct
 
-        val stateFilters = currentConversationState?.optJSONObject("filters")
+        val stateFilters = viewModel.currentConversationState?.optJSONObject("filters")
         val fallback = extractIncludeFilters(stateFilters)
         return if (fallback != null && fallback.length() > 0) fallback else null
     }
@@ -545,7 +645,6 @@ class MainActivity : AppCompatActivity() {
         if (source.has("include")) {
             return source.optJSONObject("include")
         }
-
         val keys = source.keys()
         while (keys.hasNext()) {
             val key = keys.next()
@@ -563,7 +662,6 @@ class MainActivity : AppCompatActivity() {
             desired.optString(index)?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
         }
         if (desiredValues.isEmpty()) return false
-
         return if (field == "type") {
             desiredValues.contains(recommendation.category.trim().lowercase())
         } else {
@@ -571,30 +669,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun parseRecommendations(items: JSONArray?): List<RecommendationItem> {
-        if (items == null) return emptyList()
-        return buildList {
-            for (i in 0 until items.length()) {
-                val item = items.optJSONObject(i) ?: continue
-                add(RecommendationItem.fromJson(item))
-            }
-        }
-    }
-
     private fun updateAnnotatedImage(base64Image: String?) {
-        if (base64Image.isNullOrBlank()) {
-            return
-        }
+        if (base64Image.isNullOrBlank()) return
         try {
             val bytes = Base64.decode(base64Image, Base64.DEFAULT)
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            runOnUiThread {
-                binding.resultImage.setImageBitmap(bitmap)
-            }
+            binding.resultImage.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
         } catch (_: IllegalArgumentException) {
-            runOnUiThread {
-                binding.resultImage.setImageBitmap(null)
-            }
+            binding.resultImage.setImageBitmap(null)
         }
     }
 
@@ -608,25 +689,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(message: String) {
-        binding.statusText.text = "[$APP_VERSION] Status: $message"
+        binding.statusText.text = message
+        val dotColor = when {
+            message.contains("error", ignoreCase = true) ||
+            message.contains("fail", ignoreCase = true) ||
+            message.contains("denied", ignoreCase = true) ||
+            message.contains("lost", ignoreCase = true) -> R.color.brand_red
+            message.contains("ready", ignoreCase = true) ||
+            message.contains("complete", ignoreCase = true) ||
+            message.contains("connected", ignoreCase = true) ||
+            message.contains("saved", ignoreCase = true) ||
+            message.contains("active", ignoreCase = true) -> R.color.brand_green
+            else -> R.color.brand_accent
+        }
+        binding.statusDot?.backgroundTintList = ContextCompat.getColorStateList(this, dotColor)
     }
 
     private fun updateSessionLabel(mode: String? = null) {
-        val sessionId = currentSessionId
+        val sessionId = viewModel.currentSessionId
         binding.sessionText.text = if (sessionId.isNullOrBlank()) {
             getString(R.string.session_waiting)
         } else {
             val modeSuffix = if (mode.isNullOrBlank()) "" else " | $mode"
             "Session: ${sessionId.take(8)}$modeSuffix"
-        }
-    }
-
-    private fun extractErrorMessage(bodyText: String): String {
-        return try {
-            val json = JSONObject(bodyText)
-            json.optString("detail").ifBlank { bodyText.ifBlank { "No error body returned." } }
-        } catch (_: Exception) {
-            bodyText.ifBlank { "No error body returned." }
         }
     }
 
@@ -647,23 +732,28 @@ class MainActivity : AppCompatActivity() {
             .apply()
     }
 
-    private fun Bitmap.toJpegBytes(): ByteArray {
-        val stream = ByteArrayOutputStream()
-        compress(Bitmap.CompressFormat.JPEG, 90, stream)
-        return stream.toByteArray()
-    }
-
     private fun showConnectionSettingsDialog() {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_connection_settings, null)
         val input = dialogView.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.dialogServerUrlInput)
         input.setText(loadServerUrl())
+
+        val modeGroup = dialogView.findViewById<android.widget.RadioGroup>(R.id.deviceModeGroup)
+        val phoneRadio = dialogView.findViewById<android.widget.RadioButton>(R.id.modePhoneRadio)
+        val tabletRadio = dialogView.findViewById<android.widget.RadioButton>(R.id.modeTabletRadio)
+        if (appMode == AppMode.TABLET) tabletRadio.isChecked = true else phoneRadio.isChecked = true
 
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.connection_title))
             .setView(dialogView)
             .setPositiveButton(getString(R.string.connection_save)) { _, _ ->
                 saveServerUrl(input.text?.toString().orEmpty())
-                toast("Connection saved.")
+                val selectedMode = if (tabletRadio.isChecked) AppMode.TABLET else AppMode.PHONE_CAMERA
+                if (selectedMode != appMode) {
+                    saveDeviceModeOverride(selectedMode)
+                    recreate()
+                } else {
+                    toast("Connection saved.")
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -678,16 +768,28 @@ class MainActivity : AppCompatActivity() {
         styleTabButton(binding.tabRefineButton, selected = !showingScan)
     }
 
+    private fun showChatReply(message: String) {
+        binding.chatReplyText.text = message
+        binding.chatReplyText.isVisible = true
+    }
+
     private fun styleTabButton(button: MaterialButton, selected: Boolean) {
+        val isCruella   = viewModel.selectedPersona == "cruella"
+        val activeBg    = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent       else R.color.brand_text)
+        val inactiveBg  = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+        val inactiveText = ContextCompat.getColor(this, if (isCruella) R.color.cruella_text        else R.color.brand_text)
+        val borderCol   = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border       else R.color.brand_border)
         if (selected) {
-            button.setBackgroundColor(ContextCompat.getColor(this, R.color.brand_text))
-            button.setTextColor(ContextCompat.getColor(this, R.color.white))
+            button.setBackgroundColor(activeBg)
+            button.setTextColor(Color.WHITE)
+            button.iconTint = ColorStateList.valueOf(Color.WHITE)
             button.strokeWidth = 0
         } else {
-            button.setBackgroundColor(ContextCompat.getColor(this, R.color.brand_surface))
-            button.setTextColor(ContextCompat.getColor(this, R.color.brand_text))
+            button.setBackgroundColor(inactiveBg)
+            button.setTextColor(inactiveText)
+            button.iconTint = ColorStateList.valueOf(inactiveText)
             button.strokeWidth = dp(1)
-            button.setStrokeColorResource(R.color.brand_border)
+            button.strokeColor = ColorStateList.valueOf(borderCol)
         }
     }
 
@@ -703,6 +805,7 @@ class MainActivity : AppCompatActivity() {
         val category: String,
         val price: String,
         val reason: String,
+        val imageUrl: String?,
         val brand: String?,
         val description: String?,
         val sku: String?,
@@ -716,6 +819,7 @@ class MainActivity : AppCompatActivity() {
             put("category", category)
             put("price", price)
             put("reason", reason)
+            imageUrl?.let { put("image_url", it) }
             brand?.let { put("brand", it) }
             description?.let { put("description", it) }
             sku?.let { put("sku", it) }
@@ -754,6 +858,7 @@ class MainActivity : AppCompatActivity() {
                     category = json.optString("category", "item"),
                     price = json.optString("price", "N/A"),
                     reason = json.optString("reason", ""),
+                    imageUrl = json.optString("image_url").takeIf { it.isNotBlank() },
                     brand = json.optString("brand").takeIf { it.isNotBlank() },
                     description = json.optString("description").takeIf { it.isNotBlank() },
                     sku = json.optString("sku").takeIf { it.isNotBlank() },
@@ -765,183 +870,361 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startMqttListener() {
-        // MQTT runs on a background thread — MqttClient.connect() is blocking and
-        // throws NetworkOnMainThreadException if called from the UI thread.
+    private fun loadPersona(): String =
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .getString("persona", "").orEmpty()
+
+    private fun savePersona(persona: String) {
+        getSharedPreferences("viralytics_mobile", Context.MODE_PRIVATE)
+            .edit().putString("persona", persona).apply()
+    }
+
+    private fun publishPersona(persona: String) {
         Thread {
-        // MQTT broker is always test.mosquitto.org — independent of the HTTP API server URL
-        // (the connection settings dialog controls the FastAPI server, not the MQTT broker)
-        val brokerUri = "ssl://test.mosquitto.org:8883"
-        val clientId = "Cruzr_${(1000..9999).random()}"
+            try {
+                val payload = JSONObject().put("persona", persona).toString()
+                mqttClient?.publish("cruzr/persona", MqttMessage(payload.toByteArray()).apply { qos = 1 })
+            } catch (_: Exception) {}
+        }.start()
+    }
 
-        try {
-            mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+    private fun applyPersona(persona: String) {
+        viewModel.selectedPersona = persona
+        binding.personaChip?.text = if (persona == "edna") "EDNA active" else "CRUELLA active"
+        binding.personaRow?.isVisible = true
+        applyPersonaTheme(persona)
+    }
 
-            // test.mosquitto.org uses a custom CA not in Android's trust store.
-            // Since this is a public broker (no auth, anyone can subscribe), we use
-            // TLS for wire encryption but skip cert verification — same as the Python side.
-            val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            })
-            val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
-            sslCtx.init(null, trustAll, java.security.SecureRandom())
+    private fun applyPersonaTheme(persona: String) {
+        val isCruella = persona == "cruella"
 
-            val options = MqttConnectOptions().apply {
-                isCleanSession = true
-                connectionTimeout = 10
-                isAutomaticReconnect = true
-                socketFactory = sslCtx.socketFactory
+        val bg          = ContextCompat.getColor(this, if (isCruella) R.color.cruella_bg          else R.color.brand_bg)
+        val surface     = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface      else R.color.brand_surface)
+        val surfaceSoft = ContextCompat.getColor(this, if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+        val textCol     = ContextCompat.getColor(this, if (isCruella) R.color.cruella_text         else R.color.brand_text)
+        val muted       = ContextCompat.getColor(this, if (isCruella) R.color.cruella_muted        else R.color.brand_muted)
+        val accent      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_accent       else R.color.brand_accent)
+        val border      = ContextCompat.getColor(this, if (isCruella) R.color.cruella_border       else R.color.brand_border)
+        val btnPrimary  = if (isCruella) accent else textCol
+
+        // System chrome
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = if (isCruella)
+            window.decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+        else
+            window.decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+
+        // Root + tab bar backgrounds
+        binding.root.setBackgroundColor(bg)
+        binding.tabBar?.backgroundTintList = ColorStateList.valueOf(surfaceSoft)
+
+        // Walk the view tree: cards + text
+        tintViews(binding.root, textCol, muted, accent, surface, border)
+
+        // ID-specific overrides for muted elements (walk defaults them to textCol)
+        binding.sessionText?.setTextColor(muted)
+        binding.statusText?.setTextColor(textCol)
+        binding.recommendationsEmptyText?.setTextColor(muted)
+        binding.personaChip?.backgroundTintList = ColorStateList.valueOf(accent)
+
+        // Buttons (MaterialButton/ImageButton are skipped in tintViews, handled here)
+        binding.captureButton.backgroundTintList = ColorStateList.valueOf(btnPrimary)
+        binding.captureButton.setTextColor(Color.WHITE)
+        binding.switchPersonaButton?.setTextColor(muted)
+        binding.connectionSettingsButton.imageTintList = ColorStateList.valueOf(textCol)
+        binding.recommendationsLeftButton.imageTintList = ColorStateList.valueOf(textCol)
+        binding.recommendationsRightButton.imageTintList = ColorStateList.valueOf(textCol)
+        binding.sendChatButton.backgroundTintList = ColorStateList.valueOf(accent)
+
+        // Chat input
+        binding.chatInputLayout?.let { til ->
+            til.boxStrokeColor = border
+            til.hintTextColor = ColorStateList.valueOf(muted)
+            til.defaultHintTextColor = ColorStateList.valueOf(muted)
+            til.setBoxBackgroundColorResource(if (isCruella) R.color.cruella_surface_soft else R.color.brand_surface_soft)
+        }
+        binding.chatInput?.setTextColor(textCol)
+        binding.chatInput?.setHintTextColor(muted)
+
+        // Re-style tab buttons with new persona colors
+        switchTab(currentTab)
+    }
+
+    private fun tintViews(view: View, textCol: Int, muted: Int, accent: Int, surface: Int, border: Int) {
+        when {
+            view.id == R.id.personaChip -> Unit
+            view is MaterialCardView -> {
+                view.setCardBackgroundColor(surface)
+                view.strokeColor = border
             }
+            view is MaterialButton || view is android.widget.ImageButton -> Unit
+            view is TextView -> when (view.tag?.toString()) {
+                "color_muted"  -> view.setTextColor(muted)
+                "color_accent" -> view.setTextColor(accent)
+                else           -> view.setTextColor(textCol)
+            }
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) tintViews(view.getChildAt(i), textCol, muted, accent, surface, border)
+        }
+    }
 
-            mqttClient?.setCallback(object : MqttCallback {
-                override fun connectionLost(cause: Throwable?) {
-                    runOnUiThread { setStatus("MQTT lost — reconnecting…") }
+    private fun showPersonaDialog() {
+        val options = arrayOf(
+            "Cruella — YOLO vision + LLM text + strict matching",
+            "Edna — FashionNet vision + custom text + flexible matching",
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.persona_dialog_title))
+            .setCancelable(loadPersona().isNotBlank())
+            .setItems(options) { _, which ->
+                val persona = if (which == 0) "cruella" else "edna"
+                savePersona(persona)
+                applyPersona(persona)
+                publishPersona(persona)
+                viewModel.clearSession()
+                renderDetections()
+                renderRecommendations()
+            }
+            .show()
+    }
+
+    private fun startMqttListener() {
+        Thread {
+            val brokerUri = "ssl://test.mosquitto.org:8883"
+            val clientId = "Cruzr_${(1000..9999).random()}"
+
+            try {
+                mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+
+                val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                })
+                val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
+                sslCtx.init(null, trustAll, java.security.SecureRandom())
+
+                val options = MqttConnectOptions().apply {
+                    isCleanSession = true
+                    connectionTimeout = 10
+                    isAutomaticReconnect = true
+                    socketFactory = sslCtx.socketFactory
                 }
 
-                override fun messageArrived(topic: String?, message: MqttMessage?) {
-                    val payloadString = message?.toString() ?: return
+                mqttClient?.setCallback(object : MqttCallbackExtended {
+                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                        if (!reconnect) return
+                        try {
+                            mqttClient?.subscribe("cruzr/persona", 1)
+                            mqttClient?.subscribe("cruzr/commands", 1)
+                            mqttClient?.subscribe("cruzr/scan_result", 1)
+                        } catch (_: Exception) {}
+                        mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
+                        runOnUiThread { setStatus("MQTT Reconnected to test.mosquitto.org") }
+                    }
 
-                    try {
-                        val json = JSONObject(payloadString)
-                        val action = json.optString("action")
+                    override fun connectionLost(cause: Throwable?) {
+                        runOnUiThread { setStatus("MQTT lost — reconnecting…") }
+                        mqttReconnectHandler.postDelayed(mqttReconnectRunnable, 15_000L)
+                    }
 
-                        when (action) {
-                            "move_to_stand" -> {
-                                val target = json.optString("target", "unknown_rack")
-                                runOnUiThread { toast("PC: navigate to $target") }
-                                sendRobotNavigationCommand(target, "AI recommendation received via network")
+                    override fun messageArrived(topic: String?, message: MqttMessage?) {
+                        val payloadString = message?.toString() ?: return
+                        try {
+                            val json = JSONObject(payloadString)
+
+                            if (topic == "cruzr/persona") {
+                                val p = json.optString("persona").ifBlank { null } ?: return
+                                runOnUiThread { applyPersona(p); savePersona(p) }
+                                return
                             }
-                            "move_to_coords" -> {
-                                val x = json.optDouble("x", 0.0).toFloat()
-                                val y = json.optDouble("y", 0.0).toFloat()
-                                val theta = json.optDouble("theta", 0.0).toFloat()
-                                runOnUiThread { toast("PC: navigate to coords $x, $y") }
-                                sendRawCoordinateCommand(x, y, theta)
+
+                            if (topic == "cruzr/scan_result") {
+                                handleScanResult(json)
+                                return
                             }
-                            "speak" -> {
-                                val text = json.optString("text", "")
-                                runOnUiThread { setStatus("Speaking: $text") }
-                                speakText(text)
-                            }
-                            "guide_user" -> {
-                                val target = json.optString("target", "")
-                                val introText = json.optString("intro_text", "")
-                                runOnUiThread { setStatus("Guide: going to '$target'") }
-                                speakText(introText)
-                                sendRobotNavigationCommand(target, "", skipIntroSpeech = true)
-                            }
-                            "stop_navigation" -> {
-                                runOnUiThread { setStatus("Stop requested (unsupported by SDK)") }
-                                publishStatus("error", JSONObject().put("message", "stop_navigation not supported by SDK v2.8.0"))
-                            }
-                            "locate_self" -> {
-                                val nav = navigationManager
-                                if (nav == null) {
-                                    publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
-                                } else if (nav.isSelfLocated) {
-                                    val payload = JSONObject().put("self_located", true).put("note", "already located")
-                                    try {
-                                        val loc = nav.currentLocation
-                                        payload.put("x", loc.position.x)
-                                        payload.put("y", loc.position.y)
-                                        payload.put("theta", loc.rotation)
-                                    } catch (e: Exception) {}
-                                    publishStatus("status_report", payload)
-                                } else {
-                                    runOnUiThread { setStatus("Locating self…") }
-                                    publishStatus("localization_started", null)
-                                    nav.locateSelf()
-                                        .done {
-                                            runOnUiThread { setStatus("Self-located.") }
-                                            val payload = JSONObject()
-                                            try {
-                                                val loc = nav.currentLocation
-                                                payload.put("x", loc.position.x)
-                                                payload.put("y", loc.position.y)
-                                                payload.put("theta", loc.rotation)
-                                            } catch (e: Exception) {}
-                                            publishStatus("localization_success", payload)
-                                        }
-                                        .fail { error ->
-                                            val errMsg = error?.message ?: "unknown"
-                                            runOnUiThread { setStatus("Localization failed: $errMsg") }
-                                            publishStatus("localization_failed", JSONObject().put("error_message", errMsg))
-                                        }
+
+                            val action = json.optString("action")
+
+                            when (action) {
+                                "move_to_stand" -> {
+                                    val target = json.optString("target", "unknown_rack")
+                                    runOnUiThread { toast("PC: navigate to $target") }
+                                    sendRobotNavigationCommand(target, "AI recommendation received via network")
                                 }
-                            }
-                            "get_status" -> {
-                                val nav = navigationManager
-                                val payload = JSONObject().apply {
-                                    put("nav_manager_online", nav != null)
-                                    if (nav != null) {
-                                        put("self_located", nav.isSelfLocated)
+                                "move_to_coords" -> {
+                                    val x = json.optDouble("x", 0.0).toFloat()
+                                    val y = json.optDouble("y", 0.0).toFloat()
+                                    val theta = json.optDouble("theta", 0.0).toFloat()
+                                    runOnUiThread { toast("PC: navigate to coords $x, $y") }
+                                    sendRawCoordinateCommand(x, y, theta)
+                                }
+                                "speak" -> {
+                                    val text = json.optString("text", "")
+                                    runOnUiThread { setStatus("Speaking: $text") }
+                                    speakText(text)
+                                }
+                                "guide_user" -> {
+                                    val target = json.optString("target", "")
+                                    val introText = json.optString("intro_text", "")
+                                    runOnUiThread { setStatus("Guide: going to '$target'") }
+                                    speakText(introText)
+                                    sendRobotNavigationCommand(target, "", skipIntroSpeech = true)
+                                }
+                                "stop_navigation" -> {
+                                    runOnUiThread { setStatus("Stop requested (unsupported by SDK)") }
+                                    publishStatus("error", JSONObject().put("message", "stop_navigation not supported by SDK v2.8.0"))
+                                }
+                                "locate_self" -> {
+                                    val nav = navigationManager
+                                    if (nav == null) {
+                                        publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
+                                    } else if (nav.isSelfLocated) {
+                                        val payload = JSONObject().put("self_located", true).put("note", "already located")
                                         try {
                                             val loc = nav.currentLocation
-                                            put("x", loc.position.x)
-                                            put("y", loc.position.y)
-                                            put("theta", loc.rotation)
+                                            payload.put("x", loc.position.x)
+                                            payload.put("y", loc.position.y)
+                                            payload.put("theta", loc.rotation)
                                         } catch (e: Exception) {}
+                                        publishStatus("status_report", payload)
+                                    } else {
+                                        runOnUiThread { setStatus("Locating self…") }
+                                        publishStatus("localization_started", null)
+                                        nav.locateSelf()
+                                            .done {
+                                                runOnUiThread { setStatus("Self-located.") }
+                                                val payload = JSONObject()
+                                                try {
+                                                    val loc = nav.currentLocation
+                                                    payload.put("x", loc.position.x)
+                                                    payload.put("y", loc.position.y)
+                                                    payload.put("theta", loc.rotation)
+                                                } catch (e: Exception) {}
+                                                publishStatus("localization_success", payload)
+                                            }
+                                            .fail { error ->
+                                                val errMsg = error?.message ?: "unknown"
+                                                runOnUiThread { setStatus("Localization failed: $errMsg") }
+                                                publishStatus("localization_failed", JSONObject().put("error_message", errMsg))
+                                            }
                                     }
                                 }
-                                publishStatus("status_report", payload)
-                            }
-
-                            // Compound greeting sequence:
-                            //   navigate to entrance → LIDAR detects person → speak + gesture
-                            "greet" -> {
-                                if (isBusy) {
-                                    publishStatus("robot_busy", JSONObject()
-                                        .put("command", "greet")
-                                        .put("reason", "robot is currently engaged with a customer"))
-                                    runOnUiThread { setStatus("Greet ignored — robot is busy") }
-                                } else {
-                                    val x       = json.optDouble("x", 0.0).toFloat()
-                                    val y       = json.optDouble("y", 0.0).toFloat()
-                                    val theta   = json.optDouble("theta", 0.0).toFloat()
-                                    pendingGreetText    = json.optString("text", pendingGreetText)
-                                    pendingGreetGesture = json.optString("gesture", "wave")
-                                    runOnUiThread { setStatus("Greeting sequence: moving to entrance…") }
-                                    sendGreetCommand(x, y, theta)
+                                "get_status" -> {
+                                    val nav = navigationManager
+                                    val payload = JSONObject().apply {
+                                        put("nav_manager_online", nav != null)
+                                        if (nav != null) {
+                                            put("self_located", nav.isSelfLocated)
+                                            try {
+                                                val loc = nav.currentLocation
+                                                put("x", loc.position.x)
+                                                put("y", loc.position.y)
+                                                put("theta", loc.rotation)
+                                            } catch (e: Exception) {}
+                                        }
+                                    }
+                                    publishStatus("status_report", payload)
+                                }
+                                "greet" -> {
+                                    if (isBusy || isServingCustomer) {
+                                        publishStatus("robot_busy", JSONObject()
+                                            .put("command", "greet")
+                                            .put("reason", if (isServingCustomer) "robot is serving a customer" else "robot is currently busy"))
+                                        runOnUiThread { setStatus("Greet ignored — robot is busy") }
+                                    } else {
+                                        val x       = json.optDouble("x", 0.0).toFloat()
+                                        val y       = json.optDouble("y", 0.0).toFloat()
+                                        val theta   = json.optDouble("theta", 0.0).toFloat()
+                                        entranceX = x
+                                        entranceY = y
+                                        entranceTheta = theta
+                                        entranceCoordsSet = true
+                                        pendingGreetText    = json.optString("text", pendingGreetText)
+                                        pendingGreetGesture = json.optString("gesture", "wave")
+                                        runOnUiThread { setStatus("Greeting sequence: moving to entrance…") }
+                                        sendGreetCommand(x, y, theta)
+                                    }
+                                }
+                                "gesture" -> {
+                                    val name = json.optString("name", "wave")
+                                    doGesture(name)
+                                }
+                                "farewell" -> {
+                                    if (!isBusy && !isServingCustomer) {
+                                        val text = json.optString("text", "Goodbye! Hope to see you again soon!")
+                                        val gesture = json.optString("gesture", "goodbye")
+                                        speakText(text)
+                                        Handler(Looper.getMainLooper()).postDelayed({
+                                            doGesture(gesture)
+                                        }, 1000L)
+                                    }
                                 }
                             }
-
-                            // One-shot gesture without navigation.
-                            "gesture" -> {
-                                val name = json.optString("name", "wave")
-                                doGesture(name)
-                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
-                }
 
-                override fun deliveryComplete(token: IMqttDeliveryToken?) {}
-            })
+                    override fun deliveryComplete(token: IMqttDeliveryToken?) {}
+                })
 
-            mqttClient?.connect(options)
-            mqttClient?.subscribe("cruzr/commands")
-            runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
+                mqttClient?.connect(options)
+                mqttClient?.subscribe("cruzr/persona", 1)
+                mqttClient?.subscribe("cruzr/commands", 1)
+                mqttClient?.subscribe("cruzr/scan_result", 1)
+                mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
+                runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
 
-        } catch (e: Exception) {
-            runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
-        }
+            } catch (e: Exception) {
+                runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
+            }
         }.start()
+    }
+
+    private fun handleScanResult(payload: JSONObject) {
+        val sessionId = payload.optString("session_id").ifBlank { null }
+        val persona = payload.optString("persona").ifBlank { null }
+
+        val detections = mutableListOf<String>()
+        val detArray = payload.optJSONArray("detections")
+        if (detArray != null) {
+            for (i in 0 until detArray.length()) {
+                val name = detArray.optJSONObject(i)?.optString("class_name")?.trim() ?: continue
+                if (name.isNotBlank()) detections.add(name)
+            }
+        }
+
+        val recommendations = mutableListOf<RecommendationItem>()
+        val recArray = payload.optJSONArray("recommendations")
+        if (recArray != null) {
+            for (i in 0 until recArray.length()) {
+                val item = recArray.optJSONObject(i) ?: continue
+                recommendations.add(RecommendationItem.fromJson(item))
+            }
+        }
+
+        val annotatedFrame = payload.optString("annotated_frame").ifBlank { null }
+
+        viewModel.injectScanResult(sessionId, detections, recommendations, annotatedFrame)
+        if (persona != null) {
+            runOnUiThread { applyPersona(persona) }
+        }
     }
 
     private fun initCruzrHardware() {
         setStatus("Initializing V2.8.0 Hardware Managers...")
-
         try {
-            navigationManager   = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
-            speechManager       = Robot.globalContext().getSystemService("speech") as SpeechManager
-            motionManager       = Robot.globalContext().getSystemService("motion") as? MotionManager
-            cruzrSensorManager  = Robot.globalContext().getSystemService(CruzrSensorManager.SERVICE) as? CruzrSensorManager
+            navigationManager  = Robot.globalContext().getSystemService(NavigationManager.SERVICE) as NavigationManager
+            speechManager      = Robot.globalContext().getSystemService("speech") as SpeechManager
+            motionManager      = Robot.globalContext().getSystemService("motion") as? MotionManager
+            cruzrSensorManager = Robot.globalContext().getSystemService(CruzrSensorManager.SERVICE) as? CruzrSensorManager
 
-            val motionOk  = if (motionManager  != null) "✓" else "✗"
-            val sensorOk  = if (cruzrSensorManager != null) "✓" else "✗"
+            val motionOk = if (motionManager  != null) "✓" else "✗"
+            val sensorOk = if (cruzrSensorManager != null) "✓" else "✗"
             runOnUiThread { setStatus("Hardware ready — motion:$motionOk sensor:$sensorOk") }
         } catch (e: Exception) {
             runOnUiThread { setStatus("Manager Init Failed: ${e.message}") }
@@ -1038,9 +1321,9 @@ class MainActivity : AppCompatActivity() {
 
         if (!skipIntroSpeech) {
             val textToSpeak = if (reason.isNotBlank()) {
-                "I found a great match! $reason. Let me show you where it is."
+                "Encontrei uma ótima opção! $reason. Siga-me, vou mostrar-lhe onde está."
             } else {
-                "Let me show you where the $targetItem is."
+                "Siga-me, vou mostrar-lhe onde fica o $targetItem."
             }
             speakText(textToSpeak)
         }
@@ -1136,8 +1419,9 @@ class MainActivity : AppCompatActivity() {
                             publishStatus("navigation_arrived", JSONObject().put("target", targetItem))
                             runOnUiThread {
                                 setStatus("Arrived at $targetItem!")
-                                speakText("Here is the item you are looking for.")
+                                speakText("Aqui está o artigo que procurava!")
                             }
+                            endCustomerSession("arrived_at_stand")
                         }
                         .progress { p ->
                             android.util.Log.d("CruzrNav", "Nav progress: $p")
@@ -1170,10 +1454,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Navigate to the entrance position.  On arrival, start LIDAR human detection —
-     * the actual greeting (speak + gesture) fires when the sensor detects the customer.
-     */
     private fun sendGreetCommand(x: Float, y: Float, theta: Float) {
         val nav = navigationManager ?: run {
             publishStatus("error", JSONObject().put("message", "Navigation Manager offline"))
@@ -1203,7 +1483,6 @@ class MainActivity : AppCompatActivity() {
                     .done {
                         runOnUiThread { setStatus("At entrance — LIDAR watching for customer…") }
                         publishStatus("greeting_at_entrance", null)
-                        // Switch to LIDAR detection mode: greet fires when person arrives
                         isAtEntrance = true
                         startHumanDetection()
                     }
@@ -1228,7 +1507,6 @@ class MainActivity : AppCompatActivity() {
     private fun startHumanDetection() {
         val sm = cruzrSensorManager ?: run {
             android.util.Log.w("CruzrApp", "SensorManager not available — LIDAR detection disabled")
-            // Fall back: greet immediately without waiting for detection
             onPersonDetectedByLidar()
             return
         }
@@ -1240,9 +1518,10 @@ class MainActivity : AppCompatActivity() {
             }
             sm.registerListener("human_detect", humanDetectListener!!)
             android.util.Log.i("CruzrApp", "LIDAR human detection active")
+            lidarWaitHandler.postDelayed(lidarWaitTimeoutRunnable, LIDAR_WAIT_TIMEOUT_MS)
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "registerListener failed: ${e.message}")
-            onPersonDetectedByLidar()  // fall back to immediate greet
+            onPersonDetectedByLidar()
         }
     }
 
@@ -1257,13 +1536,10 @@ class MainActivity : AppCompatActivity() {
         humanDetectListener = null
     }
 
-    /**
-     * Called by the LIDAR sensor when a person enters the robot's detection range.
-     * Fires the full greeting: speak welcome, wave, then signal ready for scan.
-     */
     private fun onPersonDetectedByLidar() {
-        if (!isAtEntrance) return       // guard against duplicate fires
+        if (!isAtEntrance) return
         isAtEntrance = false
+        lidarWaitHandler.removeCallbacks(lidarWaitTimeoutRunnable)
         stopHumanDetection()
 
         runOnUiThread { setStatus("Customer detected! Greeting…") }
@@ -1271,12 +1547,14 @@ class MainActivity : AppCompatActivity() {
 
         speakText(pendingGreetText)
 
-        // Start gesture 1.5 s after speech so they overlap naturally
         Handler(Looper.getMainLooper()).postDelayed({
             doGesture(pendingGreetGesture)
         }, 1500L)
 
-        // Release busy flag after ~6 s so a new customer can trigger the flow again
+        isServingCustomer = true
+        sessionHandler.postDelayed(sessionTimeoutRunnable, SESSION_TIMEOUT_MS)
+
+
         Handler(Looper.getMainLooper()).postDelayed({
             isBusy = false
             publishStatus("greeting_complete", JSONObject().put("ready_for_scan", true))
@@ -1284,23 +1562,30 @@ class MainActivity : AppCompatActivity() {
         }, 6000L)
     }
 
+    // ── Customer session ──────────────────────────────────────────────────────
+
+    private fun extendSession() {
+        if (!isServingCustomer) return
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        sessionHandler.postDelayed(sessionTimeoutRunnable, SESSION_TIMEOUT_MS)
+    }
+
+    private fun endCustomerSession(reason: String) {
+        if (!isServingCustomer) return
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        isServingCustomer = false
+        publishStatus("session_ended", JSONObject().put("reason", reason))
+        runOnUiThread { setStatus("Session ended ($reason) — returning to entrance") }
+        returnToEntrance()
+    }
+
+    private fun returnToEntrance() {
+        if (!entranceCoordsSet || isBusy) return
+        sendRawCoordinateCommand(entranceX, entranceY, entranceTheta)
+    }
+
     // ── Gestures ──────────────────────────────────────────────────────────────
 
-    /**
-     * Play a named body gesture using MotionManager.
-     *
-     * Action IDs confirmed from cruzr-sdk-2.8.0.jar ActionUris class:
-     *   "wave"       → "swingarm"    (swing/wave arms)
-     *   "raise"      → "zhanggao"    (raise arms high — celebratory)
-     *   "handshake"  → "shankhand"   (extend arm for handshake)
-     *   "guide_left" → "guideleft"   (point/guide left — use when sending to a stand)
-     *   "guide_right"→ "guideright"  (point/guide right)
-     *   "applause"   → "applause"
-     *   "surprise"   → "surprise"
-     *   "goodbye"    → "goodbye"
-     *   "searching"  → "searching"   (looking around gesture)
-     *   "cute"       → "cute"
-     */
     private fun doGesture(gestureName: String) {
         val mm = motionManager ?: run {
             android.util.Log.w("CruzrApp", "MotionManager offline — gesture '$gestureName' skipped")
@@ -1321,7 +1606,7 @@ class MainActivity : AppCompatActivity() {
             "searching"   -> "searching"
             "cute"        -> "cute"
             "reset"       -> "RESET"
-            else          -> gestureName   // pass through raw action IDs
+            else          -> gestureName
         }
 
         try {
@@ -1342,8 +1627,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun Bitmap.applyExifRotation(path: String): Bitmap {
+        val degrees = when (ExifInterface(path).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+        )) {
+            ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> return this
+        }
+        val m = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(this, 0, 0, width, height, m, true).also { recycle() }
+    }
+
     override fun onDestroy() {
         isAtEntrance = false
+        isServingCustomer = false
+        sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
         stopHumanDetection()
         try { mqttClient?.disconnect() } catch (_: Exception) {}
         if (::textToSpeech.isInitialized) {

@@ -10,8 +10,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="14dp">
+        android:padding="@dimen/content_padding">
 
+        <!-- ── HEADER ─────────────────────────────────────────────── -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -22,101 +23,185 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:orientation="vertical">
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
                     android:textColor="@color/brand_text"
-                    android:textSize="24sp"
-                    android:textStyle="bold" />
+                    android:textSize="@dimen/header_title_size"
+                    android:textStyle="bold"
+                    android:fontFamily="serif" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/tagline"
-                    android:textColor="@color/brand_muted"
+                    android:layout_marginStart="8dp"
+                    android:tag="color_accent"
+                    android:text="OUTFIT SCANNER"
+                    android:textColor="@color/brand_accent"
+                    android:textSize="@dimen/section_label_size"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.10" />
+            </LinearLayout>
+
+            <!-- Status pill: dot + label -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:gravity="center_vertical"
+                android:background="@drawable/mobile_status_pill"
+                android:paddingStart="10dp"
+                android:paddingEnd="14dp"
+                android:layout_marginEnd="8dp">
+
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:background="@drawable/mobile_status_dot" />
+
+                <TextView
+                    android:id="@+id/statusText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text="Ready"
+                    android:textColor="@color/brand_text"
                     android:textSize="12sp" />
             </LinearLayout>
 
             <ImageButton
                 android:id="@+id/connectionSettingsButton"
-                android:layout_width="38dp"
-                android:layout_height="38dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
                 android:background="@drawable/mobile_icon_button"
                 android:contentDescription="@string/connection_settings"
-                android:padding="9dp"
+                android:padding="8dp"
                 android:src="@android:drawable/ic_menu_manage"
                 android:tint="@color/brand_text" />
         </LinearLayout>
 
+        <!-- Persona chip + switch button -->
         <LinearLayout
+            android:id="@+id/personaRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="6dp"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:visibility="gone">
 
             <TextView
-                android:id="@+id/statusText"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/status_idle"
-                android:textColor="@color/brand_text"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/sessionText"
+                android:id="@+id/personaChip"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/session_waiting"
-                android:textColor="@color/brand_muted" />
+                android:background="@drawable/mobile_persona_chip"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:textColor="@color/white"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/switchPersonaButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/switch_stylist"
+                android:textColor="@color/brand_muted"
+                android:textSize="11sp"
+                app:rippleColor="@color/brand_surface_soft" />
         </LinearLayout>
 
+        <!-- Session label -->
+        <TextView
+            android:id="@+id/sessionText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/session_waiting"
+            android:textColor="@color/brand_muted"
+            android:textSize="11sp" />
+
+        <!-- Mode indicator -->
+        <TextView
+            android:id="@+id/modeIndicatorText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/mobile_status_pill"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:textColor="@color/brand_muted"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08" />
+
+        <!-- ── TAB BAR ──────────────────────────────────────────────── -->
         <LinearLayout
+            android:id="@+id/tabBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/mobile_tab_bar_bg"
+            android:padding="4dp"
             android:orientation="horizontal">
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/tabScanButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="@dimen/tab_button_height"
                 android:layout_weight="1"
                 android:text="@string/tab_scan"
+                android:textSize="13sp"
                 android:textColor="@color/white"
+                app:icon="@drawable/ic_camera"
+                app:iconGravity="start"
+                app:iconSize="16dp"
                 app:backgroundTint="@color/brand_text"
-                app:cornerRadius="18dp" />
+                app:cornerRadius="14dp"
+                app:elevation="0dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/tabRefineButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_marginStart="10dp"
+                android:layout_height="@dimen/tab_button_height"
+                android:layout_marginStart="6dp"
                 android:layout_weight="1"
                 android:text="@string/tab_refine"
+                android:textSize="13sp"
                 android:textColor="@color/brand_text"
-                app:cornerRadius="18dp"
+                app:icon="@drawable/ic_chat"
+                app:iconGravity="start"
+                app:iconSize="16dp"
+                app:cornerRadius="14dp"
                 app:strokeColor="@color/brand_border" />
         </LinearLayout>
 
+        <!-- ── SCAN SECTION ────────────────────────────────────────── -->
         <LinearLayout
             android:id="@+id/scanSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- Scan controls card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="24dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -125,54 +210,71 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/scan_title"
-                        android:textColor="@color/brand_text"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/scan_help"
+                        android:tag="color_muted"
+                        android:text="SCAN CONTROLS"
                         android:textColor="@color/brand_muted"
-                        android:textSize="12sp" />
+                        android:textSize="@dimen/section_label_size"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.12" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/scan_help"
+                        android:textColor="@color/brand_text"
+                        android:textSize="13sp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/captureButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:minHeight="50dp"
+                        android:minHeight="@dimen/capture_button_min_height"
                         android:text="@string/capture_outfit"
                         android:textColor="@color/white"
+                        app:icon="@drawable/ic_camera"
+                        app:iconGravity="start"
+                        app:iconSize="18dp"
                         app:backgroundTint="@color/brand_text"
                         app:cornerRadius="16dp" />
+
+                    <TextView
+                        android:id="@+id/scanWaitingText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:background="@drawable/mobile_empty_state"
+                        android:gravity="center"
+                        android:padding="16dp"
+                        android:text="Waiting for scan from phone…"
+                        android:textColor="@color/brand_muted"
+                        android:visibility="gone" />
 
                     <ImageView
                         android:id="@+id/resultImage"
                         android:layout_width="match_parent"
-                        android:layout_height="220dp"
+                        android:layout_height="@dimen/scan_image_height"
                         android:layout_marginTop="12dp"
                         android:adjustViewBounds="true"
                         android:background="@drawable/mobile_camera_surface"
                         android:contentDescription="@string/annotated_scan"
-                        android:padding="10dp"
                         android:scaleType="fitCenter" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- Detected clothing card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -181,15 +283,17 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/detected_title"
-                        android:textColor="@color/brand_text"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
+                        android:tag="color_muted"
+                        android:text="DETECTED CLOTHING"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="@dimen/section_label_size"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.12" />
 
                     <com.google.android.material.chip.ChipGroup
                         android:id="@+id/detectionsGroup"
@@ -197,12 +301,13 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         app:chipSpacingHorizontal="8dp"
-                        app:chipSpacingVertical="8dp"
+                        app:chipSpacingVertical="6dp"
                         app:singleLine="false" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
 
+        <!-- ── RECOMMENDATIONS ─────────────────────────────────────── -->
         <LinearLayout
             android:id="@+id/recommendationsSection"
             android:layout_width="match_parent"
@@ -212,9 +317,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
+                android:layout_marginBottom="10dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="22dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -223,7 +328,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="@dimen/card_padding">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -235,29 +340,31 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/recommendations_title"
-                            android:textColor="@color/brand_text"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:tag="color_muted"
+                            android:text="STORE RECOMMENDATIONS"
+                            android:textColor="@color/brand_muted"
+                            android:textSize="@dimen/section_label_size"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.12" />
 
                         <ImageButton
                             android:id="@+id/recommendationsLeftButton"
-                            android:layout_width="38dp"
-                            android:layout_height="38dp"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
                             android:background="@drawable/mobile_icon_button"
                             android:contentDescription="@string/recommendations_left"
-                            android:padding="9dp"
+                            android:padding="8dp"
                             android:src="@android:drawable/ic_media_previous"
                             android:tint="@color/brand_text" />
 
                         <ImageButton
                             android:id="@+id/recommendationsRightButton"
-                            android:layout_width="38dp"
-                            android:layout_height="38dp"
-                            android:layout_marginStart="8dp"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:layout_marginStart="6dp"
                             android:background="@drawable/mobile_icon_button"
                             android:contentDescription="@string/recommendations_right"
-                            android:padding="9dp"
+                            android:padding="8dp"
                             android:src="@android:drawable/ic_media_next"
                             android:tint="@color/brand_text" />
                     </LinearLayout>
@@ -265,8 +372,8 @@
                     <HorizontalScrollView
                         android:id="@+id/recommendationsScroll"
                         android:layout_width="match_parent"
-                        android:layout_height="150dp"
-                        android:layout_marginTop="12dp"
+                        android:layout_height="@dimen/rec_scroll_height"
+                        android:layout_marginTop="10dp"
                         android:fillViewport="true"
                         android:overScrollMode="never"
                         android:scrollbars="none">
@@ -282,16 +389,17 @@
                         android:id="@+id/recommendationsEmptyText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="8dp"
                         android:background="@drawable/mobile_empty_state"
                         android:gravity="center"
-                        android:padding="18dp"
+                        android:padding="16dp"
                         android:text="@string/recommendations_empty"
                         android:textColor="@color/brand_muted" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
 
+        <!-- ── REFINE / CHAT SECTION ───────────────────────────────── -->
         <LinearLayout
             android:id="@+id/refineSection"
             android:layout_width="match_parent"
@@ -302,10 +410,9 @@
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:layout_marginBottom="14dp"
+                android:layout_marginBottom="12dp"
                 app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="24dp"
+                app:cardCornerRadius="@dimen/card_corner"
                 app:cardElevation="0dp"
                 app:strokeColor="@color/brand_border"
                 app:strokeWidth="1dp">
@@ -314,71 +421,113 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="@dimen/card_padding">
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/refine_title"
-                        android:textColor="@color/brand_text"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
+                        android:tag="color_muted"
+                        android:text="REFINE SEARCH"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="@dimen/section_label_size"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.12" />
 
-                    <Switch
-                        android:id="@+id/replaceVisionSwitch"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/replace_vision"
-                        android:textColor="@color/brand_text" />
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="6dp">
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        app:boxBackgroundColor="@color/brand_surface_soft"
-                        app:boxCornerRadiusBottomEnd="16dp"
-                        app:boxCornerRadiusBottomStart="16dp"
-                        app:boxCornerRadiusTopEnd="16dp"
-                        app:boxCornerRadiusTopStart="16dp"
-                        app:boxStrokeColor="@color/brand_border"
-                        app:hintTextColor="@color/brand_muted">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/chatInput"
-                            android:layout_width="match_parent"
+                        <TextView
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:hint="@string/chat_hint"
-                            android:inputType="textMultiLine"
-                            android:minLines="3"
+                            android:text="@string/chat_welcome_title"
                             android:textColor="@color/brand_text"
-                            android:textColorHint="@color/brand_muted" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                            android:textSize="15sp"
+                            android:textStyle="bold"
+                            android:gravity="center" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/sendChatButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:minHeight="50dp"
-                        android:text="@string/send_refinement"
-                        android:textColor="@color/white"
-                        app:backgroundTint="@color/brand_text"
-                        app:cornerRadius="16dp" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:tag="color_muted"
+                            android:text="@string/chat_welcome_sub"
+                            android:textColor="@color/brand_muted"
+                            android:textSize="12sp"
+                            android:gravity="center" />
+                    </LinearLayout>
 
                     <TextView
                         android:id="@+id/chatReplyText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="10dp"
                         android:background="@drawable/mobile_reply_surface"
                         android:padding="14dp"
                         android:text="@string/chat_empty"
                         android:textColor="@color/brand_text"
-                        android:textSize="14sp" />
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+
+                    <Switch
+                        android:id="@+id/replaceVisionSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/replace_vision"
+                        android:textColor="@color/brand_text" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/chatInputLayout"
+                            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            app:boxBackgroundColor="@color/brand_surface_soft"
+                            app:boxCornerRadiusBottomEnd="16dp"
+                            app:boxCornerRadiusBottomStart="16dp"
+                            app:boxCornerRadiusTopEnd="16dp"
+                            app:boxCornerRadiusTopStart="16dp"
+                            app:boxStrokeColor="@color/brand_border"
+                            app:hintTextColor="@color/brand_muted">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/chatInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/chat_input_hint"
+                                android:inputType="text"
+                                android:maxLines="1"
+                                android:imeOptions="actionSend"
+                                android:textColor="@color/brand_text"
+                                android:textColorHint="@color/brand_muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <ImageButton
+                            android:id="@+id/sendChatButton"
+                            android:layout_width="50dp"
+                            android:layout_height="50dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@drawable/mobile_send_button"
+                            android:contentDescription="@string/send_refinement"
+                            android:padding="14dp"
+                            android:src="@drawable/ic_send"
+                            android:tint="@color/white" />
+                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
+
     </LinearLayout>
 </ScrollView>

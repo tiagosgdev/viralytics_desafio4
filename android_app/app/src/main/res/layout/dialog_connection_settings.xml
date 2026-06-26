@@ -35,4 +35,38 @@
             android:textColor="@color/brand_text"
             android:textColorHint="@color/brand_muted" />
     </com.google.android.material.textfield.TextInputLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:text="DEVICE MODE (testing override)"
+        android:textColor="@color/brand_muted"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.10" />
+
+    <RadioGroup
+        android:id="@+id/deviceModeGroup"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp">
+
+        <RadioButton
+            android:id="@+id/modePhoneRadio"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Phone / Camera — takes photos, sends to tablet"
+            android:textColor="@color/brand_text"
+            android:textSize="13sp" />
+
+        <RadioButton
+            android:id="@+id/modeTabletRadio"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Tablet / Display — shows results from phone"
+            android:textColor="@color/brand_text"
+            android:textSize="13sp" />
+    </RadioGroup>
 </LinearLayout>

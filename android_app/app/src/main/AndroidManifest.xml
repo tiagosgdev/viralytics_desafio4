@@ -2,14 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="com.ubtrobot.permission.ROBOT" />
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-permission android:name="com.ubtechinc.cruzr.coreservices.permission.ACCESS_ROBOT_API" />
 
     <application
+        android:name=".ViralyticApp"
         android:allowBackup="true"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -17,21 +20,36 @@
         android:theme="@style/Theme.ViralyticsMobile"
         android:usesCleartextTraffic="true">
 
-        <uses-library android:name="com.ubtrobot.rosa" android:required="true" />
+        <uses-library android:name="com.ubtrobot.rosa" android:required="false" />
 
         <meta-data
             android:name="cruiser_appid"
             android:value="103" />
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".CameraActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
     </application>
 
 </manifest>

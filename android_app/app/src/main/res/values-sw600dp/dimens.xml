@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Large phones / small tablets (sw600dp) — portrait use -->
+<resources>
+    <dimen name="content_padding">20dp</dimen>
+    <dimen name="card_padding">20dp</dimen>
+    <dimen name="card_corner">24dp</dimen>
+    <dimen name="scan_image_height">260dp</dimen>
+    <dimen name="rec_scroll_height">240dp</dimen>
+    <dimen name="rec_card_width">210dp</dimen>
+    <dimen name="rec_card_image_height">130dp</dimen>
+    <dimen name="tab_button_height">48dp</dimen>
+    <dimen name="capture_button_min_height">54dp</dimen>
+    <dimen name="header_title_size">26sp</dimen>
+    <dimen name="section_label_size">11sp</dimen>
+</resources>

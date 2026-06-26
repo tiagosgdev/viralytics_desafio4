@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import httpx
 import numpy as np
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -133,9 +133,9 @@ rec_system = None
 robot_bridge = None
 _COORDS_FILE          = PROJECT_ROOT / "robotics" / "coordinates.json"
 _CATEGORY_LOCS_FILE   = PROJECT_ROOT / "robotics" / "category_locations.json"
-_ENTRANCE_LOCATION    = "entrance"   # must be surveyed; robot goes here on door trigger
-_GREETING_TEXT        = "Welcome! I'm Cruzr, your personal fashion assistant. Let me help you find the perfect outfit today."
-_GREETING_GESTURE     = "wave"
+_ENTRANCE_LOCATION    = "Entrance"   # must be surveyed; robot goes here on door trigger
+_GREETING_TEXT        = "Bem-vindo! Sou a ROSE, o seu assistente de moda pessoal. Aproxime-se e deixe-me ajudá-lo a encontrar o outfit perfeito!"
+_GREETING_GESTURE     = "raise"
 
 
 def _load_robot_coords() -> dict:
@@ -683,28 +683,13 @@ async def _run_multiagent_round(
         return None
 
 
-async def _detect_image_impl(
-    file: UploadFile,
+async def _detect_frame_impl(
+    frame,
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
+    run_body_analysis: bool = True,
 ) -> DetectionResponse:
-    """
-    Shared implementation for image/mobile scan uploads.
-
-    When `user_profile` is provided (logged-in user), it is:
-      1. Stored on the search session so every subsequent refinement query
-         is enriched with the user's style preferences.
-      2. Used to pre-filter recommendations toward the user's preferred
-         colors, styles, materials, seasons and occasions.
-    """
     persona = normalize_persona(persona)
-    contents = await file.read()
-    arr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
-    if frame is None:
-        raise HTTPException(status_code=400, detail="Could not decode image")
-
     active_detector = _resolve_detector(persona)
     result = active_detector.detect(frame)
     cats = list({
@@ -714,7 +699,7 @@ async def _detect_image_impl(
     body_analysis: dict | None = None
     body_annotated_frame: str | None = None
 
-    if pose_analyzer is not None and pose_analyzer.is_available():
+    if run_body_analysis and pose_analyzer is not None and pose_analyzer.is_available():
         try:
             body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy())
         except Exception as exc:
@@ -770,6 +755,33 @@ async def _detect_image_impl(
     )
 
 
+async def _detect_image_impl(
+    file: UploadFile,
+    persona: str = "cruella",
+    user_profile: Optional[dict] = None,
+) -> DetectionResponse:
+    contents = await file.read()
+    arr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Could not decode image")
+    return await _detect_frame_impl(frame, persona=persona, user_profile=user_profile)
+
+
+@app.post("/api/mobile/capture", response_model=DetectionResponse)
+async def mobile_capture(
+    persona: str = "cruella",
+    user_id: Optional[int] = Depends(get_optional_user_id),
+):
+    """Grab a frame from the PC-connected camera and run detection — no upload needed."""
+    active_camera = _resolve_camera(persona)
+    frame = active_camera.snapshot()
+    if frame is None:
+        raise HTTPException(status_code=503, detail="Camera not ready — no frames captured yet")
+    user_profile = await run_in_threadpool(_get_user_profile, user_id)
+    return await _detect_frame_impl(frame, persona=persona, user_profile=user_profile)
+
+
 @app.post("/api/detect/image", response_model=DetectionResponse)
 async def detect_image(
     persona: str = "cruella",
@@ -791,6 +803,7 @@ async def detect_image(
 
 @app.post("/api/mobile/scan", response_model=DetectionResponse)
 async def mobile_scan(
+    background_tasks: BackgroundTasks,
     persona: str = "cruella",
     file: UploadFile = File(...),
     user_id: Optional[int] = Depends(get_optional_user_id),
@@ -798,11 +811,17 @@ async def mobile_scan(
     """
     Mobile-friendly alias for image scan uploads from native clients.
     Supports the same user-profile personalisation as /api/detect/image.
+    After processing, publishes the result to MQTT so the tablet can display it.
+    The MQTT publish runs after the HTTP response is sent so it never delays the phone.
     """
+    from src.mqtt_scan import publish_scan_result
+
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
     if user_profile:
         print(f"👤  Personalising mobile scan for user_id={user_id}")
-    return await _detect_image_impl(file, persona=persona, user_profile=user_profile)
+    result = await _detect_image_impl(file, persona=persona, user_profile=user_profile, run_body_analysis=False)
+    background_tasks.add_task(publish_scan_result, result.dict(), persona)
+    return result
 
 
 # ── Conversation / chat endpoints ─────────────────────────────────────────────
@@ -1364,8 +1383,16 @@ async def robot_door_sensor(direction: str = "entering"):
             detail="direction must be 'entering' or 'leaving'",
         )
     if direction.lower() == "leaving":
-        print("🚪  ↳ leaving — ignored, no robot action")
-        return {"status": "ignored", "direction": "leaving", "reason": "person leaving — no action taken"}
+        if robot_bridge is None or not robot_bridge.connected:
+            print("🚪  ↳ leaving — robot offline, no action")
+            return {"status": "ignored", "direction": "leaving", "reason": "robot offline"}
+        print("🚪  ↳ leaving — robot farewell")
+        await run_in_threadpool(
+            robot_bridge.farewell,
+            "Até logo! Esperamos vê-lo em breve!",
+            "goodbye",
+        )
+        return {"status": "sent", "direction": "leaving", "sequence": ["speak", "gesture"]}
 
     print("🚪  ↳ entering — triggering robot greet")
     if robot_bridge is None or not robot_bridge.connected:

@@ -1,0 +1,51 @@
+/* ── Keyframes + animation helpers ───────────────────────────────────────── */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+
+@keyframes flash {
+  0%   { opacity: 0.94; }
+  100% { opacity: 0; }
+}
+
+@keyframes stagger-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rec-slide-in {
+  from { opacity: 0; transform: translateX(32px) scale(0.92); }
+  50%  { box-shadow: 0 0 0 rgba(159, 123, 73, 0.2); }
+  to   { opacity: 1; transform: translateX(0) scale(1); box-shadow: var(--shadow-sm); }
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes fadeOutScale {
+  to { opacity: 0; transform: scale(0.92); }
+}
+
+.stagger {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: stagger-in 0.36s forwards ease;
+}
+
+.card.rec-animate {
+  animation: rec-slide-in 0.48s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
