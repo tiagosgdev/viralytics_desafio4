@@ -83,9 +83,16 @@ app.add_middleware(
 # ── Serve frontend ──────────────────────────────────────────────────────────
 FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
 STATIC_DIR = FRONTEND_DIR / "static"
+JS_DIR = FRONTEND_DIR / "js"
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# index.html references its ES modules via absolute paths (/js/main.js), so the
+# js/ directory must be served too — otherwise the modules 404 and none of the
+# inline onclick handlers (selectPersona, startScan, …) are ever defined.
+if JS_DIR.exists():
+    app.mount("/js", StaticFiles(directory=str(JS_DIR)), name="js")
 
 # ── Shared singletons ───────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -759,13 +766,19 @@ async def _detect_image_impl(
     file: UploadFile,
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
+    run_body_analysis: bool = True,
 ) -> DetectionResponse:
     contents = await file.read()
     arr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if frame is None:
         raise HTTPException(status_code=400, detail="Could not decode image")
-    return await _detect_frame_impl(frame, persona=persona, user_profile=user_profile)
+    return await _detect_frame_impl(
+        frame,
+        persona=persona,
+        user_profile=user_profile,
+        run_body_analysis=run_body_analysis,
+    )
 
 
 @app.post("/api/mobile/capture", response_model=DetectionResponse)
