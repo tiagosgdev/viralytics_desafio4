@@ -106,8 +106,13 @@ it *before* launching (you cannot flip it at runtime):
 | `borda` *(default)* | Legacy retrieve → CFP → weighted Borda over a hard color/type-filtered candidate pool. On-theme but narrow; agent personalities barely change the result. |
 | `veto_batch` | Random broad-band batches → per-agent weighted veto (item eliminated when the vetoing agents' combined weight ≥ `VETO_TAU`) → tie-aware Borda. Far more variety and agent personalities matter, at some cost to on-theme relevance. |
 
+```powershell
+# PowerShell
+$env:SELECTION_MODE = "veto_batch"; python scripts/app/start_full_app.py --host 0.0.0.0 --port 8000
+```
+
 ```bash
-# run the normal app with the veto_batch recommender
+# bash / Linux / macOS
 SELECTION_MODE=veto_batch python scripts/app/start_full_app.py --host 0.0.0.0 --port 8000
 ```
 
