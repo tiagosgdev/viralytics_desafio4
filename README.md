@@ -72,6 +72,51 @@ Open `http://127.0.0.1:8000` in a browser.
 | `-SkipXmpp` | Skip XMPP Docker container (disables multi-agent recommendations) |
 | `-AutoPullModel` | Automatically pull required Ollama model if missing |
 
+**Linux / macOS (or any manual run):**
+
+The PowerShell script is just a Windows wrapper around a cross-platform Python
+launcher. Run that directly — it checks dependencies, starts Ollama and the XMPP
+broker if needed, then runs uvicorn in the foreground:
+
+```bash
+# from the repo root, with the venv active (or call .venv/bin/python explicitly)
+python scripts/app/start_full_app.py --host 0.0.0.0 --port 8000
+```
+
+The same flags as the table above are available in `--kebab-case`
+(`--reload`, `--skip-ollama`, `--skip-vector-check`, `--skip-xmpp`,
+`--auto-pull-model`, `--model-weights`, ...).
+
+If you prefer to start the pieces yourself:
+
+```bash
+docker compose up -d xmpp                              # 1. XMPP broker (Prosody)
+ollama serve                                           # 2. Ollama (if not already running)
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000    # 3. FastAPI app
+```
+
+### Selection mode — Borda vs. veto_batch
+
+The recommender's selection mechanism is chosen at startup via the
+`SELECTION_MODE` environment variable. It is read **once at import time**, so set
+it *before* launching (you cannot flip it at runtime):
+
+| `SELECTION_MODE` | Behaviour |
+|------------------|-----------|
+| `borda` *(default)* | Legacy retrieve → CFP → weighted Borda over a hard color/type-filtered candidate pool. On-theme but narrow; agent personalities barely change the result. |
+| `veto_batch` | Random broad-band batches → per-agent weighted veto (item eliminated when the vetoing agents' combined weight ≥ `VETO_TAU`) → tie-aware Borda. Far more variety and agent personalities matter, at some cost to on-theme relevance. |
+
+```bash
+# run the normal app with the veto_batch recommender
+SELECTION_MODE=veto_batch python scripts/app/start_full_app.py --host 0.0.0.0 --port 8000
+```
+
+Related tuning knobs (also import-time env vars): `VETO_TAU` (default `0.5`;
+*lower* → a smaller agent coalition can eliminate an item → more on-theme),
+`VETO_MODE` (`weighted` | `blackball`), `MAX_BATCHES` (default `5`), `BATCH_SIZE`.
+See [`docs/experiments/comparison_veto_vs_borda.md`](docs/experiments/comparison_veto_vs_borda.md)
+for the measured variety↔relevance trade-off between the two modes.
+
 **Android app:**
 
 1. Open `android_app/` in Android Studio
