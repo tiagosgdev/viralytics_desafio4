@@ -294,6 +294,7 @@ export function startScan() {
   state.currentDetectedCategories = [];
   state.currentRecommendations = [];
   state.chatHistory = [];
+  state.searchIntentMessages = [];
   state.chatConversationState = null;
   state.currentActiveFilters = {};
   state.hasShownInitialRecommendationsModal = false;
@@ -343,6 +344,7 @@ export function sendCmd(cmd) {
     state.currentDetectedCategories = [];
     state.currentRecommendations = [];
     state.chatHistory = [];
+    state.searchIntentMessages = [];
     state.chatConversationState = null;
     state.currentActiveFilters = {};
     state.hasShownInitialRecommendationsModal = false;

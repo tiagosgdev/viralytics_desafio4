@@ -94,6 +94,7 @@ class ChatResponse(BaseModel):
     state: Optional[Dict[str, Any]] = None
     strict: bool = False
     warning: Optional[str] = None
+    action: Optional[str] = None
 
 
 class LoginRequest(BaseModel):

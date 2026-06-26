@@ -1147,6 +1147,7 @@ async def chat(payload: ChatRequest):
         state=state,
         strict=strict_value,
         warning=warning,
+        action=conversation_result.get("action"),
     )
 
 

@@ -1,5 +1,6 @@
 import { state, SILENCE_TIMEOUT_MS, SPEECH_START_THRESHOLD, SPEECH_CONTINUE_THRESHOLD } from '../state.js';
 import { extractApiError } from '../utils.js';
+import { triggerAgentRecommendations } from '../api.js';
 import { extractIncludeFilters, renderRecs } from './recommendations.js';
 import { connectCamera, disconnectCamera } from './camera.js';
 import { showNotification } from '../notifications.js';
@@ -8,6 +9,14 @@ const chatMsgs = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const micBtn = document.getElementById('mic-btn');
 const micSelect = document.getElementById('mic-select');
+
+const CONFIRM_WORDS = new Set([
+  'yes', 'y', 'sure', 'ok', 'okay', 'go ahead', 'confirm', 'i confirm',
+  'correct', 'correcy', "that's right", 'thats right', 'that is perfect',
+  "that's perfect", 'perfect', 'looks good', 'looks perfect', 'sounds good',
+  'works for me', 'i like that', 'please proceed', 'proceed', 'approved',
+  'do it', 'run it', 'search now', 'run the search', 'why not',
+]);
 
 export function switchView(view) {
   state.currentView = view;
@@ -75,6 +84,68 @@ export function removeTypingIndicator() {
   if (el) el.remove();
 }
 
+function addAgentProgressBubble() {
+  const welcome = chatMsgs.querySelector('.chat-welcome');
+  if (welcome) welcome.remove();
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble bot agent-progress';
+  bubble.id = 'agent-progress-bubble';
+  bubble.innerHTML =
+    '<span class="typing-dots"><span></span><span></span><span></span></span> ✨ Styling your picks…';
+  chatMsgs.appendChild(bubble);
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+}
+
+function removeAgentProgressBubble() {
+  const el = document.getElementById('agent-progress-bubble');
+  if (el) el.remove();
+}
+
+function addAgentResultBubble(count) {
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble bot agent-result';
+  bubble.innerHTML =
+    '✨ ' + count + ' styled pick' + (count === 1 ? '' : 's') +
+    ' ready. <button type="button" class="chat-recs-link" onclick="openRecommendationDetail(0, true)">View &amp; rate</button>';
+  chatMsgs.appendChild(bubble);
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+}
+
+function accumulatedUserIntent() {
+  return state.searchIntentMessages
+    .map((s) => (s || '').trim())
+    .filter((s) => s && !CONFIRM_WORDS.has(s.toLowerCase()))
+    .slice(-6)
+    .join('. ');
+}
+
+async function maybeTriggerAgentRound(data) {
+  if (!data || data.action !== 'searched') return;
+  const source =
+    (data.active_filters && Object.keys(extractIncludeFilters(data.active_filters)).length)
+      ? data.active_filters
+      : (data.state && data.state.filters) || {};
+  const include = extractIncludeFilters(source);
+  const briefType = (Array.isArray(include.type) && include.type[0]) || '';
+  const briefColor = (Array.isArray(include.color) && include.color[0]) || '';
+  const detType = briefType || state.currentDetectedClothingType || '';
+  const detColor = briefColor || state.currentDetectedColor || '';
+  const detBody = state.currentDetectedBodyType || '';
+
+  const intent = accumulatedUserIntent();
+  state.searchIntentMessages = [];
+
+  addAgentProgressBubble();
+  const agentRecs = await triggerAgentRecommendations(detType, detBody, detColor, intent);
+  removeAgentProgressBubble();
+
+  if (Array.isArray(agentRecs) && agentRecs.length) {
+    const { openRecommendationDetail } = await import('./recommendations.js');
+    openRecommendationDetail(0, true);
+    addAgentResultBubble(agentRecs.length);
+  }
+}
+
 export function sendChat() {
   if (!state.selectedPersona) return;
   const text = chatInput.value.trim();
@@ -83,6 +154,7 @@ export function sendChat() {
   chatInput.value = '';
   addChatBubble(text, 'user');
   state.chatHistory.push({ role: 'user', content: text });
+  state.searchIntentMessages.push(text);
   addTypingIndicator();
 
   fetch('/api/chat', {
@@ -114,6 +186,7 @@ export function sendChat() {
       addChatBubble(reply, 'bot');
       state.chatHistory.push({ role: 'assistant', content: reply });
       if (Array.isArray(data.results) && data.results.length) renderRecs(data.results);
+      maybeTriggerAgentRound(data);
     })
     .catch((error) => {
       removeTypingIndicator();
@@ -273,6 +346,7 @@ export async function toggleVoice() {
             chatInput.value = text;
             addChatBubble(text, 'user');
             state.chatHistory.push({ role: 'user', content: text });
+            state.searchIntentMessages.push(text);
             chatInput.value = '';
             addTypingIndicator();
 
@@ -305,6 +379,7 @@ export async function toggleVoice() {
                 addChatBubble(reply, 'bot');
                 state.chatHistory.push({ role: 'assistant', content: reply });
                 if (Array.isArray(chatData.results) && chatData.results.length) renderRecs(chatData.results);
+                maybeTriggerAgentRound(chatData);
               })
               .catch((error) => {
                 removeTypingIndicator();

@@ -118,6 +118,7 @@ export function buildRecommendationThumb(rec, baseClass) {
 }
 
 export function renderRecs(recs, options = {}) {
+  state.currentRoundId = null;
   const autoOpen = Boolean(options.autoOpen);
   const recsEl = document.getElementById('recs');
   const recsScrollLeftBtn = document.getElementById('recs-scroll-left');
@@ -274,6 +275,7 @@ export function openRecommendationDetail(index, openModal = false) {
     (overviewRows
       ? '<div class="rec-detail-section"><div class="rec-detail-label">Store details</div><div class="rec-detail-grid">' + overviewRows + '</div></div>'
       : '') +
+    buildFeedbackRow(rec, index) +
     '<div class="rec-detail-section"><div class="rec-detail-label">Why it fits</div><p>' + esc(rec.reason || 'Recommended from your search context.') + '</p></div>' +
     '<div class="rec-detail-section"><div class="rec-detail-label">Description</div><p>' + esc(rec.description || 'No extra product description is available for this item yet.') + '</p></div>' +
     '<div class="rec-detail-grid">' +
@@ -286,6 +288,60 @@ export function openRecommendationDetail(index, openModal = false) {
   });
 
   if (openModal) toggleRecommendationsModal(true);
+}
+
+const FEEDBACK_EMOJIS = [
+  { e: '😣', label: 'Hate it' },
+  { e: '😕', label: 'Not for me' },
+  { e: '😐', label: 'Neutral' },
+  { e: '🙂', label: 'Like it' },
+  { e: '😍', label: 'Love it' },
+];
+
+function buildFeedbackRow(rec, index) {
+  if (!state.currentRoundId) return '';
+  const selected = Number(rec._rating || 0);
+  const buttons = FEEDBACK_EMOJIS.map((em, i) => {
+    const rating = i + 1;
+    const sel = selected === rating ? ' selected' : '';
+    return '<button type="button" class="emoji-btn' + sel + '" title="' + escAttr(em.label) +
+      '" aria-label="' + escAttr(em.label) + '" onclick="submitItemFeedback(' + index + ',' + rating + ')">' +
+      em.e + '</button>';
+  }).join('');
+  const status = rec._rating ? 'Thanks — feedback recorded.' : 'How happy are you with this pick?';
+  return '<div class="rec-detail-section rec-feedback">' +
+    '<div class="rec-detail-label">Rate this recommendation</div>' +
+    '<div class="emoji-row" id="rec-feedback-row">' + buttons + '</div>' +
+    '<div class="emoji-status" id="rec-feedback-status">' + esc(status) + '</div></div>';
+}
+
+export async function submitItemFeedback(index, rating) {
+  const rec = state.currentRecommendations[index];
+  if (!rec || !state.currentRoundId) return;
+  rec._rating = rating;
+  const row = document.getElementById('rec-feedback-row');
+  if (row) Array.from(row.querySelectorAll('.emoji-btn')).forEach((b, i) => b.classList.toggle('selected', i === rating - 1));
+  const statusEl = document.getElementById('rec-feedback-status');
+  if (statusEl) statusEl.textContent = 'Sending…';
+  try {
+    const resp = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        round_id: state.currentRoundId,
+        item_id: Number(rec.item_id || rec.id || 0),
+        size: rec.size || (rec.metadata && rec.metadata.size) || '',
+        rating: rating,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (statusEl) {
+      if (data && data.ok) statusEl.textContent = data.applied ? 'Thanks — the agent is learning from this 🎓' : 'Thanks! Neutral rating — no change.';
+      else statusEl.textContent = (data && data.reason) || 'Feedback saved.';
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Could not send feedback.';
+  }
 }
 
 export function scrollRecommendations(direction) {

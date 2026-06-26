@@ -57,7 +57,7 @@ export function initializeSearchSession(detectedCategories, recommendations) {
     .catch(() => {});
 }
 
-export async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor) {
+export async function triggerAgentRecommendations(detectedType, detectedBodyType, detectedColor, userAnswer = '') {
   const myGen = ++state.agentRoundGeneration;
   const agentEl = document.getElementById('agent-status');
 
@@ -73,6 +73,7 @@ export async function triggerAgentRecommendations(detectedType, detectedBodyType
     detected_body_type: detectedBodyType || '',
     detected_color: detectedColor || '',
     user_gender: genderEl ? genderEl.value || '' : '',
+    user_answer: userAnswer || '',
   };
 
   try {
@@ -82,11 +83,11 @@ export async function triggerAgentRecommendations(detectedType, detectedBodyType
       body: JSON.stringify(payload),
     });
 
-    if (myGen !== state.agentRoundGeneration) return;
+    if (myGen !== state.agentRoundGeneration) return null;
 
     if (resp.status === 503 || resp.status === 504) {
       if (agentEl) agentEl.hidden = true;
-      return;
+      return [];
     }
 
     if (!resp.ok) {
@@ -94,23 +95,26 @@ export async function triggerAgentRecommendations(detectedType, detectedBodyType
         agentEl.className = 'agent-status error';
         agentEl.textContent = '⚠ Agent round failed';
       }
-      return;
+      return null;
     }
 
     const data = await resp.json();
-    if (myGen !== state.agentRoundGeneration) return;
+    if (myGen !== state.agentRoundGeneration) return null;
 
     const { formatAgentRec, renderRecs } = await import('./ui/recommendations.js');
     const agentRecs = (data.recommendations || []).map(formatAgentRec);
     if (agentRecs.length) {
       renderRecs(agentRecs, { autoOpen: false });
       state.currentRecommendations = agentRecs;
+      state.currentRoundId = data.round_id || null;
     }
 
     if (agentEl) {
       agentEl.className = 'agent-status done';
       agentEl.textContent = '✓ Agent recommendations';
     }
+
+    return agentRecs;
   } catch (err) {
     if (myGen !== state.agentRoundGeneration) return;
     console.warn('Agent round error:', err);
@@ -118,5 +122,6 @@ export async function triggerAgentRecommendations(detectedType, detectedBodyType
       agentEl.className = 'agent-status error';
       agentEl.textContent = '⚠ Agent unavailable';
     }
+    return null;
   }
 }

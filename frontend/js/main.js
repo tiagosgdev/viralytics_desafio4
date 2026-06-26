@@ -97,6 +97,7 @@ function resetPersonaState() {
   state.currentDetectedCategories = [];
   state.currentRecommendations = [];
   state.chatHistory = [];
+  state.searchIntentMessages = [];
   state.chatConversationState = null;
   state.currentActiveFilters = {};
   state.hasShownInitialRecommendationsModal = false;
@@ -171,7 +172,7 @@ function returnToPersonaSelection() {
 import { handleLogin, handleRegister, toggleLoginModal, switchAuthForm } from './auth.js';
 import { startScan, sendCmd } from './ui/camera.js';
 import { sendChat, toggleVoice } from './ui/chat.js';
-import { openRecommendationDetail, scrollRecommendations } from './ui/recommendations.js';
+import { openRecommendationDetail, scrollRecommendations, submitItemFeedback } from './ui/recommendations.js';
 import { updateConf } from './api.js';
 
 window.selectPersona = selectPersona;
@@ -187,6 +188,7 @@ window.sendChat = sendChat;
 window.toggleVoice = toggleVoice;
 window.openRecommendationDetail = openRecommendationDetail;
 window.scrollRecommendations = scrollRecommendations;
+window.submitItemFeedback = submitItemFeedback;
 window.toggleRecommendationsModal = toggleRecommendationsModal;
 window.updateConf = updateConf;
 window.showNotification = showNotification;
