@@ -141,10 +141,14 @@ export function connectCamera() {
         scanAutoHint.style.display = 'none';
         setSt('idle', 'Camera ready');
       } else {
-        btnStart.hidden = true;
+        // Pose available → auto-scan on a full-body silhouette. But keep the
+        // manual Start button visible as a fallback: a webcam that only frames
+        // head-and-shoulders never satisfies the hip_width check, so auto-scan
+        // would otherwise never fire and the user has no way to start.
+        btnStart.hidden = false;
         scanAutoHint.style.display = '';
         personGuide.hidden = false;
-        setSt('idle', 'Stand in frame to begin');
+        setSt('idle', 'Stand in frame, or press Start');
       }
       return;
     }
