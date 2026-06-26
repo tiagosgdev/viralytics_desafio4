@@ -10,7 +10,9 @@
     "detected_color_conf": 0.9,
     "detected_type_conf": 0.85,
     "detected_body_type_conf": 0.7,
-    "hidden_goal": "Wants a bold, eye-catching statement dress for a friend's birthday party tonight. Cares a lot about colour and silhouette; dislikes anything dull, beige or office-like."
+    "hidden_goal": "Wants a bold, eye-catching statement dress for a friend's birthday party tonight. Cares a lot about colour and silhouette; dislikes anything dull, beige or office-like.",
+    "tastes": "Adores graphic and metallic statement pieces, flatly refuses anything floral or pastel, and is swayed by a fashionable brand name.",
+    "mood": "in a bad mood today, so you are a harsh, hard-to-please critic"
   },
   {
     "id": "office_daniel",
@@ -23,7 +25,9 @@
     "detected_color_conf": 0.8,
     "detected_type_conf": 0.9,
     "detected_body_type_conf": 0.6,
-    "hidden_goal": "Needs a smart, comfortable long-sleeve top for work meetings. Prefers muted colours (navy, gray, white) and a clean formal-ish look; price is not a big concern but he is quick to settle."
+    "hidden_goal": "Needs a smart, comfortable long-sleeve top for work meetings. Prefers muted colours (navy, gray, white) and a clean formal-ish look; price is not a big concern but he is quick to settle.",
+    "tastes": "Quietly loyal to a couple of trusted labels and put off by shiny synthetic fabrics, but he won't nitpick small styling details.",
+    "mood": "in a good mood today, so you are cheerful and generous"
   },
   {
     "id": "casual_sofia",
@@ -36,6 +40,8 @@
     "detected_color_conf": 0.75,
     "detected_type_conf": 0.8,
     "detected_body_type_conf": 0.65,
-    "hidden_goal": "Looking for everyday casual trousers that flatter her shape and pair with most tops. Values fit and comfort over trends; happy with classic colours like blue, black or olive."
+    "hidden_goal": "Looking for everyday casual trousers that flatter her shape and pair with most tops. Values fit and comfort over trends; happy with classic colours like blue, black or olive.",
+    "tastes": "Gravitates to soft natural fabrics like cotton and linen, mildly dislikes prominent logos, and balks at anything priced much above $80.",
+    "mood": "in a neutral mood"
   }
 ]

@@ -46,11 +46,16 @@ class ClothingScoreBehaviour(CyclicBehaviour):
             lambda: score_fn(candidates_info, context, weights_result, params),
         )
 
+        # Derive the veto set from the existing scores (default -1.0 vetoes nothing).
+        veto_threshold = float(params.get("veto_threshold", -1.0))
+        vetoes = [k for k, v in scores.items() if v < veto_threshold]
+
         propose = make_propose(
             to_jid   = str(msg.sender),
             conv_id  = conv_id,
             agent_id = "clothing",
             scores   = scores,
+            vetoes   = vetoes,
         )
         await self.send(propose)
         # Write-only per-agent memory (course requirement; never read for
