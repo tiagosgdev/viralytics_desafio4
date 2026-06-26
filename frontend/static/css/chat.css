@@ -204,3 +204,44 @@ body[data-persona='cruella'] .mic-btn {
   padding: 0.75rem 0.9rem;
   color: var(--muted);
 }
+
+/* ========== AGENT ROUND: progress + result bubbles ========== */
+
+.chat-bubble.agent-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.chat-recs-link {
+  flex: none;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.5rem 0.9rem;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.chat-recs-link:hover {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.chat-recs-link:active {
+  transform: translateY(0);
+}
+
+.chat-bubble.agent-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  opacity: 0.85;
+}
