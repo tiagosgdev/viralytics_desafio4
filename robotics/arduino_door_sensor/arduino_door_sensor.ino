@@ -1,33 +1,38 @@
 #include <WiFi.h>
+#include <WiFiClientSecure.h>  // HTTPS (the ngrok tunnel is TLS)
 #include <HTTPClient.h>
-#include <PubSubClient.h>
+#include <esp_system.h>        // esp_reset_reason()
+#include <WiFiManager.h>   // tzapu/WiFiManager  (install via Library Manager)
 #include <HCSR04.h>
 
 // ---------------------------------------------------------------------------
-// Wireless config (ESP32-S3). Fill these in for your network/backend.
+// Networking (ESP32-S3, runs off a power bank).
+//
+// WiFi: no credentials are hard-coded. On first boot (or when GPIO0/BOOT is held
+// at power-up) the sensor opens a captive-portal AP named below: join it with a
+// phone and pick the venue WiFi. Saved to flash and reused on every power cycle,
+// so re-flashing is never needed to change network.
+//
+// API: reached through an ngrok tunnel, so the URL is FIXED and independent of
+// which laptop/IP runs the backend. Whatever machine runs the API + the tunnel
+// (`ngrok http --domain=<your-domain> 8000`) is reachable at the same URL. The
+// sensor and laptop only each need internet — they need NOT be on the same WiFi.
+//
+// All the sensor does is POST the door event to the API; the SERVER decides what
+// the robot does:
+//   direction=entering -> navigate to entrance + greet
+//   direction=leaving  -> ignored by the server (still sent)
 // ---------------------------------------------------------------------------
-const char *WIFI_SSID = "iPhone de Filipe";
-const char *WIFI_PASS = "Batatinha123";
+const char *AP_NAME = "DoorSensorSetup";          // captive-portal SSID
 
-// Backend base URL + door route. The event is sent as a POST to
-// /api/robot/sensor/door?direction=entering|leaving (direction is a query param;
-// the endpoint ignores the request body). Set API_BASE to the PC's IP on the
-// SAME network as the ESP32 (on an iPhone hotspot this is usually 172.20.10.x).
-const char *API_BASE = "http://172.20.10.3:8000";
+// Reserved ngrok static domain (free tier, permanent until deleted in the dashboard).
+// Run on the laptop:  ngrok http --url=https://unaltering-unabjectly-micha.ngrok-free.dev 8000
+const char *API_HOST = "unaltering-unabjectly-micha.ngrok-free.dev";
 const char *DOOR_PATH = "/api/robot/sensor/door";
-const char *API_TOKEN = "";  // optional Bearer token; leave "" to disable
+const char *API_TOKEN = "";                        // optional Bearer token; "" disables
 
-// MQTT broker (robot commands). Set ENABLE_MQTT to false to skip robot control.
-const bool ENABLE_MQTT = true;
-const char *MQTT_HOST = "192.168.1.80";
-const int MQTT_PORT = 1883;
-const char *MQTT_TOPIC = "cruzr/commands";
-const char *MQTT_CLIENT_ID = "door_sensor_esp32";
-
-// Texts spoken by the robot (mirrors the bridge defaults).
-const char *WELCOME_TEXT = "Bem-vindo. Espero que tenha uma excelente visita.";
-const char *GOODBYE_TEXT = "Obrigado pela visita. Ate breve.";
-const char *ALERT_TEXT = "Alerta. Movimento suspeito detectado.";
+const byte PORTAL_PIN = 0;                          // GPIO0/BOOT: hold LOW at power-up to force portal
+const unsigned long PORTAL_TIMEOUT_S = 180UL;      // don't sit in AP forever in the field
 
 // ---------------------------------------------------------------------------
 // Sensor config
@@ -52,9 +57,8 @@ HCSR04 sensorB(TRIG_B, ECHO_B);
 float distChaoA = 0.0;
 float distChaoB = 0.0;
 
-WiFiClient httpWifiClient;
-WiFiClient mqttWifiClient;
-PubSubClient mqttClient(mqttWifiClient);
+// A fresh WiFiClientSecure is created per POST (heap is plentiful, ~200 KB), which
+// is more reliable than reusing one TLS context across requests.
 
 enum State {
   WAITING,
@@ -96,88 +100,104 @@ float readStableDistanceCm(HCSR04 &sensor) {
 // ---------------------------------------------------------------------------
 // Connectivity helpers
 // ---------------------------------------------------------------------------
-void ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
+
+// First-boot / forced-portal WiFi setup. Auto-connects to the last saved network;
+// if none is saved (or BOOT is held), opens the captive portal so a phone can pick
+// the venue WiFi. Credentials persist in flash across power cycles. The API URL is
+// fixed in code (ngrok), so there is nothing else to configure here.
+void setupWifi() {
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(PORTAL_TIMEOUT_S);
+
+  pinMode(PORTAL_PIN, INPUT_PULLUP);
+  bool forcePortal = (digitalRead(PORTAL_PIN) == LOW);
+
+  bool connected;
+  if (forcePortal) {
+    Serial.println("{\"status\":\"portal_forced\"}");
+    connected = wm.startConfigPortal(AP_NAME);
+  } else {
+    connected = wm.autoConnect(AP_NAME);  // tries saved creds, else opens portal
   }
 
-  Serial.println("{\"status\":\"wifi_connecting\"}");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000UL) {
-    delay(250);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
+  if (connected) {
+    // Keep the radio fully on. Modem sleep (the default) powers the radio down
+    // between beacons and intermittently breaks the multi-round-trip TLS handshake
+    // — the classic "POST works only sometimes" symptom.
+    WiFi.setSleep(false);
     Serial.print("{\"status\":\"wifi_connected\",\"ip\":\"");
     Serial.print(WiFi.localIP());
+    Serial.print("\",\"api_host\":\"");
+    Serial.print(API_HOST);
     Serial.println("\"}");
   } else {
     Serial.println("{\"status\":\"wifi_failed\"}");
   }
 }
 
-void ensureMqtt() {
-  if (!ENABLE_MQTT || WiFi.status() != WL_CONNECTED) {
-    return;
-  }
-  if (mqttClient.connected()) {
+// Lightweight reconnect for the main loop. Credentials saved by WiFiManager live
+// in flash, so WiFi.reconnect() re-uses them after a drop (e.g. power-bank blip).
+void ensureWifi() {
+  if (WiFi.status() == WL_CONNECTED) {
     return;
   }
 
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-  if (mqttClient.connect(MQTT_CLIENT_ID)) {
-    Serial.println("{\"status\":\"mqtt_connected\"}");
-  } else {
-    Serial.print("{\"status\":\"mqtt_failed\",\"rc\":");
-    Serial.print(mqttClient.state());
-    Serial.println("}");
+  Serial.println("{\"status\":\"wifi_reconnecting\"}");
+  WiFi.reconnect();
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000UL) {
+    delay(250);
   }
 }
 
 // Notify the backend via POST /api/robot/sensor/door?direction=entering|leaving.
-// The endpoint reads `direction` from the query string and ignores the body.
+// The endpoint reads `direction` from the query string and ignores the body, then
+// drives the robot itself (navigate + greet on entering; nothing on leaving).
 void postEvent(const char *tipo) {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
   const char *direction = (strcmp(tipo, "entrada") == 0) ? "entering" : "leaving";
-  String url = String(API_BASE) + DOOR_PATH + "?direction=" + direction;
+  String url = String("https://") + API_HOST + DOOR_PATH + "?direction=" + direction;
 
-  HTTPClient http;
-  http.begin(httpWifiClient, url);
-  if (strlen(API_TOKEN) > 0) {
-    http.addHeader("Authorization", String("Bearer ") + API_TOKEN);
+  // Retry only on connection-level failures (code <= 0, i.e. no HTTP response).
+  // Any real HTTP status (200/404/503) means the request was delivered — stop, so
+  // we never duplicate a delivered event.
+  int code = 0;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    WiFiClientSecure client;         // fresh TLS context each attempt
+    client.setInsecure();            // ngrok is TLS; skip cert validation
+    client.setHandshakeTimeout(15);  // seconds
+
+    HTTPClient http;
+    http.begin(client, url);
+    http.setConnectTimeout(15000);   // ms
+    http.setTimeout(15000);          // ms
+    // ngrok's free tier serves a browser-warning interstitial; this header skips it.
+    http.addHeader("ngrok-skip-browser-warning", "true");
+    if (strlen(API_TOKEN) > 0) {
+      http.addHeader("Authorization", String("Bearer ") + API_TOKEN);
+    }
+
+    code = http.POST("");  // no body; direction is in the query string
+    http.end();
+    client.stop();
+
+    Serial.print("{\"status\":\"posted\",\"direction\":\"");
+    Serial.print(direction);
+    Serial.print("\",\"attempt\":");
+    Serial.print(attempt);
+    Serial.print(",\"code\":");
+    Serial.print(code);
+    Serial.println("}");
+
+    if (code > 0) {
+      break;  // got an HTTP response (delivered) — done
+    }
+    delay(400);
   }
-
-  int code = http.POST("");  // no body; direction is in the query string
-  Serial.print("{\"status\":\"posted\",\"direction\":\"");
-  Serial.print(direction);
-  Serial.print("\",\"code\":");
-  Serial.print(code);
-  Serial.println("}");
-  http.end();
-}
-
-// Publish robot speak/sound commands over MQTT (replaces the bridge robot logic).
-void publishRobotCommands(const char *tipo, bool alerta) {
-  if (!ENABLE_MQTT || !mqttClient.connected()) {
-    return;
-  }
-
-  if (alerta) {
-    mqttClient.publish(MQTT_TOPIC, "{\"action\":\"sound\",\"name\":\"alert\"}");
-    String msg = String("{\"action\":\"speak\",\"text\":\"") + ALERT_TEXT + "\"}";
-    mqttClient.publish(MQTT_TOPIC, msg.c_str());
-    return;
-  }
-
-  const char *text = (strcmp(tipo, "entrada") == 0) ? WELCOME_TEXT : GOODBYE_TEXT;
-  String msg = String("{\"action\":\"speak\",\"text\":\"") + text + "\"}";
-  mqttClient.publish(MQTT_TOPIC, msg.c_str());
 }
 
 void printStatus(const char *message) {
@@ -198,10 +218,10 @@ void printDebugDistances(float distA, float distB, float heightA, float heightB)
   Serial.println("}");
 }
 
-// Build the event JSON, log it to Serial, POST it, and command the robot.
+// Log the event JSON to Serial (diagnostics) and POST it to the door endpoint.
+// Both enter and leave are always sent. The "run" speed (alerta) is still
+// computed and logged for later use, but it no longer suppresses a real crossing.
 void reportEvent(const char *tipo, float altura, float velocidade, bool alerta) {
-  const char *robotFala = (strcmp(tipo, "entrada") == 0) ? WELCOME_TEXT : GOODBYE_TEXT;
-
   String json = "{\"tipo\":\"";
   json += tipo;
   json += "\",\"altura\":";
@@ -212,17 +232,10 @@ void reportEvent(const char *tipo, float altura, float velocidade, bool alerta) 
   json += (alerta ? "true" : "false");
   json += ",\"ts\":";
   json += String(millis());
-  json += ",\"robot_fala\":\"";
-  json += robotFala;
-  json += "\"";
-  if (alerta) {
-    json += ",\"robot_alerta_som\":true";
-  }
   json += "}";
 
   Serial.println(json);
   postEvent(tipo);
-  publishRobotCommands(tipo, alerta);
 }
 
 bool personDetected(float floorDistance, float currentDistance, float &heightCm) {
@@ -239,8 +252,15 @@ void setup() {
   Serial.begin(9600);
   delay(1000);
 
-  ensureWifi();
-  ensureMqtt();
+  // Reset reason tells brownout (power) vs panic (crash) vs poweron apart.
+  // 1=POWERON 3=SW 4=PANIC 7=TASK_WDT 8=INT_WDT 9=BROWNOUT (esp_reset_reason_t)
+  Serial.print("{\"status\":\"boot\",\"reset_reason\":");
+  Serial.print((int)esp_reset_reason());
+  Serial.print(",\"free_heap\":");
+  Serial.print(ESP.getFreeHeap());
+  Serial.println("}");
+
+  setupWifi();
 
   printStatus("calibrar_sem_pessoas");
   distChaoA = readStableDistanceCm(sensorA);
@@ -255,10 +275,6 @@ void setup() {
 
 void loop() {
   ensureWifi();
-  ensureMqtt();
-  if (ENABLE_MQTT) {
-    mqttClient.loop();
-  }
 
   float distA = readDistanceCm(sensorA);
   delay(35);

@@ -1355,19 +1355,26 @@ async def robot_door_sensor(direction: str = "entering"):
 
     Requires an 'entrance' location to be surveyed in coordinates.json.
     """
+    print(f"🚪  Door sensor event received: direction={direction!r}")
+
     if direction.lower() not in ("entering", "leaving"):
+        print(f"🚪  ↳ rejected: invalid direction {direction!r} (400)")
         raise HTTPException(
             status_code=400,
             detail="direction must be 'entering' or 'leaving'",
         )
     if direction.lower() == "leaving":
+        print("🚪  ↳ leaving — ignored, no robot action")
         return {"status": "ignored", "direction": "leaving", "reason": "person leaving — no action taken"}
 
+    print("🚪  ↳ entering — triggering robot greet")
     if robot_bridge is None or not robot_bridge.connected:
+        print("🚪  ↳ robot bridge unavailable (503)")
         _robot_unavailable()
 
     coords = _load_robot_coords()
     if _ENTRANCE_LOCATION not in coords:
+        print(f"🚪  ↳ no '{_ENTRANCE_LOCATION}' location surveyed (404)")
         raise HTTPException(
             status_code=404,
             detail=f"Entrance position not surveyed yet. Run survey_tool.py and save a location named '{_ENTRANCE_LOCATION}'.",
@@ -1375,11 +1382,14 @@ async def robot_door_sensor(direction: str = "entering"):
 
     loc = coords[_ENTRANCE_LOCATION]
     x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+    print(f"🚪  ↳ navigating to entrance (x={x}, y={y}, theta={theta}) and greeting")
     ok = await run_in_threadpool(
         robot_bridge.greet, x, y, theta, _GREETING_TEXT, _GREETING_GESTURE
     )
     if not ok:
+        print("🚪  ↳ greet publish FAILED (500)")
         raise HTTPException(status_code=500, detail="Robot bridge failed to publish greet command.")
+    print("🚪  ↳ greet command published ✅")
     return {"status": "sent", "direction": "entering", "sequence": ["navigate_to_entrance", "lidar_detect_person", "speak", "gesture"]}
 
 

@@ -1,62 +1,56 @@
-# Plan: make `arduino_door_sensor.ino` network-portable & speak-only
+# Door sensor → API via ngrok (implemented & verified)
 
-> Status: **proposed — pending colleague confirmation before implementation.**
+> Status: **implemented and verified end-to-end (2026-06-26).** A door event reaches
+> the API over a fixed public URL regardless of network. The remaining 503 is the
+> robot/MQTT side, not the sensor.
 
-## Decisions baked into this plan (confirm with colleagues)
+## What the sensor does
 
-- **ESP32 talks only to the PC API over HTTP.** It does *not* touch MQTT. The API
-  relays speech to the robot over the public broker (`test.mosquitto.org`), so the
-  **robot can be on any network** — this is the key fix for "not sure about the
-  robot's network."
-- **Robot just speaks**, one line per event: entering / leaving / running(alert).
-  No navigation greet.
-- **Use the existing `POST /api/robot/speak?text=...`** endpoint
-  (`src/api/main.py:1386`). **No server or Android changes required.**
+- ESP32-S3 (2× HC-SR04, runs off a power bank) → **HTTP POST only**:
+  `POST https://<ngrok-domain>/api/robot/sensor/door?direction=entering|leaving`
+  (`src/api/main.py:1339`; `direction` is a query param, body ignored).
+- It does **not** touch MQTT or the robot directly. The **server** decides the robot's
+  behaviour and spoken text (entering → navigate + greet; leaving → server ignores it).
+- **enter and leave are always sent.** The "run" speed flag (`alerta`, a fast crossing)
+  is still computed and logged to Serial, but no longer suppresses a crossing.
 
-## Why the current firmware is broken (recap)
+## Networking — why ngrok
 
-1. It publishes MQTT to `192.168.1.80:1883`, but the robot subscribes to
-   `test.mosquitto.org:8883` (TLS) — so every MQTT message is dropped.
-   (Robot: `android_app/.../MainActivity.kt:774`; PC bridge: `robotics/cruzr_bridge.py:45`.)
-2. `API_BASE` (hotspot subnet) and `MQTT_HOST` (different LAN) are inconsistent.
-3. It double-acts on entry (API greet *and* a direct speak).
-4. `{"action":"sound"}` has no handler in the Android app (`MainActivity.kt:810`).
+The hard constraint: the laptop is a **Wi-Fi client** (no Ethernet), so its IP is
+DHCP-assigned and changes; and a single Wi-Fi radio can't be client + access point, so
+the laptop can't be a fixed-IP hotspot. Options like a hardcoded LAN IP, laptop-as-AP,
+or mDNS were all rejected (unstable, needs extra hardware, or machine-dependent).
 
-## Firmware changes
+**ngrok** gives a fixed public URL that is independent of laptop, IP and network — the
+sensor and laptop only each need internet, and need not be on the same Wi-Fi. Whichever
+laptop runs the API + tunnel (with the account's authtoken) is reachable at the same URL.
 
-1. **WiFi without re-flashing → WiFiManager (`tzapu/WiFiManager`).**
-   - Auto-connects to the last saved network; if absent, opens a `DoorSensorSetup`
-     AP → join with phone → pick network. Saved to flash, survives power cycles.
-     Works on powerbank.
-   - To force the portal while the old network is still in range: hold BOOT (GPIO0)
-     at power-up.
-   - New library dependency to install in Arduino IDE.
-2. **API URL also configurable in the same portal**, persisted via `Preferences`
-   (NVS). Fixes the hotspot-IP-changes-every-session problem without re-flashing.
-   (No new lib — `Preferences` is built into the ESP32 core.)
-3. **Remove all MQTT** (`PubSubClient`, broker config, `ensureMqtt`,
-   `publishRobotCommands`).
-4. **Replace it with one HTTP call**: `sendSpeak(text)` →
-   `POST {apiBase}/api/robot/speak?text=<url-encoded>`. Add a small `urlEncode()`
-   for spaces/accents in the Portuguese text.
-5. **`reportEvent`** picks the line — alert → `ALERT_TEXT`, else entry →
-   `WELCOME_TEXT`, exit → `GOODBYE_TEXT` — logs the JSON to Serial (unchanged),
-   then calls `sendSpeak`.
-6. **Sensor logic (state machine, calibration, detection) stays exactly as-is.**
+- **Reserved free static domain** (free tier includes one; permanent until deleted):
+  `unaltering-unabjectly-micha.ngrok-free.dev`, hardcoded as `API_HOST` in the sketch.
+- Firmware uses **`WiFiClientSecure` + `setInsecure()`** (the tunnel is TLS) and sends
+  `ngrok-skip-browser-warning: true` (skips the free-tier interstitial).
+- **WiFiManager** (`tzapu/WiFiManager`) captive portal handles **Wi-Fi selection only**
+  (`DoorSensorSetup` AP; hold GPIO0/BOOT at power-up to force it). The API URL is fixed
+  in code, so nothing else needs configuring.
 
-## Files touched
+## Run it (on the laptop, each demo)
 
-- Only `robotics/arduino_door_sensor/arduino_door_sensor.ino`. Nothing server-side.
+```
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000          # NOT 127.0.0.1
+ngrok http --url=https://unaltering-unabjectly-micha.ngrok-free.dev 8000
+```
+(Older ngrok: `--domain=` instead of `--url=`.) Sanity check: open the domain + `/docs`.
 
-## Open questions for colleagues
+## Dependencies (Arduino IDE)
 
-- **Who owns the message text?** This plan keeps the 3 strings in the firmware. If
-  their design has the *server* deciding messages from an event type, instead POST
-  an event (e.g. `{type, alerta}`) to one of their endpoints and let it pick the
-  text — a one-function swap, isolated in `sendSpeak`/`reportEvent`.
-- **Is `/api/robot/speak` the intended entry point**, or do they already have a
-  dedicated door/sensor event route they want used? (The existing
-  `/api/robot/sensor/door` does a *navigate-to-entrance greet*, not speak-only — so
-  it doesn't fit "just speak.")
-- **Does the PC API have reliable internet** at the venue (needed to reach
-  `test.mosquitto.org`)?
+- `tzapu/WiFiManager` (Library Manager). `WiFiClientSecure`/`HTTPClient`/`WiFi` ship with
+  the ESP32 core. `PubSubClient`/MQTT are no longer used.
+- If the TLS build overflows flash: **Tools → Partition Scheme → Minimal SPIFFS (large APP)**.
+
+## Remaining (robot side, not the sensor)
+
+- The endpoint returns **503** until `robot_bridge` is connected
+  (`CruzrBridge` → `test.mosquitto.org:8883` TLS, 8s window at API startup,
+  `src/api/main.py:410`). Restart the API and look for `🤖  Cruzr robot bridge connected`.
+- For an actual greet: the CRUZR Android app must be subscribed to `cruzr/commands` on
+  the same broker, and an `entrance` location must be surveyed in `coordinates.json`.
