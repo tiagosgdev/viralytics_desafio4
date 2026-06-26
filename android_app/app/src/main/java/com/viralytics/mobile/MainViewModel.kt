@@ -79,8 +79,8 @@ class MainViewModel : ViewModel() {
                         annotatedFrameBase64 = result.annotatedFrameBase64,
                     )
                     _events.value = UiEvent.SetStatus("Scan complete.")
-                    startSession(baseUrl, persona, result.detections, result.recommendations)
-                    fetchAgentRecommendations(baseUrl, result.detections.firstOrNull() ?: "")
+                    viewModelScope.launch { startSession(baseUrl, persona, result.detections, result.recommendations) }
+                    viewModelScope.launch { fetchAgentRecommendations(baseUrl, result.detections.firstOrNull() ?: "") }
                 }
                 .onFailure { err ->
                     _events.value = UiEvent.ScanError(err.message ?: "Unknown scan error")

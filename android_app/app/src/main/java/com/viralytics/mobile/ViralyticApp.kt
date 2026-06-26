@@ -17,6 +17,10 @@ import com.ubtrobot.Robot
 class ViralyticApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        Robot.initialize(this)
+        try {
+            Robot.initialize(this)
+        } catch (_: Throwable) {
+            // Not a CRUZR robot — SDK not available at runtime on regular phones
+        }
     }
 }

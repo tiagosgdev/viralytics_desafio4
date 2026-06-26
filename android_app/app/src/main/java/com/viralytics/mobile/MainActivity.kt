@@ -61,7 +61,7 @@ import com.ubtrobot.sensor.SensorDevice
 import org.eclipse.paho.client.mqttv3.MqttClient
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
-import org.eclipse.paho.client.mqttv3.MqttCallback
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 
@@ -109,6 +109,18 @@ class MainActivity : AppCompatActivity() {
     // MQTT client — connects to test.mosquitto.org on a background thread
     private var mqttClient: MqttClient? = null
 
+    // Fallback reconnect: if paho's isAutomaticReconnect silently fails (known Android/TLS issue),
+    // this fires 15 s after connectionLost and fully restarts the MQTT stack.
+    private val mqttReconnectHandler = Handler(Looper.getMainLooper())
+    private val mqttReconnectRunnable = Runnable {
+        if (mqttClient?.isConnected == true) return@Runnable
+        Thread {
+            try { mqttClient?.close() } catch (_: Exception) {}
+            mqttClient = null
+            startMqttListener()
+        }.start()
+    }
+
     // UBTech SDK hardware managers — obtained from Robot singleton after Robot.initialize()
     private var navigationManager: NavigationManager? = null
     private var speechManager: SpeechManager? = null
@@ -133,8 +145,8 @@ class MainActivity : AppCompatActivity() {
     private var entranceCoordsSet = false
     private val sessionHandler = Handler(Looper.getMainLooper())
     private val sessionTimeoutRunnable = Runnable { endCustomerSession("timeout") }
-    private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L  // 3 minutes — customer greeted but not interacting
-    private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L       // 25 seconds — nobody showed up at entrance
+    private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L   // 3 minutes
+    private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L      // 25 seconds — nobody showed up at entrance
     private val lidarWaitHandler = Handler(Looper.getMainLooper())
     private val lidarWaitTimeoutRunnable = Runnable {
         if (isAtEntrance) {
@@ -270,7 +282,7 @@ class MainActivity : AppCompatActivity() {
 
         return try {
             if (Robot.globalContext() != null) AppMode.TABLET else AppMode.PHONE_CAMERA
-        } catch (e: Exception) {
+        } catch (_: Throwable) {
             AppMode.PHONE_CAMERA
         }
     }
@@ -981,22 +993,42 @@ class MainActivity : AppCompatActivity() {
 
     private fun startMqttListener() {
         Thread {
-            val rawUrl = loadServerUrl().replace("http://", "").replace("https://", "")
-            val ipAddress = rawUrl.split(":")[0]
-            val brokerUri = "tcp://$ipAddress:1883"
-            val clientId = "viralytics_${if (appMode == AppMode.TABLET) "tablet" else "phone"}"
+            val brokerUri = "ssl://test.mosquitto.org:8883"
+            val clientId = "Cruzr_${(1000..9999).random()}"
 
             try {
                 mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
+
+                val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                })
+                val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
+                sslCtx.init(null, trustAll, java.security.SecureRandom())
+
                 val options = MqttConnectOptions().apply {
-                    isCleanSession = false
+                    isCleanSession = true
                     connectionTimeout = 10
                     isAutomaticReconnect = true
+                    socketFactory = sslCtx.socketFactory
                 }
 
-                mqttClient?.setCallback(object : MqttCallback {
+                mqttClient?.setCallback(object : MqttCallbackExtended {
+                    override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+                        if (!reconnect) return
+                        try {
+                            mqttClient?.subscribe("cruzr/persona", 1)
+                            mqttClient?.subscribe("cruzr/commands", 1)
+                            mqttClient?.subscribe("cruzr/scan_result", 1)
+                        } catch (_: Exception) {}
+                        mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
+                        runOnUiThread { setStatus("MQTT Reconnected to test.mosquitto.org") }
+                    }
+
                     override fun connectionLost(cause: Throwable?) {
                         runOnUiThread { setStatus("MQTT lost — reconnecting…") }
+                        mqttReconnectHandler.postDelayed(mqttReconnectRunnable, 15_000L)
                     }
 
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
@@ -1142,11 +1174,10 @@ class MainActivity : AppCompatActivity() {
 
                 mqttClient?.connect(options)
                 mqttClient?.subscribe("cruzr/persona", 1)
-                if (appMode == AppMode.TABLET) {
-                    mqttClient?.subscribe("cruzr/commands")
-                    mqttClient?.subscribe("cruzr/scan_result", 1)
-                }
-                runOnUiThread { setStatus("MQTT Connected to $ipAddress") }
+                mqttClient?.subscribe("cruzr/commands", 1)
+                mqttClient?.subscribe("cruzr/scan_result", 1)
+                mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
+                runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
 
             } catch (e: Exception) {
                 runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
@@ -1249,6 +1280,10 @@ class MainActivity : AppCompatActivity() {
                 .setRetryCount(NAV_RETRY_COUNT)
                 .setRetryInterval(NAV_RETRY_INTERVAL)
                 .build()
+
+            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            })
 
             Handler(Looper.getMainLooper()).postDelayed(Runnable {
                 nav.navigate(option)
@@ -1372,6 +1407,10 @@ class MainActivity : AppCompatActivity() {
                 android.util.Log.d("CruzrNav", "Navigating (trackMode=$TRACK_MODE) to ${targetMarker.title}")
                 runOnUiThread { setStatus("Navigating to $targetItem...") }
 
+                startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                })
+
                 Handler(Looper.getMainLooper()).postDelayed(Runnable {
                     nav.navigate(option)
                         .done {
@@ -1434,6 +1473,10 @@ class MainActivity : AppCompatActivity() {
                 .setRetryCount(NAV_RETRY_COUNT)
                 .setRetryInterval(NAV_RETRY_INTERVAL)
                 .build()
+
+            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            })
 
             Handler(Looper.getMainLooper()).postDelayed({
                 nav.navigate(option)
@@ -1601,6 +1644,7 @@ class MainActivity : AppCompatActivity() {
         isAtEntrance = false
         isServingCustomer = false
         sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
         stopHumanDetection()
         try { mqttClient?.disconnect() } catch (_: Exception) {}
         if (::textToSpeech.isInitialized) {
