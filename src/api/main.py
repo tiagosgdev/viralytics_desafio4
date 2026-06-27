@@ -140,7 +140,7 @@ rec_system = None
 robot_bridge = None
 _COORDS_FILE          = PROJECT_ROOT / "robotics" / "coordinates.json"
 _CATEGORY_LOCS_FILE   = PROJECT_ROOT / "robotics" / "category_locations.json"
-_ENTRANCE_LOCATION    = "PC Teste"   # must be surveyed; robot goes here on door trigger
+_ENTRANCE_LOCATION    = "Entrance"   # must be surveyed; robot goes here on door trigger
 _GREETING_TEXT        = "Bem-vindo! Sou a ROSE, o seu assistente de moda pessoal. Aproxime-se e deixe-me ajudá-lo a encontrar o outfit perfeito!"
 _GREETING_GESTURE     = "raise"
 
