@@ -21,6 +21,7 @@ def publish_scan_result(response: dict, persona: str) -> None:
             "detections": response.get("detections", []),
             "recommendations": response.get("recommendations", []),
             "annotated_frame": response.get("annotated_frame"),
+            "body_analysis": response.get("body_analysis"),
         })
 
         client_id = f"ViralyticsScan_{random.randint(1000, 9999)}"

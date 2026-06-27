@@ -843,7 +843,7 @@ async def mobile_scan(
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
     if user_profile:
         print(f"👤  Personalising mobile scan for user_id={user_id}")
-    result = await _detect_image_impl(file, persona=persona, user_profile=user_profile, run_body_analysis=False)
+    result = await _detect_image_impl(file, persona=persona, user_profile=user_profile, run_body_analysis=True)
     background_tasks.add_task(publish_scan_result, result.dict(), persona)
     return result
 
