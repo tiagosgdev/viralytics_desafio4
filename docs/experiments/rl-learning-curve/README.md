@@ -35,6 +35,47 @@ update per rollout.
 
 ---
 
+## Grid vs curve are SEPARATE experiments — do not merge them
+
+The grid runs (`EXPERIMENT_MODE=ofat` / `full`) and the learning curve
+(`EXPERIMENT_MODE=curve`) measure two different things and deliberately hold each
+other's variable fixed:
+
+- **Grid** measures **agent / personality impact** with the *system fixed*. The
+  1–5 review is purely the **eval metric** — it is **NOT** fed to RL
+  (`feed_review=False`). Personalities vary across combos; the policy does not adapt.
+- **Curve** measures **RL learning over time** across sequential **baseline**
+  episodes with the *factors fixed*. Each review **is** fed into PPO
+  (`feed_review=True`, `defer_consumption=True`). The policy adapts; personalities
+  do not vary.
+
+**Do not add a freeze flag and do not merge the two.** Feeding the review during a
+grid would let the policy chase satisfaction *while* personalities vary →
+confounds the agent effect with RL adaptation. Conversely, varying personalities
+during a curve would confound learning-over-time with factor change. Each mode
+keeps the other's variable constant precisely to avoid these confounds.
+
+### Caveat — a grid run still drifts the RL checkpoint
+
+Even with `feed_review=False`, a grid round still notifies the RL agent at round
+end, which calls `settle_round` (defined in `multi_agent/rl/store.py`, called from
+`multi_agent/agents/rl_agent.py`). `settle_round` applies the **pass-rate** reward
+and auto-consumes a rollout every `PPO_ROLLOUT_ROUNDS = 8` settled rounds →
+`rl_policy.learn(...)` → `torch.save(...)` (`multi_agent/rl/policy.py`), which
+**overwrites the checkpoint at `RL_CHECKPOINT_PATH`** (default `rl_ppo.pt`). So a
+grid run, despite not feeding the review, still mutates the production policy.
+
+There is **no in-code freeze**; the mitigation is **env-only**: point
+`RL_CHECKPOINT_PATH` at a throwaway file (e.g.
+`models/weights/agents/rl_ppo_grid_scratch.pt`) and/or set `RL_FRESH_START=1`, so a
+grid run never disturbs the production / curve checkpoint.
+
+> The auto-generated per-experiment READMEs under
+> `multi_agent/experiments/reports/exp_<id>/` are run artifacts — do not edit them
+> by hand.
+
+---
+
 ## Prerequisites (GPU box)
 
 1. **XMPP broker** (Prosody, used by the SPADE agents):

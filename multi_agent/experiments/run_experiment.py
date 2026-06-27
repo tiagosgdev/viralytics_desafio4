@@ -314,6 +314,10 @@ async def main() -> None:
     import os
     mode = (os.getenv("EXPERIMENT_MODE") or "ofat").strip().lower()
     repeats = int(os.getenv("EXPERIMENT_REPEATS") or "1")
+    # Episode ordering. "persona-major" (default) reproduces today's order/numbering
+    # exactly (customer → combo → repeat). "interleave" round-robins personas
+    # (combo → repeat → customer) to de-confound the persona-major loop.
+    order = (os.getenv("EXPERIMENT_ORDER") or "persona-major").strip().lower()
     feed_review = False
     if mode == "full":
         combos = list(full_factorial_combos())
@@ -366,33 +370,47 @@ async def main() -> None:
     total_episodes = len(spec.customer_ids) * len(spec.combos) * spec.repeats
     episode_no   = 0
     run_started  = time.monotonic()
+
+    # Flat episode plan. The default ("persona-major") order is customer → combo →
+    # repeat, byte-identical to the old nested loop (and its episode_no numbering).
+    # "interleave" round-robins personas (combo → repeat → customer) so consecutive
+    # episodes vary the persona rather than marching through one persona at a time.
+    if order == "interleave":
+        plan = [(cid, combo, r)
+                for combo in spec.combos
+                for r in range(spec.repeats)
+                for cid in spec.customer_ids]
+    else:
+        plan = [(cid, combo, r)
+                for cid in spec.customer_ids
+                for combo in spec.combos
+                for r in range(spec.repeats)]
+
     try:
-        for customer_id in spec.customer_ids:
+        for customer_id, combo, repeat_idx in plan:
             persona = persona_by_id[customer_id]
-            for combo in spec.combos:
-                snapshot = _apply_combo(combo)
-                try:
-                    for repeat_idx in range(spec.repeats):
-                        episode_no += 1
-                        print(
-                            f"[{_clock()}] ▸ ({episode_no}/{total_episodes}) "
-                            f"customer={customer_id}  combo={combo.name}  "
-                            f"repeat={repeat_idx} …",
-                            flush=True,
-                        )
-                        ep_started = time.monotonic()
-                        rating = await _run_episode(
-                            system, store, experiment_id,
-                            persona, combo, repeat_idx,
-                            feed_review = feed_review,
-                            episode_no  = episode_no,
-                        )
-                        print(
-                            f"[{_clock()}]    review = {rating}  "
-                            f"(took {_fmt_dur(time.monotonic() - ep_started)})"
-                        )
-                finally:
-                    _restore_strategies(snapshot)
+            episode_no += 1
+            snapshot = _apply_combo(combo)
+            try:
+                print(
+                    f"[{_clock()}] ▸ ({episode_no}/{total_episodes}) "
+                    f"customer={customer_id}  combo={combo.name}  "
+                    f"repeat={repeat_idx} …",
+                    flush=True,
+                )
+                ep_started = time.monotonic()
+                rating = await _run_episode(
+                    system, store, experiment_id,
+                    persona, combo, repeat_idx,
+                    feed_review = feed_review,
+                    episode_no  = episode_no,
+                )
+                print(
+                    f"[{_clock()}]    review = {rating}  "
+                    f"(took {_fmt_dur(time.monotonic() - ep_started)})"
+                )
+            finally:
+                _restore_strategies(snapshot)
 
         # ── Summary table ──────────────────────────────────────────────────────
         print("\n━━  Mean review per combo  ━━")

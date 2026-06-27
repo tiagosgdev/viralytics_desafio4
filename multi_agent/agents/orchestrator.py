@@ -44,6 +44,7 @@ from multi_agent.config import (
     SCORER_NAMES,
     SELECTION_MODE,
     STOCK_WEIGHT,
+    SURVIVOR_TARGET,
     TOP_K,
     VETO_MODE,
     VETO_TAU,
@@ -338,6 +339,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
         fallback_reject: dict[str, float] = {}
 
         last_weights: dict[str, float] = {}
+        stop_reason = "MAX_BATCHES"   # overwritten if we break early
 
         for batch_no in range(1, MAX_BATCHES + 1):
             candidates_info = await self._retrieve_candidates(
@@ -346,6 +348,7 @@ class OrchestratorBehaviour(CyclicBehaviour):
             )
             if not candidates_info:
                 logger.info(f"[{conv_id}] veto_batch: batch {batch_no} empty; stopping.")
+                stop_reason = "band-exhausted"
                 break
 
             for c in candidates_info:
@@ -411,7 +414,8 @@ class OrchestratorBehaviour(CyclicBehaviour):
                 f"[{conv_id}] veto_batch: {len(distinct_survivors)} distinct "
                 f"survivors after batch {batch_no}."
             )
-            if len(distinct_survivors) >= TOP_K:
+            if len(distinct_survivors) >= SURVIVOR_TARGET:
+                stop_reason = "target-met"
                 break
 
         if not last_weights:
@@ -456,9 +460,17 @@ class OrchestratorBehaviour(CyclicBehaviour):
         distinct_pool = {k.split(":", 1)[0] for k in pool_candidates}
         logger.info(
             f"[{conv_id}] veto_batch: round end — {len(distinct_pool)} distinct "
-            f"survivors in pool, {len(top_k_keys) - n_from_pool} filled, "
-            f"{len(top_k_keys)} final (mode={VETO_MODE}, τ={VETO_TAU})."
+            f"survivors in pool (target {SURVIVOR_TARGET}), "
+            f"batches {batch_no}/{MAX_BATCHES}, stop={stop_reason}, "
+            f"{len(top_k_keys) - n_from_pool} filled, {len(top_k_keys)} final "
+            f"(mode={VETO_MODE}, τ={VETO_TAU})."
         )
+        if len(distinct_pool) < SURVIVOR_TARGET:
+            logger.warning(
+                f"[{conv_id}] veto_batch: survivor pool {len(distinct_pool)} < "
+                f"target {SURVIVOR_TARGET} after {batch_no}/{MAX_BATCHES} batches "
+                f"(stop={stop_reason})."
+            )
 
         # Candidate dicts for whatever ended up in the top-k (survivors + fills).
         candidates_info = list({**fallback_candidates, **pool_candidates}.values())

@@ -113,6 +113,24 @@ slate and collapse diversity right back to the exp #7 failure.
 
 ---
 
+## Metric epochs — what is comparable to what
+
+The primary review metric is **not stable across the project's history**. Three
+changes each **reset** the 1–5 review scale, so runs on either side of them are not
+directly comparable:
+
+- `af3b41d` — shopper review rubric recalibration (partial credit + importance).
+- `bf26765` — persona-goal broadening (well-stocked, filterable attributes).
+- the upcoming **Workstream-A catalog repair** (clothing.db attribute coherence).
+
+Any run **after** one of these is **not comparable** to historical experiments
+**#5–#12**, which predate them. Each run already records `experiments.git_sha`
+(see `multi_agent/experiments/store.py`), so the **commit SHA is the natural epoch
+boundary** — compare only runs that share a metric epoch. No schema change is
+needed; the SHA already pins each run to its epoch.
+
+---
+
 ### Sources
 - [`exp_8/ANALYSIS.md`](exp_8/ANALYSIS.md) — veto_batch full write-up.
 - [`exp_9/ANALYSIS.md`](exp_9/ANALYSIS.md) — borda full write-up.

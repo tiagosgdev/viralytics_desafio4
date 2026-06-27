@@ -58,6 +58,12 @@ VETO_TAU          = float(os.environ.get("VETO_TAU", "0.5"))
 MAX_BATCHES       = int(os.environ.get("MAX_BATCHES", "5"))
 BATCH_SIZE        = int(os.environ.get("BATCH_SIZE", str(N_CANDIDATES)))
 
+# Survivor-pool target (veto_batch only): the veto loop keeps drawing batches
+# until at least SURVIVOR_TARGET DISTINCT items survive (or MAX_BATCHES is hit),
+# THEN ranks the accumulated pool with Borda -> TOP_K. Default == TOP_K, so an
+# unset knob reproduces today's selection behaviour.
+SURVIVOR_TARGET   = int(os.environ.get("SURVIVOR_TARGET", str(TOP_K)))
+
 # Fallback emphases (NOT a hard budget split any more). The four scorer weights
 # are conversation-driven: build_agent_weights normalises the four emphases
 # (color/type/bodyType/stock) returned by FeatureWeightAgent across the budget
