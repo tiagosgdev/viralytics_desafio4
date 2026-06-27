@@ -108,11 +108,25 @@ class RLRoundStore:
     # ── Writers ───────────────────────────────────────────────────────────────
 
     def record_transitions(self, conv_id: str, transitions: dict[str, Transition]) -> None:
-        """Cache the RL agent's transitions for a round (called at scoring time)."""
+        """Cache the RL agent's transitions for a round (called at scoring time).
+
+        In veto_batch mode the orchestrator broadcasts several CFP batches under
+        the SAME conv_id, so this is called once per batch. Merge each batch's
+        transitions into the round rather than overwriting it: the final top-K is
+        Borda-ranked from the pool accumulated across all batches, so an item from
+        an earlier batch must keep its transition for the pass-rate/emoji/review
+        reward to attach. Overwriting kept only the last batch, silently dropping
+        rewards (and learning signal) for earlier-batch items. In borda mode there
+        is a single CFP per round, so the first branch never fires → byte-identical.
+        """
         if not conv_id or not transitions:
             return
         with self._lock:
-            self._rounds[conv_id] = _RoundData(transitions=transitions)
+            rd = self._rounds.get(conv_id)
+            if rd is not None and not rd.settled:
+                rd.transitions.update(transitions)   # accumulate across batches
+            else:
+                self._rounds[conv_id] = _RoundData(transitions=dict(transitions))
             self._rounds.move_to_end(conv_id)
             while len(self._rounds) > RL_ROUND_CACHE:
                 old_id, _ = self._rounds.popitem(last=False)
