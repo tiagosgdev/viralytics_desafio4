@@ -3,9 +3,9 @@
 ## 1. System architecture
 
 The recommender is a **multi-agent system** built on SPADE (agents communicate over an XMPP message bus). A
-recommendation is produced as one **sealed-bid round**: an _Orchestrator_ coordinates a _FeatureWeightAgent_ and **five
-scoring agents** — `colour`, `body`, `clothing`, `stock`, and `RL` — each an expert on a single dimension of the
-garment.
+recommendation is produced as one **sealed-bid round** following a FIPA **Contract-Net** protocol
+(call-for-proposals → sealed bids): an _Orchestrator_ coordinates a _FeatureWeightAgent_ and **five scoring agents** —
+`colour`, `body`, `clothing`, `stock`, and `RL` — each an expert on a single dimension of the garment.
 
 ### 1.1 One recommendation round
 
@@ -57,6 +57,14 @@ output and the pool is capped at ~16 near-identical items. The veto design retri
 agent's dimension varies and its **veto directly decides which items survive** — making personalities consequential.
 With `τ = 0.5` and typical weights (~0.25 each), no single agent can eliminate an item; it takes a coalition of ≥2 — so
 `τ` acts as a **relevance↔variety dial**.
+
+### 1.3 Agent autonomy: personalities + per-agent memory
+
+Each scorer is an **autonomous agent**. Its scoring is a swappable **personality** — a pure _strategy_ resolved from a
+registry and selectable per run (e.g. colour `purist` / `harmonizer` / `adventurous`; each also sets its own veto
+strictness). And each agent keeps its **own write-only memory** (`multi_agent/memory/<agent>.db`): one row per round
+logging the context it saw and its top scores. The per-agent stores satisfy the multi-agent **autonomy** requirement —
+nothing reads them to make a decision; a shared `RoundHistory` remains the global round log.
 
 ## 2. Experimental setup
 
