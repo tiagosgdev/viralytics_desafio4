@@ -20,6 +20,7 @@ try:
         get_weighted_season_for_type,
         get_weighted_material_for_season,
         get_weighted_pattern_for_style,
+        get_weighted_style_for_type,
         get_valid_occasion_for_type,
         get_valid_insulation_for_season,
     )
@@ -41,6 +42,7 @@ except ModuleNotFoundError:
         get_weighted_season_for_type,
         get_weighted_material_for_season,
         get_weighted_pattern_for_style,
+        get_weighted_style_for_type,
         get_valid_occasion_for_type,
         get_valid_insulation_for_season,
     )
@@ -75,7 +77,8 @@ def generate_item():
     
     # ═══ STEP 3: Generate age groups ═══
     # Uses smart probability logic (50% single, 30% two groups, etc.)
-    age_group = generate_age_groups()
+    # Primary age is conditioned on type (coherence: no baby/senior dresses).
+    age_group = generate_age_groups(item_type)
     
     # ═══ STEP 4: Pick season (weighted by type) ═══
     # Constraint #3: Summer items more likely in summer, winter items in winter
@@ -86,10 +89,8 @@ def generate_item():
     material = get_weighted_material_for_season(season)
     
     # ═══ STEP 6: Pick style ═══
-    # Filter out age-inappropriate styles
-    valid_styles = [s for s in STATIC_GLOBAL_FIELDS["style"] 
-                    if filter_by_age_appropriateness("style", s, age_group)]
-    style = random.choice(valid_styles) if valid_styles else random.choice(STATIC_GLOBAL_FIELDS["style"])
+    # Type-conditioned + STYLE_WEIGHTS-weighted, restricted to age-valid styles.
+    style = get_weighted_style_for_type(item_type, age_group)
     
     # ═══ STEP 7: Pick pattern (weighted by style, filtered by age) ═══
     # Constraint #5: Patterns that fit the style (formal=plain/striped, bohemian=floral/tie-dye)

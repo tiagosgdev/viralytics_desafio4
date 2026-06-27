@@ -862,6 +862,49 @@ COLOR_WEIGHTS = {
     "multicolor": 0.02
 }
 
+# ═══ TYPE → AGE-GROUP AFFINITY (coherence) ═══
+# Primary-age affinity per type. Keys MUST be exact TYPE values; the inner
+# keys MUST be exact AGE_GROUP values. Weights are relative (normalized at
+# draw time). This replaces the old uniform primary-age pick so dresses /
+# work tops / outwear never get a baby/senior primary, while broad casual
+# basics keep a real spread (incl. kids).
+TYPE_AGE_GROUP_AFFINITY = {
+    # dresses: overwhelmingly young-adult/adult, a little teen; never baby/child/senior
+    "short_sleeve_dress": {"young adult": 5, "adult": 4, "teenager": 1.5},
+    "long_sleeve_dress":  {"young adult": 5, "adult": 4, "teenager": 1.5},
+    "vest_dress":         {"young adult": 5, "adult": 4, "teenager": 1.5},
+    "sling_dress":        {"young adult": 6, "adult": 3, "teenager": 1.5},  # party-ish, no senior
+    # smart/work tops & outwear: adult-centric
+    "long_sleeve_top":    {"adult": 5, "young adult": 4, "teenager": 1.5, "senior": 1.0},
+    "long_sleeve_outwear": {"adult": 5, "young adult": 4, "senior": 1.5, "teenager": 1.0},
+    "trousers":           {"adult": 5, "young adult": 4, "senior": 1.5, "teenager": 1.0},
+    # broadly-aged casual basics: keep a real spread (incl. kids) so not everything is adult
+    "short_sleeve_top":   {"young adult": 4, "adult": 4, "teenager": 2, "child": 1.5, "senior": 1, "baby": 0.5},
+    "vest":               {"young adult": 4, "adult": 3, "teenager": 2, "child": 1.5, "senior": 1},
+    "shorts":             {"young adult": 4, "adult": 3, "teenager": 2, "child": 2, "senior": 0.8, "baby": 0.5},
+    "skirt":              {"young adult": 5, "adult": 3, "teenager": 2, "child": 1, "senior": 0.8},
+}
+# Fallback (item_type=None) = the global age marginal (back-compat for other callers).
+DEFAULT_AGE_AFFINITY = {a: AGE_GROUP_WEIGHTS[a] for a in AGE_GROUP}
+
+# ═══ TYPE → STYLE BOOST (coherence) ═══
+# Multiplies STYLE_WEIGHTS so smart types lean smart/minimalist and dress
+# types lean elegant/streetwear. Keys MUST be exact TYPE values, inner keys
+# exact STYLE values (note "smart casual" has a space). Styles not listed for
+# a type keep boost 1.0, so every age-valid style stays possible (spread is
+# preserved for Workstream B's veto_batch).
+STYLE_TYPE_BOOST = {
+    "long_sleeve_top":     {"minimalist": 2.5, "smart casual": 2.5, "formal": 1.5, "casual": 1.2},
+    "long_sleeve_outwear": {"smart casual": 2, "minimalist": 2, "casual": 1.5, "sporty": 1.2},
+    "trousers":            {"smart casual": 2, "minimalist": 1.8, "casual": 1.8, "formal": 1.5},
+    "skirt":               {"casual": 1.8, "minimalist": 1.8, "elegant": 1.5, "vintage": 1.3},
+    "shorts":              {"casual": 2.5, "sporty": 2, "streetwear": 1.5},
+    "short_sleeve_dress":  {"elegant": 2.5, "streetwear": 1.8, "vintage": 1.5, "casual": 1.2},
+    "long_sleeve_dress":   {"elegant": 2.5, "vintage": 1.8, "formal": 1.5},
+    "vest_dress":          {"elegant": 2, "streetwear": 1.8, "casual": 1.5},
+    "sling_dress":         {"elegant": 2.5, "streetwear": 2, "vintage": 1.5},
+}
+
 # ═══ HELPER FUNCTIONS ═══
 
 import random
@@ -934,10 +977,10 @@ def generate_price_for_item(item_type, brand):
 
 # ═══ AGE GROUP HELPERS ═══
 
-def generate_age_groups():
+def generate_age_groups(item_type=None):
     """
     Generates a list of age groups for an item.
-    
+
     Rules:
     - Most items (50%) have 1 age group
     - 30% have 2 adjacent groups
@@ -947,7 +990,14 @@ def generate_age_groups():
     - 0.2% have all 6 groups (universal items)
     - Groups are ordered by popularity (primary first)
     - Only adjacent groups are combined (no baby+senior)
-    
+    - The PRIMARY group is drawn from TYPE_AGE_GROUP_AFFINITY[item_type]
+      (type-conditioned coherence); item_type=None falls back to the global
+      age marginal (DEFAULT_AGE_AFFINITY) for back-compat. Only the primary
+      selection changed; the multi-group count + adjacency logic is unchanged.
+
+    Args:
+        item_type (str | None): Item type used to condition the primary age.
+
     Returns:
         str: Comma-separated age groups (e.g., "adult, young adult")
     """
@@ -972,8 +1022,12 @@ def generate_age_groups():
     if num_groups == 6:
         return ", ".join(age_groups_list)
     
-    # Pick a primary age group (the most popular one)
-    primary_idx = random.randint(0, len(age_groups_list) - 1)
+    # Pick a primary age group from the type-conditioned affinity table.
+    affinity = TYPE_AGE_GROUP_AFFINITY.get(item_type, DEFAULT_AGE_AFFINITY)
+    primary_group = random.choices(
+        list(affinity.keys()), weights=list(affinity.values()), k=1
+    )[0]
+    primary_idx = age_groups_list.index(primary_group)
     selected_indices = [primary_idx]
     
     # Add adjacent groups if needed
@@ -1153,6 +1207,32 @@ def filter_by_age_appropriateness(field_name, value, age_groups_str):
     return True
 
 
+def get_weighted_style_for_type(item_type, age_groups_str):
+    """
+    Picks a style coherent with the item type, weighted by STYLE_WEIGHTS and a
+    per-type boost (STYLE_TYPE_BOOST), restricted to age-appropriate styles.
+
+    - Builds the set of age-valid styles (via filter_by_age_appropriateness).
+    - Weights each by STYLE_WEIGHTS[style] * STYLE_TYPE_BOOST[type][style]
+      (boost defaults to 1.0 when not listed, so spread is preserved).
+    - Falls back to all styles if age filtering leaves nothing.
+
+    Args:
+        item_type (str): The type of clothing item.
+        age_groups_str (str): Comma-separated age groups (primary first).
+
+    Returns:
+        str: A style appropriate for this type + age.
+    """
+    valid = [s for s in STYLE
+             if filter_by_age_appropriateness("style", s, age_groups_str)]
+    if not valid:
+        valid = list(STYLE)
+    boost = STYLE_TYPE_BOOST.get(item_type, {})
+    weights = [STYLE_WEIGHTS.get(s, 0.01) * boost.get(s, 1.0) for s in valid]
+    return random.choices(valid, weights=weights, k=1)[0]
+
+
 def get_weighted_season_for_type(item_type):
     """
     Picks a season with realistic weighting based on item type.
@@ -1188,7 +1268,7 @@ def get_weighted_material_for_season(season):
     - Summer: lightweight materials (cotton, linen, chiffon)
     - Winter: warm materials (wool, fleece, cashmere)
     - Spring/Autumn: transitional materials
-    - Preferred materials have 3x higher probability
+    - Preferred materials have 6x higher probability
     
     Args:
         season (str): The season
@@ -1197,10 +1277,10 @@ def get_weighted_material_for_season(season):
         str: A material appropriate for this season
     """
     preferred = SEASON_PREFERRED_MATERIALS.get(season, MATERIAL)
-    
-    # Create weighted list: preferred materials 3x more likely
+
+    # Create weighted list: preferred materials 6x more likely
     materials = list(MATERIAL)
-    weights = [3.0 if mat in preferred else 1.0 for mat in materials]
+    weights = [6.0 if mat in preferred else 1.0 for mat in materials]
     
     return random.choices(materials, weights=weights, k=1)[0]
 
@@ -1213,7 +1293,7 @@ def get_weighted_pattern_for_style(style):
     - Formal/elegant: clean patterns (plain, striped, floral)
     - Sporty: geometric, graphic, plain
     - Bohemian: floral, tie-dye, embroidered
-    - Preferred patterns have 3x higher probability
+    - Preferred patterns have 6x higher probability
     
     Args:
         style (str): The style of the item
@@ -1222,10 +1302,10 @@ def get_weighted_pattern_for_style(style):
         str: A pattern that fits this style
     """
     preferred = STYLE_PREFERRED_PATTERNS.get(style, PATTERN)
-    
-    # Create weighted list: preferred patterns 3x more likely
+
+    # Create weighted list: preferred patterns 6x more likely
     patterns = list(PATTERN)
-    weights = [3.0 if pat in preferred else 1.0 for pat in patterns]
+    weights = [6.0 if pat in preferred else 1.0 for pat in patterns]
     
     return random.choices(patterns, weights=weights, k=1)[0]
 
