@@ -15,6 +15,8 @@ data class ChatResult(
     val recommendations: List<MainActivity.RecommendationItem>,
     val conversationState: JSONObject?,
     val includeFilters: JSONObject?,
+    val action: String?,
+    val activeFilters: JSONObject?,
 )
 
 class ChatRepository(private val httpClient: OkHttpClient) {
@@ -69,6 +71,8 @@ class ChatRepository(private val httpClient: OkHttpClient) {
                         recommendations = parseRecommendations(json.optJSONArray("results")),
                         conversationState = json.optJSONObject("state"),
                         includeFilters = extractIncludeFilters(json),
+                        action = json.optString("action").takeIf { it.isNotBlank() },
+                        activeFilters = json.optJSONObject("active_filters"),
                     )
                 }
             }

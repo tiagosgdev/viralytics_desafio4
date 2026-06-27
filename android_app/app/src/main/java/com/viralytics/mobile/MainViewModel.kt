@@ -60,6 +60,7 @@ class MainViewModel : ViewModel() {
     private val chatRepository = ChatRepository(httpClient)
     private val sessionRepository = SessionRepository(httpClient)
     private val agentRepository = AgentRepository(httpClient)
+    private val feedbackRepository = FeedbackRepository(httpClient)
 
     private val _events = MutableLiveData<UiEvent>()
     val events: LiveData<UiEvent> = _events
@@ -74,6 +75,13 @@ class MainViewModel : ViewModel() {
     var currentConversationState: org.json.JSONObject? = null
     var currentIncludeFilters: org.json.JSONObject? = null
     val chatHistory = mutableListOf<HistoryEntry>()
+
+    // Agent-recommendation parity state
+    var detectedType: String = ""
+    var detectedColor: String = ""
+    var detectedBodyType: String = ""
+    var currentRoundId: String? = null
+    private val searchIntentMessages = mutableListOf<String>()
 
     fun uploadScan(bitmap: Bitmap, baseUrl: String, persona: String) {
         selectedPersona = persona
@@ -97,7 +105,9 @@ class MainViewModel : ViewModel() {
                     )
                     _events.value = UiEvent.SetStatus("Scan complete.")
                     viewModelScope.launch { startSession(baseUrl, persona, result.detections, result.recommendations) }
-                    viewModelScope.launch { fetchAgentRecommendations(baseUrl, result.detections.firstOrNull() ?: "") }
+                    // NOTE: agent recommendations are fetched on the TABLET (via the MQTT
+                    // injectScanResult path), not here on the camera-only phone — the phone
+                    // never displays recs, so fetching them here was wasted work.
                 }
                 .onFailure { err ->
                     _events.value = UiEvent.ScanError(err.message ?: "Unknown scan error")
@@ -118,16 +128,24 @@ class MainViewModel : ViewModel() {
             }
     }
 
-    private suspend fun fetchAgentRecommendations(baseUrl: String, detectedType: String) {
+    private suspend fun fetchAgentRecommendations(
+        baseUrl: String,
+        type: String,
+        color: String,
+        bodyType: String,
+        userAnswer: String,
+    ) {
         _events.value = UiEvent.SetStatus("Agents computing…")
         agentRepository.recommend(
             baseUrl = baseUrl,
-            detectedType = detectedType,
-            detectedBodyType = "",
-            detectedColor = "",
+            detectedType = type,
+            detectedBodyType = bodyType,
+            detectedColor = color,
+            userAnswer = userAnswer,
         )
-            .onSuccess { recs ->
+            .onSuccess { (roundId, recs) ->
                 if (recs.isNotEmpty()) {
+                    currentRoundId = roundId
                     currentRecommendations.clear()
                     currentRecommendations.addAll(recs)
                     _events.value = UiEvent.AgentRecsComplete(recs)
@@ -149,6 +167,7 @@ class MainViewModel : ViewModel() {
     ) {
         selectedPersona = persona
         chatHistory.add(HistoryEntry("user", message))
+        searchIntentMessages.add(message)
         viewModelScope.launch {
             _events.value = UiEvent.SetStatus("Sending refinement...")
             chatRepository.sendMessage(
@@ -177,6 +196,7 @@ class MainViewModel : ViewModel() {
                         recommendations = result.recommendations,
                     )
                     _events.value = UiEvent.SetStatus("Refinement complete.")
+                    maybeTriggerAgentRound(result, baseUrl)
                 }
                 .onFailure { err ->
                     if (chatHistory.isNotEmpty()) chatHistory.removeAt(chatHistory.lastIndex)
@@ -191,6 +211,9 @@ class MainViewModel : ViewModel() {
         detections: List<String>,
         recommendations: List<MainActivity.RecommendationItem>,
         annotatedFrameBase64: String?,
+        detectedColor: String,
+        detectedBodyType: String,
+        baseUrl: String?,
     ) {
         currentSessionId = sessionId
         currentConversationState = null
@@ -200,12 +223,33 @@ class MainViewModel : ViewModel() {
         detectedCategories.addAll(detections)
         currentRecommendations.clear()
         currentRecommendations.addAll(recommendations)
+
+        // Reset agent-rec parity state for the new scan.
+        this.detectedType = detections.firstOrNull().orEmpty()
+        this.detectedColor = detectedColor
+        this.detectedBodyType = detectedBodyType
+        currentRoundId = null
+        searchIntentMessages.clear()
+
         _events.postValue(UiEvent.ScanComplete(
             sessionId = sessionId,
             detections = detections,
             recommendations = recommendations,
             annotatedFrameBase64 = annotatedFrameBase64,
         ))
+
+        // Tablet fetches agent recommendations over HTTP using the scan signals.
+        if (baseUrl != null) {
+            viewModelScope.launch {
+                fetchAgentRecommendations(
+                    baseUrl = baseUrl,
+                    type = this@MainViewModel.detectedType,
+                    color = this@MainViewModel.detectedColor,
+                    bodyType = this@MainViewModel.detectedBodyType,
+                    userAnswer = "",
+                )
+            }
+        }
     }
 
     fun navigateByCategory(baseUrl: String, category: String) {
@@ -239,5 +283,92 @@ class MainViewModel : ViewModel() {
         chatHistory.clear()
         detectedCategories.clear()
         currentRecommendations.clear()
+        currentRoundId = null
+        searchIntentMessages.clear()
+    }
+
+    /**
+     * Escalates to a styled agent round when the chat reports a completed search.
+     * Mirrors web `maybeTriggerAgentRound` (frontend/js/ui/chat.js:122-147).
+     */
+    private suspend fun maybeTriggerAgentRound(result: ChatResult, baseUrl: String) {
+        if (result.action != "searched") return
+        val include = extractInclude(result.activeFilters)
+        val briefType = include?.optJSONArray("type")?.optString(0)?.takeIf { it.isNotBlank() }
+        val briefColor = include?.optJSONArray("color")?.optString(0)?.takeIf { it.isNotBlank() }
+        val type = briefType ?: detectedType
+        val color = briefColor ?: detectedColor
+        val intent = accumulatedUserIntent()
+        searchIntentMessages.clear()
+        fetchAgentRecommendations(
+            baseUrl = baseUrl,
+            type = type,
+            color = color,
+            bodyType = detectedBodyType,
+            userAnswer = intent,
+        )
+    }
+
+    /** Reads the nested `include` object from an `active_filters` payload. */
+    private fun extractInclude(src: JSONObject?): JSONObject? = src?.optJSONObject("include")
+
+    /**
+     * Joins recent non-confirmation user messages into a single intent string.
+     * Mirrors web `accumulatedUserIntent` (frontend/js/ui/chat.js:114-120).
+     */
+    private fun accumulatedUserIntent(): String =
+        searchIntentMessages
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !CONFIRM_WORDS.contains(it.lowercase()) }
+            .takeLast(6)
+            .joinToString(". ")
+
+    /**
+     * Best-effort feedback submit. Guards on round_id + item_id, posts off the main
+     * thread, and reports the outcome via [onResult] on the main thread. ok=False is
+     * never treated as an error.
+     */
+    fun submitFeedback(
+        baseUrl: String?,
+        item: MainActivity.RecommendationItem,
+        rating: Int,
+        onResult: (String) -> Unit,
+    ) {
+        val roundId = currentRoundId
+        val itemId = item.itemId
+        if (baseUrl == null || roundId == null || itemId == null) {
+            onResult("Feedback unavailable for this item.")
+            return
+        }
+        viewModelScope.launch {
+            val message = feedbackRepository.submit(
+                baseUrl = baseUrl,
+                roundId = roundId,
+                itemId = itemId,
+                size = item.size ?: item.metadata["size"] ?: "",
+                rating = rating,
+            ).fold(
+                onSuccess = { json ->
+                    if (json.optBoolean("ok")) {
+                        if (json.optBoolean("applied")) "Thanks — the agent is learning 🎓"
+                        else "Thanks! Neutral — no change."
+                    } else {
+                        json.optString("reason").takeIf { it.isNotBlank() } ?: "Feedback saved."
+                    }
+                },
+                onFailure = { "Could not send feedback." },
+            )
+            onResult(message)
+        }
+    }
+
+    companion object {
+        private val CONFIRM_WORDS = setOf(
+            "yes", "y", "sure", "ok", "okay", "go ahead", "confirm", "i confirm",
+            "correct", "correcy", "that's right", "thats right", "that is perfect",
+            "that's perfect", "perfect", "looks good", "looks perfect", "sounds good",
+            "works for me", "i like that", "please proceed", "proceed", "approved",
+            "do it", "run it", "search now", "run the search", "why not",
+        )
     }
 }

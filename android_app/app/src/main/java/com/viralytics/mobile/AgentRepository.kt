@@ -15,13 +15,16 @@ class AgentRepository(private val httpClient: OkHttpClient) {
         detectedType: String,
         detectedBodyType: String,
         detectedColor: String,
-    ): Result<List<MainActivity.RecommendationItem>> = withContext(Dispatchers.IO) {
+        userAnswer: String,
+        userGender: String = "",
+    ): Result<Pair<String?, List<MainActivity.RecommendationItem>>> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
                 put("detected_type", detectedType)
                 put("detected_body_type", detectedBodyType)
                 put("detected_color", detectedColor)
-                put("user_gender", "")
+                put("user_gender", userGender)
+                put("user_answer", userAnswer)
             }
             val request = Request.Builder()
                 .url("$baseUrl/api/recommend")
@@ -29,15 +32,17 @@ class AgentRepository(private val httpClient: OkHttpClient) {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@runCatching emptyList()
+                if (!response.isSuccessful) return@runCatching null to emptyList()
                 val json = JSONObject(response.body?.string().orEmpty())
-                val arr = json.optJSONArray("recommendations") ?: return@runCatching emptyList()
-                buildList {
+                val roundId = json.optString("round_id").takeIf { it.isNotBlank() }
+                val arr = json.optJSONArray("recommendations") ?: return@runCatching roundId to emptyList()
+                val items = buildList {
                     for (i in 0 until arr.length()) {
                         val item = arr.optJSONObject(i) ?: continue
-                        add(MainActivity.RecommendationItem.fromJson(item))
+                        add(MainActivity.RecommendationItem.fromAgentJson(item))
                     }
                 }
+                roundId to items
             }
         }
     }

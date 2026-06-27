@@ -28,6 +28,7 @@
     <string name="detail_description">Description</string>
     <string name="detail_store_details">Store Details</string>
     <string name="detail_attributes">Attributes</string>
+    <string name="detail_rate_recommendation">Rate this recommendation</string>
     <string name="match_badge">MATCH</string>
     <string name="no_description">No extra product description is available for this item yet.</string>
     <string name="no_attribute_rows">No extra attributes available for this recommendation.</string>

@@ -600,6 +600,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        setupFeedbackSection(dialogView, item)
+
         MaterialAlertDialogBuilder(this)
             .setView(dialogView)
             .setPositiveButton("Take me there!") { _, _ ->
@@ -614,6 +616,35 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun setupFeedbackSection(dialogView: View, item: RecommendationItem) {
+        val section = dialogView.findViewById<LinearLayout>(R.id.detailFeedbackSection)
+        val row = dialogView.findViewById<LinearLayout>(R.id.detailFeedbackRow)
+        val status = dialogView.findViewById<TextView>(R.id.detailFeedbackStatus)
+
+        val baseUrl = normalizedBaseUrl()
+        val canRate = viewModel.currentRoundId != null && item.itemId != null && baseUrl != null
+        section.isVisible = canRate
+        if (!canRate) return
+
+        status.text = "How happy are you with this pick?"
+        row.removeAllViews()
+        val emojis = listOf("😣", "😕", "😐", "🙂", "😍")
+        emojis.forEachIndexed { index, emoji ->
+            val rating = index + 1
+            val view = TextView(this).apply {
+                text = emoji
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+                isClickable = true
+                setOnClickListener {
+                    status.text = "Sending…"
+                    viewModel.submitFeedback(baseUrl, item, rating) { msg -> status.text = msg }
+                }
+            }
+            row.addView(view)
+        }
     }
 
     private fun addPlaceholderRow(container: LinearLayout, text: String) {
@@ -860,7 +891,9 @@ class MainActivity : AppCompatActivity() {
         val sku: String?,
         val stockStatus: String?,
         val sizes: List<String>,
-        val metadata: LinkedHashMap<String, String>
+        val metadata: LinkedHashMap<String, String>,
+        val itemId: Int? = null,
+        val size: String? = null,
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("id", id)
@@ -875,6 +908,8 @@ class MainActivity : AppCompatActivity() {
             stockStatus?.let { put("stock_status", it) }
             put("sizes", JSONArray(sizes))
             put("metadata", JSONObject(metadata as Map<*, *>))
+            itemId?.let { put("item_id", it) }
+            size?.let { put("size", it) }
         }
 
         companion object {
@@ -914,6 +949,64 @@ class MainActivity : AppCompatActivity() {
                     stockStatus = json.optString("stock_status").takeIf { it.isNotBlank() },
                     sizes = sizes,
                     metadata = metadata,
+                    itemId = if (json.has("item_id")) json.optInt("item_id") else null,
+                    size = json.optString("size").takeIf { it.isNotBlank() },
+                )
+            }
+
+            /**
+             * Maps an agent recommendation item (fields: rank, item_id, size, color,
+             * type, brand, price, agent_scores) to a RecommendationItem.
+             * Mirrors the web `formatAgentRec` (frontend/js/ui/recommendations.js).
+             */
+            fun fromAgentJson(json: JSONObject): RecommendationItem {
+                val itemId = json.optInt("item_id")
+                val typeName = json.optString("type").replace("_", " ").trim()
+                val brandName = json.optString("brand").trim()
+                val name = listOf(brandName, typeName)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ")
+                    .ifBlank { "Item $itemId" }
+
+                val price = if (json.has("price") && !json.isNull("price")) {
+                    val p = json.optDouble("price", Double.NaN)
+                    if (p.isNaN()) "N/A" else "EUR %.2f".format(p)
+                } else "N/A"
+
+                val metadata = linkedMapOf<String, String>()
+                for (key in listOf(
+                    "color", "style", "pattern", "material", "fit",
+                    "season", "occasion", "gender", "age_group", "size",
+                )) {
+                    val value = json.optString(key).trim()
+                    if (value.isNotBlank()) metadata[key] = value
+                }
+
+                val size = json.optString("size").takeIf { it.isNotBlank() }
+
+                val scores = json.optJSONObject("agent_scores")
+                val reason = if (scores != null) {
+                    "Agent rank ${json.optInt("rank")} · body ${"%.2f".format(scores.optDouble("body", 0.0))} · " +
+                        "clothing ${"%.2f".format(scores.optDouble("clothing", 0.0))} · " +
+                        "colour ${"%.2f".format(scores.optDouble("colour", 0.0))} · " +
+                        "stock ${"%.2f".format(scores.optDouble("stock", 0.0))}"
+                } else ""
+
+                return RecommendationItem(
+                    id = itemId.toString(),
+                    name = name,
+                    category = json.optString("type"),
+                    price = price,
+                    reason = reason,
+                    imageUrl = null,
+                    brand = brandName.takeIf { it.isNotBlank() },
+                    description = null,
+                    sku = null,
+                    stockStatus = null,
+                    sizes = listOfNotNull(size),
+                    metadata = metadata,
+                    itemId = itemId,
+                    size = size,
                 )
             }
         }
@@ -1275,7 +1368,17 @@ class MainActivity : AppCompatActivity() {
 
         val annotatedFrame = payload.optString("annotated_frame").ifBlank { null }
 
-        viewModel.injectScanResult(sessionId, detections, recommendations, annotatedFrame)
+        val detectedColor = detArray?.optJSONObject(0)?.optString("color_name")?.trim().orEmpty()
+        val detectedBodyType = payload.optJSONObject("body_analysis")
+            ?.optString("body_shape")?.trim()
+            ?.takeIf { it.isNotBlank() && it != "unknown" }
+            .orEmpty()
+        val baseUrl = normalizedBaseUrl()
+
+        viewModel.injectScanResult(
+            sessionId, detections, recommendations, annotatedFrame,
+            detectedColor, detectedBodyType, baseUrl,
+        )
         if (persona != null) {
             runOnUiThread { applyPersona(persona) }
         }
