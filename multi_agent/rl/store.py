@@ -31,6 +31,7 @@ from typing import Optional
 from multi_agent.config import (
     PASSRATE_ANCHOR,
     PPO_ROLLOUT_ROUNDS,
+    RL_REWARD_MODE,
     RL_ROUND_CACHE,
     TOP_K,
     ZERO_PASS_PENALTY,
@@ -98,6 +99,11 @@ class RLRoundStore:
         self._lock = threading.Lock()
         self._rounds: "OrderedDict[str, _RoundData]" = OrderedDict()
         self._settled_order: list[str] = []   # settled rounds awaiting the next PPO update
+        # When True, settle_round never auto-consumes a full rollout — the caller
+        # drives PPO updates explicitly via drain_rollout(). The experiment curve
+        # harness sets this so each episode's emoji reward can land BEFORE its
+        # round is consumed. Off in production (settle_round consumes normally).
+        self.defer_consumption = False
 
     # ── Writers ───────────────────────────────────────────────────────────────
 
@@ -143,7 +149,10 @@ class RLRoundStore:
             ranked = sorted(rd.transitions.values(), key=lambda t: -t.score)
             chosen = ranked[:TOP_K]
             passed = sum(1 for t in chosen if t.item_key in final_keys)
-            reward = passrate_reward(passed, len(chosen))
+            # RL_REWARD_MODE="rating" zeroes the pass-rate contribution so the
+            # learning signal is purely the emoji/review reward; "passrate"/"both"
+            # keep the pass-rate reward (production default = "both").
+            reward = 0.0 if RL_REWARD_MODE == "rating" else passrate_reward(passed, len(chosen))
             for t in chosen:
                 t.reward += reward
 
@@ -154,7 +163,9 @@ class RLRoundStore:
                 f"→ reward={reward:+.3f}  (settled {len(self._settled_order)}/{PPO_ROLLOUT_ROUNDS})"
             )
 
-            if len(self._settled_order) < PPO_ROLLOUT_ROUNDS:
+            # Deferred mode never auto-consumes (the curve harness drains
+            # explicitly); otherwise wait until a full rollout has accumulated.
+            if self.defer_consumption or len(self._settled_order) < PPO_ROLLOUT_ROUNDS:
                 return None
 
             # Assemble the on-policy batch and evict the consumed rounds.
@@ -164,6 +175,24 @@ class RLRoundStore:
                 if rd_done:
                     batch.extend(rd_done.transitions.values())
             self._settled_order.clear()
+            return batch
+
+    def drain_rollout(self) -> Optional[list[Transition]]:
+        """Pop the oldest full rollout for an explicit PPO update (deferred mode).
+
+        Returns a batch of the oldest ``PPO_ROLLOUT_ROUNDS`` settled rounds'
+        transitions (and evicts them), or ``None`` if fewer than a full rollout
+        have settled. Call repeatedly to drain multiple rollouts.
+        """
+        with self._lock:
+            if len(self._settled_order) < PPO_ROLLOUT_ROUNDS:
+                return None
+            batch: list[Transition] = []
+            for _ in range(PPO_ROLLOUT_ROUNDS):
+                cid = self._settled_order.pop(0)
+                rd_done = self._rounds.pop(cid, None)
+                if rd_done:
+                    batch.extend(rd_done.transitions.values())
             return batch
 
     # ── Introspection ───────────────────────────────────────────────────────────

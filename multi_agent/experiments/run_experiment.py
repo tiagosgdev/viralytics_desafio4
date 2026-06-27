@@ -44,10 +44,13 @@ from multi_agent.experiments import shopper
 from multi_agent.experiments.spec import (
     Combo,
     ExperimentSpec,
+    baseline_combo,
     full_factorial_combos,
     ofat_combos,
 )
 from multi_agent.experiments.store import ResultsStore
+from multi_agent.rl.policy import rl_policy
+from multi_agent.rl.store import rl_store
 from multi_agent.run import RecommendationSystem
 
 logger = logging.getLogger(__name__)
@@ -108,6 +111,8 @@ async def _run_episode(
     persona: dict,
     combo: Combo,
     repeat_idx: int,
+    feed_review: bool = False,
+    episode_no: int = 0,
 ) -> int | None:
     """Run one full simulated conversation; persist it; return the 1–5 review.
 
@@ -128,6 +133,7 @@ async def _run_episode(
     history: list[dict] = []        # persisted turns: [{shopper_msg, agent_weights, items}]
     shopper_msgs: list[str] = []    # individual shopper utterances (for accumulation)
     last_recs: list[dict] = []
+    last_round_id: str = ""         # conv_id of the most recent round (for feedback)
     abandoned = False
 
     for turn_idx in range(shopper.MAX_TURNS):
@@ -137,7 +143,7 @@ async def _run_episode(
         # which keeps the rule-based weights for that round.
         user_answer = ". ".join(shopper_msgs[-6:])
         try:
-            _round_id, results = await system.recommend(
+            round_id, results = await system.recommend(
                 detected_color          = detected_color,
                 detected_type           = detected_type,
                 detected_body_type      = detected_body_type,
@@ -157,6 +163,7 @@ async def _run_episode(
             break
 
         last_recs = results
+        last_round_id = round_id
         agent_weights = results[0].get("agent_weights", {}) if results else {}
 
         # The shopper reacts to the items it was just shown. The turn rows
@@ -205,6 +212,47 @@ async def _run_episode(
         )
         rating = review.get("rating")
         reason = review.get("reason", "")
+
+    # ── Learning-curve feed (curve mode only) ──────────────────────────────────
+    # Push this episode's 1–5 review into the RL reward path: each of the final
+    # top-K items gets the rating's reward attributed to its transition, then any
+    # full rollout is drained for an explicit PPO update. A curve point ties the
+    # review to the policy's cumulative update_count.
+    if feed_review and not abandoned and rating is not None:
+        rewards_landed = 0
+        rewards_dropped = 0
+        for item in last_recs[: config.TOP_K]:
+            res = system.submit_feedback(
+                round_id = last_round_id,
+                item_id  = int(item["item_id"]),
+                size     = str(item["size"]),
+                rating   = int(rating),
+            )
+            if res.get("ok"):
+                rewards_landed += 1
+            else:
+                rewards_dropped += 1
+                logger.warning(
+                    f"[experiment] feedback dropped (round={last_round_id}, "
+                    f"item={item.get('item_id')}:{item.get('size')}): {res.get('reason')}"
+                )
+
+        # Drain every full rollout that the deferred store now holds, running one
+        # PPO update per rollout. mean_return is the most recent update's value.
+        mean_return = None
+        while (batch := rl_store.drain_rollout()):
+            stats = rl_policy.learn(batch)
+            mean_return = stats.get("mean_return")
+
+        store.add_curve_point(
+            experiment_id   = experiment_id,
+            episode_index   = episode_no,
+            update_count    = rl_policy.update_count,
+            rating          = int(rating),
+            rewards_landed  = rewards_landed,
+            rewards_dropped = rewards_dropped,
+            mean_return     = mean_return,
+        )
 
     # Persist the episode, then its turns/items.
     episode_id = store.create_episode(
@@ -260,12 +308,23 @@ async def main() -> None:
     # slice (default) and the full factorial grid, without editing code.
     #   EXPERIMENT_MODE    = ofat (default) | full
     #   EXPERIMENT_REPEATS = K replays per (customer × combo)   [default 1]
+    #   EXPERIMENT_MODE    = ofat (default) | full | curve
+    # "curve" runs many sequential baseline episodes, feeds each review into the
+    # PPO reward path, and records a learning-curve point per episode.
     import os
     mode = (os.getenv("EXPERIMENT_MODE") or "ofat").strip().lower()
     repeats = int(os.getenv("EXPERIMENT_REPEATS") or "1")
+    feed_review = False
     if mode == "full":
         combos = list(full_factorial_combos())
         name = "full_factorial_grid"
+    elif mode == "curve":
+        combos = [baseline_combo()]
+        name = "rl_learning_curve"
+        feed_review = True
+        # Defer consumption so each episode's review can land BEFORE its round is
+        # consumed; the episode loop drains rollouts explicitly after feedback.
+        rl_store.defer_consumption = True
     else:
         combos = list(ofat_combos())
         name = "ofat_vertical_slice"
@@ -325,6 +384,8 @@ async def main() -> None:
                         rating = await _run_episode(
                             system, store, experiment_id,
                             persona, combo, repeat_idx,
+                            feed_review = feed_review,
+                            episode_no  = episode_no,
                         )
                         print(
                             f"[{_clock()}]    review = {rating}  "
@@ -339,6 +400,24 @@ async def main() -> None:
         print(f"  {'-' * 28} {'-' * 6} {'-' * 4}")
         for label, mean, n in store.mean_review_per_combo(experiment_id):
             print(f"  {label:<28} {mean:>6.2f} {n:>4}")
+
+        # ── Learning-curve feed summary ─────────────────────────────────────────
+        if feed_review:
+            points = store.curve_points(experiment_id)
+            total_landed  = sum(int(p[3] or 0) for p in points)
+            total_dropped = sum(int(p[4] or 0) for p in points)
+            print("\n━━  RL learning-curve feed  ━━")
+            print(f"  curve points : {len(points)}")
+            print(f"  PPO updates  : {rl_policy.update_count}")
+            print(f"  rewards landed  : {total_landed}")
+            print(f"  rewards dropped : {total_dropped}")
+            if total_dropped > 0:
+                print(
+                    "  ⚠ WARNING: some ratings were dropped (round consumed before "
+                    "feedback, or disabled by RL_REWARD_MODE). Investigate before "
+                    "trusting the curve."
+                )
+            print("  Plot: python -m multi_agent.experiments.plot_learning_curve")
 
     finally:
         await system.stop()

@@ -93,8 +93,20 @@ ZERO_PASS_PENALTY = -1.5  # extra-negative reward when 0% of the agent's picks a
 # ONE global policy, shared by every customer.  Checkpointed (network + optimizer
 # state) and reloaded on startup so the learned pattern is never lost on restart.
 _REPO_ROOT         = Path(__file__).resolve().parent.parent
-RL_CHECKPOINT_PATH = _REPO_ROOT / "models" / "weights" / "agents" / "rl_ppo.pt"
+RL_CHECKPOINT_PATH = Path(os.environ.get("RL_CHECKPOINT_PATH")
+    or (_REPO_ROOT / "models" / "weights" / "agents" / "rl_ppo.pt"))
 RL_ROUND_CACHE     = 200  # recent rounds kept in the in-memory transition cache
+
+# Which reward signal(s) feed the PPO update. "both" (default) keeps production
+# byte-identical: pass-rate every round + emoji satisfaction when it arrives.
+# "passrate" disables the rating path; "rating" zeroes the pass-rate reward so the
+# learning curve is driven purely by the simulated 1–5 final_review.
+RL_REWARD_MODE = os.environ.get("RL_REWARD_MODE", "both").strip().lower()  # passrate|rating|both
+
+# Fresh-start switch: when set, the policy starts at update_count=0 (ignores any
+# existing checkpoint) but still SAVES to RL_CHECKPOINT_PATH. Off by default so
+# production always resumes from its checkpoint.
+RL_FRESH_START = (os.environ.get("RL_FRESH_START", "").strip().lower() in {"1", "true", "yes"})
 
 # Timeouts (seconds)
 WEIGHTS_TIMEOUT_S = 120   # max wait for FeatureWeightAgent INFORM reply

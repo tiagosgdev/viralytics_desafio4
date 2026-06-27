@@ -32,7 +32,7 @@ from multi_agent.agents.orchestrator   import OrchestratorAgent
 from multi_agent.agents.rl_agent       import RLRecommenderAgent
 from multi_agent.agents.stock_agent    import StockRecommenderAgent
 from multi_agent.agents.weight_agent   import FeatureWeightAgent
-from multi_agent.config import JIDS, RL_ENABLED, ROUND_TIMEOUT_S, TOP_K, XMPP_PASSWORD
+from multi_agent.config import JIDS, RL_ENABLED, RL_REWARD_MODE, ROUND_TIMEOUT_S, TOP_K, XMPP_PASSWORD
 from multi_agent.rl.policy import rl_policy
 from multi_agent.rl.store import rating_reward, rl_store
 
@@ -165,6 +165,11 @@ class RecommendationSystem:
         """
         if not RL_ENABLED:
             return {"ok": False, "reason": "RL agent is disabled (RL_ENABLED=False)."}
+        # Symmetric with RL_REWARD_MODE: when only pass-rate drives learning, the
+        # rating path is disabled (inert for production "both" and the rating-only
+        # curve run, which both accept ratings).
+        if RL_REWARD_MODE == "passrate":
+            return {"ok": False, "reason": "rating disabled by RL_REWARD_MODE=passrate"}
 
         item_key = f"{int(item_id)}:{size}"
         reward   = rating_reward(rating)

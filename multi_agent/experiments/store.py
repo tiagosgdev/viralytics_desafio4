@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS turn_items (
     agent_scores_json TEXT,
     item_attrs_json   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS curve_points (
+    experiment_id   INTEGER NOT NULL,
+    episode_index   INTEGER,
+    update_count    INTEGER,
+    rating          INTEGER,
+    rewards_landed  INTEGER,
+    rewards_dropped INTEGER,
+    mean_return     REAL,
+    created_at      REAL NOT NULL
+);
 """
 
 
@@ -221,7 +232,61 @@ class ResultsStore:
             logger.warning(f"[results] Failed to add turn {idx} of episode {episode_id}: {exc}")
             return -1
 
+    def add_curve_point(
+        self,
+        experiment_id: int,
+        episode_index: int,
+        update_count: int,
+        rating: Optional[int],
+        rewards_landed: int,
+        rewards_dropped: int,
+        mean_return: Optional[float],
+    ) -> None:
+        """Record one learning-curve point: the episode's review and the policy's
+        cumulative PPO update_count (plus how many ratings landed/were dropped and
+        the most recent update's mean return). Used by plot_learning_curve.py."""
+        if self._db is None:
+            return
+        try:
+            with self._lock:
+                self._db.execute(
+                    "INSERT INTO curve_points (experiment_id, episode_index, "
+                    "update_count, rating, rewards_landed, rewards_dropped, "
+                    "mean_return, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        experiment_id,
+                        episode_index,
+                        update_count,
+                        rating,
+                        rewards_landed,
+                        rewards_dropped,
+                        mean_return,
+                        time.time(),
+                    ),
+                )
+                self._db.commit()
+        except Exception as exc:
+            logger.warning(f"[results] Failed to add curve point (ep {episode_index}): {exc}")
+
     # ── Queries (summary / tests) ─────────────────────────────────────────────
+
+    def curve_points(self, experiment_id: int) -> list[tuple]:
+        """Return ``(episode_index, update_count, rating, rewards_landed,
+        rewards_dropped, mean_return)`` rows for an experiment, ordered by
+        episode_index. Read-only; used by the plotter."""
+        if self._db is None:
+            return []
+        try:
+            with self._lock:
+                return self._db.execute(
+                    "SELECT episode_index, update_count, rating, rewards_landed, "
+                    "rewards_dropped, mean_return FROM curve_points "
+                    "WHERE experiment_id = ? ORDER BY episode_index",
+                    (experiment_id,),
+                ).fetchall()
+        except Exception as exc:
+            logger.warning(f"[results] Failed to read curve points: {exc}")
+            return []
 
     def mean_review_per_combo(self, experiment_id: int) -> list[tuple[str, float, int]]:
         """Return ``(combo_name, mean_review, n_episodes)`` rows for an experiment.

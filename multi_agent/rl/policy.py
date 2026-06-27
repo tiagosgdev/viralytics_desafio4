@@ -47,6 +47,7 @@ from multi_agent.config import (
     PPO_MINIBATCH,
     PPO_VALUE_COEF,
     RL_CHECKPOINT_PATH,
+    RL_FRESH_START,
 )
 from multi_agent.rl.store import Transition
 
@@ -255,6 +256,12 @@ class PPOPolicy:
 
     def load(self) -> None:
         path = RL_CHECKPOINT_PATH
+        if RL_FRESH_START:
+            logger.info(
+                f"[rl-ppo] RL_FRESH_START set; ignoring any checkpoint at {path} "
+                "and starting from a fresh policy (update_count=0). Will save here."
+            )
+            return
         if not path.exists():
             logger.info(f"[rl-ppo] No checkpoint at {path}; starting from a fresh policy.")
             return
