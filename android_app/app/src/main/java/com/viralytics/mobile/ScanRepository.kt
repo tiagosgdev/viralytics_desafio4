@@ -14,22 +14,33 @@ import java.io.ByteArrayOutputStream
 data class ScanResult(
     val sessionId: String?,
     val detections: List<String>,
+    val detectionLabels: List<String>,     // "beige trousers" format for display
     val recommendations: List<MainActivity.RecommendationItem>,
     val annotatedFrameBase64: String?,
+    val bodyAnnotatedFrameBase64: String?, // skeleton pose overlay
+    val bodyShape: String?,
 )
 
 class ScanRepository(private val httpClient: OkHttpClient) {
 
-    suspend fun scan(bitmap: Bitmap, baseUrl: String, persona: String): Result<ScanResult> =
+    suspend fun scan(
+        bitmap: Bitmap,
+        baseUrl: String,
+        persona: String,
+        userGender: String = "",
+        userHeightCm: Int = 0,
+    ): Result<ScanResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val jpegBytes = bitmap.toJpegBytes()
                 val imageBody = jpegBytes.toRequestBody("image/jpeg".toMediaType())
-                val multipartBody = MultipartBody.Builder()
+                val builder = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", "scan.jpg", imageBody)
                     .addFormDataPart("persona", persona)
-                    .build()
+                    .addFormDataPart("gender", userGender)
+                if (userHeightCm > 0) builder.addFormDataPart("height_cm", userHeightCm.toString())
+                val multipartBody = builder.build()
 
                 val request = Request.Builder()
                     .url("$baseUrl/api/mobile/scan")
@@ -42,11 +53,17 @@ class ScanRepository(private val httpClient: OkHttpClient) {
                         error("Scan failed: HTTP ${response.code} — $body")
                     }
                     val json = JSONObject(body)
+                    val detArray = json.optJSONArray("detections")
+                    val bodyAnalysis = json.optJSONObject("body_analysis")
                     ScanResult(
                         sessionId = json.optString("session_id").ifBlank { null },
-                        detections = parseDetectionNames(json.optJSONArray("detections")),
+                        detections = parseDetectionNames(detArray),
+                        detectionLabels = parseDetectionLabels(detArray),
                         recommendations = parseRecommendations(json.optJSONArray("recommendations")),
                         annotatedFrameBase64 = json.optString("annotated_frame").ifBlank { null },
+                        bodyAnnotatedFrameBase64 = json.optString("body_annotated_frame").ifBlank { null },
+                        bodyShape = bodyAnalysis?.optString("body_shape")
+                            ?.takeIf { it.isNotBlank() && it != "unknown" },
                     )
                 }
             }
@@ -58,6 +75,19 @@ class ScanRepository(private val httpClient: OkHttpClient) {
             for (i in 0 until array.length()) {
                 val name = array.optJSONObject(i)?.optString("class_name")?.trim() ?: continue
                 if (name.isNotBlank()) add(name)
+            }
+        }
+    }
+
+    private fun parseDetectionLabels(array: org.json.JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val name = obj.optString("class_name").trim().takeIf { it.isNotBlank() } ?: continue
+                val color = obj.optString("color_name").trim()
+                val display = name.replace('_', ' ')
+                add(if (color.isNotBlank()) "$color $display" else display)
             }
         }
     }

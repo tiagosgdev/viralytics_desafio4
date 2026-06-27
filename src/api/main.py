@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import httpx
 import numpy as np
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -655,6 +655,72 @@ def _db_backed_recommendations_with_profile_sync(
 
     return _format_conversation_results(ranked_results)
 
+# ── Agent result enrichment ───────────────────────────────────────────────────
+
+def _enrich_agent_results_with_db(results: list[dict]) -> list[dict]:
+    """
+    Merge image_url, name, description, etc. from the SQLite catalogue into
+    agent-format recommendation dicts (which only carry item_id + scores).
+    Also adds 'id' and 'category' aliases so fromJson() can parse them on Android.
+    """
+    if not results:
+        return results
+    item_ids = []
+    for r in results:
+        try:
+            item_ids.append(int(r["item_id"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    if not item_ids:
+        return results
+    db_path = Path(DB_PATH)
+    if not db_path.exists():
+        return results
+    try:
+        placeholders = ",".join("?" * len(item_ids))
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT * FROM items WHERE id IN ({placeholders})", item_ids
+        ).fetchall()
+        conn.close()
+        db_by_id = {int(row["id"]): dict(row) for row in rows if row["id"]}
+    except Exception as exc:
+        print(f"⚠️  DB enrichment query failed: {exc}")
+        return results
+
+    enriched = []
+    for r in results:
+        iid = r.get("item_id")
+        row = db_by_id.get(int(iid)) if iid else None
+        if row:
+            brand = r.get("brand") or row.get("brand")
+            type_name = r.get("type") or row.get("type") or row.get("category") or ""
+            scores = r.get("agent_scores") or {}
+            reason = (
+                f"Rank {r.get('rank', '?')} · "
+                f"body {scores.get('body', 0):.2f} · "
+                f"clothing {scores.get('clothing', 0):.2f} · "
+                f"colour {scores.get('colour', 0):.2f}"
+            ) if scores else ""
+            r = {
+                **r,
+                "id":          str(iid),
+                "category":    type_name,
+                "name":        (row.get("name") or row.get("title")
+                                or (f"{brand} {type_name}".strip().title() if brand
+                                    else type_name.replace("_", " ").title())),
+                "image_url":   row.get("image_url") or row.get("image"),
+                "description": row.get("description") or row.get("short_description"),
+                "sku":         row.get("sku"),
+                "stock_status": row.get("stock_status"),
+                "brand":       brand,
+                "reason":      reason,
+            }
+        enriched.append(r)
+    return enriched
+
+
 # ── Core detection implementation ─────────────────────────────────────────────
 
 async def _run_multiagent_round(
@@ -706,6 +772,8 @@ async def _detect_frame_impl(
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
     run_body_analysis: bool = True,
+    user_height_cm: Optional[float] = None,
+    gender: str = "",
 ) -> DetectionResponse:
     persona = normalize_persona(persona)
     active_detector = _resolve_detector(persona)
@@ -719,7 +787,7 @@ async def _detect_frame_impl(
 
     if run_body_analysis and pose_analyzer is not None and pose_analyzer.is_available():
         try:
-            body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy())
+            body_analysis, body_annotated_frame = await run_in_threadpool(_run_body_analysis, frame.copy(), user_height_cm, gender)
         except Exception as exc:
             print(f"Body analysis failed: {exc}")
             body_analysis = {
@@ -778,6 +846,8 @@ async def _detect_image_impl(
     persona: str = "cruella",
     user_profile: Optional[dict] = None,
     run_body_analysis: bool = True,
+    user_height_cm: Optional[float] = None,
+    gender: str = "",
 ) -> DetectionResponse:
     contents = await file.read()
     arr = np.frombuffer(contents, np.uint8)
@@ -789,6 +859,8 @@ async def _detect_image_impl(
         persona=persona,
         user_profile=user_profile,
         run_body_analysis=run_body_analysis,
+        user_height_cm=user_height_cm,
+        gender=gender,
     )
 
 
@@ -825,26 +897,66 @@ async def detect_image(
     return await _detect_image_impl(file, persona=persona, user_profile=user_profile)
 
 
+async def _multiagent_background_publish(result_dict: dict, persona: str, gender: str) -> None:
+    """
+    Run a multi-agent recommendation round in the background and, if it returns
+    results, publish an updated scan_result to MQTT so the tablet refreshes.
+    Called only when rec_system is ready; silently exits otherwise.
+    """
+    from src.mqtt_scan import publish_scan_result as _publish
+    detections = result_dict.get("detections") or []
+    if not detections or rec_system is None:
+        return
+    primary = detections[0]
+    body_analysis = result_dict.get("body_analysis") or {}
+    ma_results = await _run_multiagent_round(
+        detected_color=primary.get("color_name", ""),
+        detected_type=primary.get("class_name", ""),
+        detected_body_type=body_analysis.get("body_shape", ""),
+        user_gender=gender,
+        detected_color_conf=float(primary.get("confidence", 1.0)),
+        detected_type_conf=float(primary.get("confidence", 1.0)),
+        detected_body_type_conf=float(body_analysis.get("confidence", 1.0)),
+    )
+    if ma_results:
+        ma_results = await run_in_threadpool(_enrich_agent_results_with_db, ma_results)
+        updated = {**result_dict, "recommendations": ma_results}
+        await run_in_threadpool(_publish, updated, persona)
+
+
 @app.post("/api/mobile/scan", response_model=DetectionResponse)
 async def mobile_scan(
     background_tasks: BackgroundTasks,
-    persona: str = "cruella",
     file: UploadFile = File(...),
+    persona: str = Form("cruella"),
+    gender: str = Form(""),
+    height_cm: Optional[float] = Form(None),
     user_id: Optional[int] = Depends(get_optional_user_id),
 ):
     """
     Mobile-friendly alias for image scan uploads from native clients.
-    Supports the same user-profile personalisation as /api/detect/image.
-    After processing, publishes the result to MQTT so the tablet can display it.
-    The MQTT publish runs after the HTTP response is sent so it never delays the phone.
+    Publishes DB recommendations to MQTT immediately so the tablet gets fast
+    initial results, then runs the multi-agent round in the background and
+    pushes updated recommendations when ready.
     """
     from src.mqtt_scan import publish_scan_result
 
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
     if user_profile:
         print(f"👤  Personalising mobile scan for user_id={user_id}")
-    result = await _detect_image_impl(file, persona=persona, user_profile=user_profile, run_body_analysis=True)
-    background_tasks.add_task(publish_scan_result, result.dict(), persona)
+    result = await _detect_image_impl(
+        file,
+        persona=persona,
+        user_profile=user_profile,
+        run_body_analysis=True,
+        user_height_cm=height_cm,
+        gender=gender,
+    )
+    result_dict = result.dict()
+    # Publish DB results immediately — tablet gets something fast
+    background_tasks.add_task(publish_scan_result, result_dict, persona)
+    # Run multi-agent round; if it produces results, publish a follow-up update
+    background_tasks.add_task(_multiagent_background_publish, result_dict, persona, gender)
     return result
 
 
@@ -1266,6 +1378,7 @@ async def recommend(payload: RecommendRequest):
             detail="Recommendation round timed out.",
         )
 
+    results = await run_in_threadpool(_enrich_agent_results_with_db, results)
     return RecommendResponse(recommendations=results, round_id=round_id)
 
 

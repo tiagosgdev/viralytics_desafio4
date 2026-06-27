@@ -1,14 +1,13 @@
 import json
 import logging
 import random
-import ssl
 
 import paho.mqtt.client as mqtt
 
 log = logging.getLogger(__name__)
 
-_BROKER_HOST = "test.mosquitto.org"
-_BROKER_PORT = 8883
+_BROKER_HOST = "localhost"
+_BROKER_PORT = 1883
 
 
 def publish_scan_result(response: dict, persona: str) -> None:
@@ -21,16 +20,12 @@ def publish_scan_result(response: dict, persona: str) -> None:
             "detections": response.get("detections", []),
             "recommendations": response.get("recommendations", []),
             "annotated_frame": response.get("annotated_frame"),
+            "body_annotated_frame": response.get("body_annotated_frame"),
             "body_analysis": response.get("body_analysis"),
         })
 
         client_id = f"ViralyticsScan_{random.randint(1000, 9999)}"
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id)
-
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        client.tls_set_context(ctx)
 
         client.connect(_BROKER_HOST, _BROKER_PORT, keepalive=10)
         result = client.publish("cruzr/scan_result", payload, qos=1)
@@ -39,6 +34,7 @@ def publish_scan_result(response: dict, persona: str) -> None:
         client.disconnect()
         client.loop_stop()
 
-        log.debug("Published scan result to cruzr/scan_result (%d bytes)", len(payload))
+        log.info("Published scan result to %s:%d cruzr/scan_result (%d bytes)",
+                 _BROKER_HOST, _BROKER_PORT, len(payload))
     except Exception as e:
         log.warning("Could not publish scan result to MQTT: %s", e)

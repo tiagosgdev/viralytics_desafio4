@@ -179,6 +179,87 @@ Hybrid retrieval: SQL metadata filters + semantic vector similarity. The LLM (vi
 
 ---
 
+### 9. Android Robot App (`android_app/`)
+
+A Kotlin single-Activity app (`com.viralytics.mobile`) installed on the **UBTech Cruzr robot**. The same APK runs on two device types, detected at runtime.
+
+#### Dual mode
+
+```kotlin
+enum class AppMode { TABLET, PHONE_CAMERA }
+```
+
+Detection: `Robot.globalContext() != null` → `TABLET` (robot screen); otherwise `PHONE_CAMERA` (regular phone used as camera because the robot tablet's built-in camera is unusable). Both devices can have a SharedPreferences override (`device_mode_override`).
+
+| Mode | Role |
+|------|------|
+| `PHONE_CAMERA` | Shows camera button only. Uploads photo to `/api/mobile/scan`, then shows a toast. Never renders recommendations. |
+| `TABLET` | Hides camera button. Listens on MQTT `cruzr/scan_result` for scan results. Renders detection cards, recommendations, chat, and body shape. Controls robot navigation, speech, and gestures via Cruzr SDK. |
+
+#### Architecture
+
+Repository + ViewModel pattern. All network I/O is `suspend fun … = withContext(Dispatchers.IO) { runCatching { … } }` in Repository classes. `MainActivity` only calls ViewModel methods and observes `LiveData<UiEvent>`.
+
+| File | Responsibility |
+|------|---------------|
+| `MainActivity.kt` | UI binding, SDK callbacks (MQTT, navigation, LIDAR, session), robot hardware control |
+| `MainViewModel.kt` | Session state, `UiEvent` emission via `MutableLiveData`, coroutine launch |
+| `ScanRepository.kt` | Multipart POST `/api/mobile/scan` (scales image ≤1280 px) |
+| `AgentRepository.kt` | POST `/api/recommend` — agent round results |
+| `ChatRepository.kt` | POST `/api/chat` with conversation history |
+| `SessionRepository.kt` | POST `/api/session/start` |
+| `CameraActivity.kt` | Fullscreen CameraX with 5-second auto-countdown |
+
+#### Scan result pipeline (phone → tablet)
+
+```
+Phone:  CameraActivity (5s countdown)
+         → viewModel.uploadScan()
+         → POST /api/mobile/scan
+
+Server: builds DetectionResponse + agent recs
+         → BackgroundTasks: publish_scan_result()
+         → MQTT publish cruzr/scan_result (QoS 1)
+
+Tablet: messageArrived("cruzr/scan_result")
+         → handleScanResult(json)
+         → viewModel.injectScanResult()       ← single postValue (no coalescing)
+         → UiEvent.ScanComplete observer
+         → renderDetections() + renderRecommendations() + updateAnnotatedImage()
+         → fetchAgentRecommendations() (HTTP, tablet has server URL)
+```
+
+#### Scan image display
+
+Two frames arrive per scan: `annotatedFrame` (clothing bounding boxes + colour labels) and `bodyFrame` (skeleton pose). Stored as `currentAnnotatedFrame` / `currentBodyFrame` on `MainActivity`.
+
+- **Main view:** `updateAnnotatedImage()` prefers `annotatedFrame`; falls back to `bodyFrame` only if clothing frame is absent.
+- **Fullscreen toggle:** tapping `resultImage` opens a dialog. When both frames exist, a non-dismissing Neutral button switches between "Skeleton view" and "Clothing view" without closing the dialog (button listener wired via `dialog.getButton(BUTTON_NEUTRAL).setOnClickListener {}` after `.show()`).
+- **Body shape label:** `bodyShapeLabel` is a `TextView` overlaid at `top|end` of the `FrameLayout` wrapping `resultImage`. Background: `mobile_body_shape_bg.xml` — dark semi-transparent pill (`#BB000000`, 20 dp corners).
+
+#### Agent recommendation enrichment
+
+`rec_system.recommend()` returns items with only `item_id` and scoring fields — no `image_url`, `name`, or `description`. `_enrich_agent_results_with_db()` in `src/api/main.py` queries `SELECT * FROM items WHERE id IN (...)` on `clothing.db` and merges image, name, description, and a human-readable score summary before publishing over MQTT or returning from `/api/recommend`. The Android `fromAgentJson()` companion method reads `image_url` from the enriched payload.
+
+#### MQTT topics
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `cruzr/scan_result` | Server → Tablet | Scan detections + DB recommendations + annotated frame |
+| `cruzr/commands` | Server → Tablet | Navigation, speech, gesture commands |
+| `cruzr/persona` | Server → Both | Persona sync |
+| `cruzr/status` | Tablet → Server | Navigation events, session lifecycle |
+
+Broker: `tcp://<server_ip>:1883`. Stable client IDs (`viralytics_tablet` / `viralytics_phone`) + `isCleanSession=false` + `isAutomaticReconnect=true` — broker persists subscriptions across reconnects.
+
+#### Cruzr SDK v2.8.0
+
+`compileOnly` JAR (`libs/cruzr-sdk-2_8_0.jar`) — robot supplies the real implementation at runtime. **Must never change to `implementation`** (class conflicts). Key managers: `NavigationManager` (marker-based and coordinate navigation), `SpeechManager` (TTS), `MotionManager` (gestures), `CruzrSensorManager` (LIDAR for person detection).
+
+Navigation known issue: `navigate()` returns code `-11 / find_plan_failed` for marker-based nav. Hypothesis: map polylines don't connect robot position to target. `TRACK_MODE` constant (currently `false`) can be flipped to test polyline-constrained planning.
+
+---
+
 ## Technology Choices
 
 | Technology | Rationale |

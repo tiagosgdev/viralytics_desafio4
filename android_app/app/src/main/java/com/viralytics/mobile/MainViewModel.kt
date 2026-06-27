@@ -23,8 +23,11 @@ sealed interface UiEvent {
     data class ScanComplete(
         val sessionId: String?,
         val detections: List<String>,
+        val detectionLabels: List<String>,
         val recommendations: List<MainActivity.RecommendationItem>,
         val annotatedFrameBase64: String?,
+        val bodyAnnotatedFrameBase64: String?,
+        val bodyShape: String?,
     ) : UiEvent
     data class ChatComplete(
         val sessionId: String?,
@@ -71,6 +74,7 @@ class MainViewModel : ViewModel() {
     // State that survives rotation
     var currentSessionId: String? = null
     val detectedCategories = mutableListOf<String>()
+    val detectionLabels = mutableListOf<String>()
     val currentRecommendations = mutableListOf<MainActivity.RecommendationItem>()
     var currentConversationState: org.json.JSONObject? = null
     var currentIncludeFilters: org.json.JSONObject? = null
@@ -95,13 +99,18 @@ class MainViewModel : ViewModel() {
                     chatHistory.clear()
                     detectedCategories.clear()
                     detectedCategories.addAll(result.detections)
+                    detectionLabels.clear()
+                    detectionLabels.addAll(result.detectionLabels)
                     currentRecommendations.clear()
                     currentRecommendations.addAll(result.recommendations)
                     _events.value = UiEvent.ScanComplete(
                         sessionId = result.sessionId,
                         detections = result.detections,
+                        detectionLabels = result.detectionLabels,
                         recommendations = result.recommendations,
                         annotatedFrameBase64 = result.annotatedFrameBase64,
+                        bodyAnnotatedFrameBase64 = result.bodyAnnotatedFrameBase64,
+                        bodyShape = result.bodyShape,
                     )
                     _events.value = UiEvent.SetStatus("Scan complete.")
                     viewModelScope.launch { startSession(baseUrl, persona, result.detections, result.recommendations) }
@@ -209,8 +218,11 @@ class MainViewModel : ViewModel() {
     fun injectScanResult(
         sessionId: String?,
         detections: List<String>,
+        detectionLabels: List<String>,
         recommendations: List<MainActivity.RecommendationItem>,
         annotatedFrameBase64: String?,
+        bodyAnnotatedFrameBase64: String?,
+        bodyShape: String?,
         detectedColor: String,
         detectedBodyType: String,
         baseUrl: String?,
@@ -221,6 +233,8 @@ class MainViewModel : ViewModel() {
         chatHistory.clear()
         detectedCategories.clear()
         detectedCategories.addAll(detections)
+        this.detectionLabels.clear()
+        this.detectionLabels.addAll(detectionLabels)
         currentRecommendations.clear()
         currentRecommendations.addAll(recommendations)
 
@@ -234,8 +248,11 @@ class MainViewModel : ViewModel() {
         _events.postValue(UiEvent.ScanComplete(
             sessionId = sessionId,
             detections = detections,
+            detectionLabels = detectionLabels,
             recommendations = recommendations,
             annotatedFrameBase64 = annotatedFrameBase64,
+            bodyAnnotatedFrameBase64 = bodyAnnotatedFrameBase64,
+            bodyShape = bodyShape,
         ))
 
         // Tablet fetches agent recommendations over HTTP using the scan signals.
@@ -282,6 +299,7 @@ class MainViewModel : ViewModel() {
         currentIncludeFilters = null
         chatHistory.clear()
         detectedCategories.clear()
+        detectionLabels.clear()
         currentRecommendations.clear()
         currentRoundId = null
         searchIntentMessages.clear()

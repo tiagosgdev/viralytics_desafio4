@@ -196,6 +196,133 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- Customer profile card -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/customerProfileCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                app:cardBackgroundColor="@color/brand_surface"
+                app:cardCornerRadius="@dimen/card_corner"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/brand_border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:tag="color_muted"
+                        android:text="CUSTOMER PROFILE"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="@dimen/section_label_size"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.12" />
+
+                    <!-- Gender row -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Gender"
+                            android:textColor="@color/brand_text"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.chip.ChipGroup
+                            android:id="@+id/genderChipGroup"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:singleSelection="true"
+                            app:chipSpacingHorizontal="4dp">
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chipMale"
+                                style="@style/Widget.MaterialComponents.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checkable="true"
+                                android:text="Male"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chipFemale"
+                                style="@style/Widget.MaterialComponents.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checkable="true"
+                                android:text="Female"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chipOther"
+                                style="@style/Widget.MaterialComponents.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checkable="true"
+                                android:text="Other"
+                                android:textSize="12sp" />
+
+                        </com.google.android.material.chip.ChipGroup>
+                    </LinearLayout>
+
+                    <!-- Height row -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Height (cm)"
+                            android:textColor="@color/brand_text"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/heightInputLayout"
+                            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                            android:layout_width="110dp"
+                            android:layout_height="wrap_content"
+                            app:boxBackgroundColor="@color/brand_surface_soft"
+                            app:boxCornerRadiusBottomEnd="12dp"
+                            app:boxCornerRadiusBottomStart="12dp"
+                            app:boxCornerRadiusTopEnd="12dp"
+                            app:boxCornerRadiusTopStart="12dp"
+                            app:boxStrokeColor="@color/brand_border"
+                            app:hintTextColor="@color/brand_muted">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/heightInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="e.g. 170"
+                                android:inputType="number"
+                                android:maxLength="3"
+                                android:textColor="@color/brand_text"
+                                android:textColorHint="@color/brand_muted"
+                                android:textSize="14sp" />
+
+                        </com.google.android.material.textfield.TextInputLayout>
+                    </LinearLayout>
+
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- Scan controls card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
@@ -257,20 +384,43 @@
                         android:textColor="@color/brand_muted"
                         android:visibility="gone" />
 
-                    <ImageView
-                        android:id="@+id/resultImage"
+                    <FrameLayout
                         android:layout_width="match_parent"
                         android:layout_height="@dimen/scan_image_height"
-                        android:layout_marginTop="12dp"
-                        android:adjustViewBounds="true"
-                        android:background="@drawable/mobile_camera_surface"
-                        android:contentDescription="@string/annotated_scan"
-                        android:scaleType="fitCenter" />
+                        android:layout_marginTop="12dp">
+
+                        <ImageView
+                            android:id="@+id/resultImage"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:adjustViewBounds="true"
+                            android:background="@drawable/mobile_camera_surface"
+                            android:contentDescription="@string/annotated_scan"
+                            android:scaleType="fitCenter" />
+
+                        <TextView
+                            android:id="@+id/bodyShapeLabel"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="top|end"
+                            android:layout_margin="12dp"
+                            android:background="@drawable/mobile_body_shape_bg"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp"
+                            android:textColor="@color/white"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+
+                    </FrameLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
             <!-- Detected clothing card -->
             <com.google.android.material.card.MaterialCardView
+                android:id="@+id/detectedClothingCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"

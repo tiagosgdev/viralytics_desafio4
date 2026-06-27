@@ -229,6 +229,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        try { Robot.initialize(applicationContext) } catch (_: Throwable) {}
         appMode = detectAppMode()
         setupUiForMode(appMode)
 
@@ -266,6 +267,7 @@ class MainActivity : AppCompatActivity() {
         binding.switchPersonaButton?.setOnClickListener { showPersonaDialog() }
         binding.tabScanButton.setOnClickListener { switchTab("scan") }
         binding.tabRefineButton.setOnClickListener { switchTab("refine") }
+        binding.resultImage.setOnClickListener { openImageFullscreen() }
 
         val storedPersona = loadPersona()
         if (storedPersona.isNotBlank()) {
@@ -287,7 +289,8 @@ class MainActivity : AppCompatActivity() {
                         setStatus("Scan received from phone.")
                         renderDetections()
                         renderRecommendations()
-                        updateAnnotatedImage(event.annotatedFrameBase64)
+                        updateAnnotatedImage(event.annotatedFrameBase64, event.bodyAnnotatedFrameBase64)
+                        renderBodyShape(event.bodyShape)
                         switchTab("scan")
                         updateSessionLabel("Vision-led")
                         showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
@@ -338,12 +341,20 @@ class MainActivity : AppCompatActivity() {
                 requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 binding.tabBar?.isVisible = false
                 binding.refineSection.isVisible = false
+                binding.customerProfileCard?.isVisible = false
+                binding.detectedClothingCard?.isVisible = false
+                binding.recommendationsSection?.isVisible = false
                 binding.modeIndicatorText?.text = "CAMERA MODE"
             }
             AppMode.TABLET -> {
                 requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 binding.captureButton.isVisible = false
                 binding.scanWaitingText?.isVisible = true
+                binding.customerProfileCard?.isVisible = true
+                binding.detectedClothingCard?.isVisible = true
+                binding.recommendationsSection?.isVisible = true
+                binding.refineSection.isVisible = true
+                binding.tabBar?.isVisible = true
                 binding.modeIndicatorText?.text = "DISPLAY MODE"
             }
         }
@@ -383,15 +394,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderDetections() {
         binding.detectionsGroup.removeAllViews()
-        val categories = viewModel.detectedCategories
-        if (categories.isEmpty()) {
-            val chip = buildDetectionChip(getString(R.string.detections_empty))
-            binding.detectionsGroup.addView(chip)
+        binding.bodyShapeLabel?.isVisible = false
+        val labels = viewModel.detectionLabels.ifEmpty {
+            viewModel.detectedCategories.map { it.replace('_', ' ') }
+        }
+        if (labels.isEmpty()) {
+            binding.detectionsGroup.addView(buildDetectionChip(getString(R.string.detections_empty)))
             return
         }
-        categories.distinct().forEach { category ->
-            binding.detectionsGroup.addView(buildDetectionChip(category.replace("_", " ")))
+        labels.distinct().forEach { label ->
+            binding.detectionsGroup.addView(buildDetectionChip(label))
         }
+    }
+
+    private fun renderBodyShape(bodyShape: String?) {
+        if (bodyShape.isNullOrBlank()) {
+            binding.bodyShapeLabel?.isVisible = false
+            return
+        }
+        binding.bodyShapeLabel?.text = bodyShape.replaceFirstChar { it.uppercase() }
+        binding.bodyShapeLabel?.isVisible = true
     }
 
     private fun buildDetectionChip(label: String): Chip {
@@ -749,15 +771,57 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateAnnotatedImage(base64Image: String?) {
-        if (base64Image.isNullOrBlank()) return
-        try {
-            val bytes = Base64.decode(base64Image, Base64.DEFAULT)
-            binding.resultImage.setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
-        } catch (_: IllegalArgumentException) {
-            binding.resultImage.setImageBitmap(null)
+    private var currentAnnotatedFrame: String? = null
+    private var currentBodyFrame: String? = null
+
+    private fun updateAnnotatedImage(annotatedFrame: String?, bodyFrame: String? = null) {
+        currentAnnotatedFrame = annotatedFrame
+        currentBodyFrame = bodyFrame
+        // Clothing detection frame (bounding boxes + colours) is the primary view;
+        // skeleton is secondary and accessible via the fullscreen toggle.
+        val frame = annotatedFrame?.takeIf { it.isNotBlank() } ?: bodyFrame
+        if (frame.isNullOrBlank()) return
+        binding.resultImage.setImageBitmap(decodeBitmap(frame))
+    }
+
+    private fun openImageFullscreen() {
+        val clothingFrame = currentAnnotatedFrame?.takeIf { it.isNotBlank() }
+        val skeletonFrame = currentBodyFrame?.takeIf { it.isNotBlank() }
+        val initial = clothingFrame ?: skeletonFrame ?: return
+        val initialBitmap = decodeBitmap(initial) ?: return
+
+        val imageView = ImageView(this).apply {
+            setImageBitmap(initialBitmap)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+
+        val builder = MaterialAlertDialogBuilder(this)
+            .setView(imageView)
+            .setPositiveButton("Close", null)
+
+        val hasBoth = clothingFrame != null && skeletonFrame != null
+        if (hasBoth) builder.setNeutralButton("Skeleton view", null)
+
+        val dialog = builder.show()
+
+        if (hasBoth) {
+            var showingSkeleton = false
+            dialog.getButton(android.content.DialogInterface.BUTTON_NEUTRAL).setOnClickListener {
+                showingSkeleton = !showingSkeleton
+                val target = if (showingSkeleton) skeletonFrame!! else clothingFrame!!
+                decodeBitmap(target)?.let { bm -> imageView.setImageBitmap(bm) }
+                (it as? android.widget.Button)?.text = if (showingSkeleton) "Clothing view" else "Skeleton view"
+            }
         }
     }
+
+    private fun decodeBitmap(base64: String): Bitmap? =
+        try {
+            val bytes = Base64.decode(base64, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Exception) { null }
 
     private fun normalizedBaseUrl(): String? {
         val raw = loadServerUrl().trim().removeSuffix("/")
@@ -998,7 +1062,7 @@ class MainActivity : AppCompatActivity() {
                     category = json.optString("type"),
                     price = price,
                     reason = reason,
-                    imageUrl = null,
+                    imageUrl = json.optString("image_url").takeIf { it.isNotBlank() },
                     brand = brandName.takeIf { it.isNotBlank() },
                     description = null,
                     sku = null,
@@ -1081,6 +1145,17 @@ class MainActivity : AppCompatActivity() {
         binding.recommendationsRightButton.imageTintList = ColorStateList.valueOf(textCol)
         binding.sendChatButton.backgroundTintList = ColorStateList.valueOf(accent)
 
+        // Icon button backgrounds are baked as brand_surface_soft in XML; replace them
+        // with persona-correct ovals so the icon is always visible against the circle.
+        fun ovalBg(): GradientDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(surfaceSoft)
+            setStroke(dp(1), border)
+        }
+        binding.connectionSettingsButton.background = ovalBg()
+        binding.recommendationsLeftButton.background = ovalBg()
+        binding.recommendationsRightButton.background = ovalBg()
+
         // Chat input
         binding.chatInputLayout?.let { til ->
             til.boxStrokeColor = border
@@ -1090,6 +1165,32 @@ class MainActivity : AppCompatActivity() {
         }
         binding.chatInput?.setTextColor(textCol)
         binding.chatInput?.setHintTextColor(muted)
+
+        // Height input (customer profile card)
+        binding.heightInputLayout?.let { til ->
+            til.boxStrokeColor = border
+            til.hintTextColor = ColorStateList.valueOf(muted)
+            til.defaultHintTextColor = ColorStateList.valueOf(muted)
+            til.setBoxBackgroundColor(surfaceSoft)
+        }
+        binding.heightInput?.setTextColor(textCol)
+        binding.heightInput?.setHintTextColor(muted)
+
+        // Gender chips (customer profile card)
+        val chipBg = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(accent, surfaceSoft)
+        )
+        val chipText = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(Color.WHITE, textCol)
+        )
+        listOf(binding.chipMale, binding.chipFemale, binding.chipOther).filterNotNull().forEach { chip ->
+            chip.chipBackgroundColor = chipBg
+            chip.setTextColor(chipText)
+            chip.chipStrokeColor = ColorStateList.valueOf(border)
+            chip.chipStrokeWidth = dp(1f)
+        }
 
         // Retheme fixed-color drawable backgrounds (shapes baked in brand colors in XML).
         // We replace them with equivalent programmatic shapes so fill + stroke match persona.
@@ -1102,7 +1203,12 @@ class MainActivity : AppCompatActivity() {
             }
         binding.statusPill?.background               = roundRect(surface,     border, 999f)
         binding.modeIndicatorText?.background        = roundRect(surfaceSoft, border, 20f)
-        binding.chatReplyText?.background            = roundRect(surfaceSoft, border, 20f)
+        // Chat reply always uses light background + dark text for readability regardless of persona.
+        val chatBubbleFill   = ContextCompat.getColor(this, R.color.brand_surface_soft)
+        val chatBubbleBorder = ContextCompat.getColor(this, R.color.brand_border)
+        val chatTextDark     = ContextCompat.getColor(this, R.color.brand_text)
+        binding.chatReplyText?.background  = roundRect(chatBubbleFill, chatBubbleBorder, 20f)
+        binding.chatReplyText?.setTextColor(chatTextDark)
         binding.scanWaitingText?.background          = roundRect(surfaceSoft, border, 22f)
         binding.recommendationsEmptyText?.background = roundRect(surfaceSoft, border, 22f)
         binding.resultImage?.background              = roundRect(surfaceSoft, border, 24f)
@@ -1150,27 +1256,27 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun mqttBrokerUri(): String {
+        return try {
+            val host = java.net.URL(loadServerUrl().trim()).host.ifBlank { "192.168.1.80" }
+            "tcp://$host:1883"
+        } catch (_: Exception) {
+            "tcp://192.168.1.80:1883"
+        }
+    }
+
     private fun startMqttListener() {
         Thread {
-            val brokerUri = "ssl://test.mosquitto.org:8883"
+            val brokerUri = mqttBrokerUri()
             val clientId = "Cruzr_${(1000..9999).random()}"
 
             try {
                 mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
 
-                val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                })
-                val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
-                sslCtx.init(null, trustAll, java.security.SecureRandom())
-
                 val options = MqttConnectOptions().apply {
                     isCleanSession = true
                     connectionTimeout = 10
                     isAutomaticReconnect = true
-                    socketFactory = sslCtx.socketFactory
                 }
 
                 mqttClient?.setCallback(object : MqttCallbackExtended {
@@ -1182,7 +1288,7 @@ class MainActivity : AppCompatActivity() {
                             mqttClient?.subscribe("cruzr/scan_result", 1)
                         } catch (_: Exception) {}
                         mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
-                        runOnUiThread { setStatus("MQTT Reconnected to test.mosquitto.org") }
+                        runOnUiThread { setStatus("MQTT Reconnected to $brokerUri") }
                     }
 
                     override fun connectionLost(cause: Throwable?) {
@@ -1336,7 +1442,7 @@ class MainActivity : AppCompatActivity() {
                 mqttClient?.subscribe("cruzr/commands", 1)
                 mqttClient?.subscribe("cruzr/scan_result", 1)
                 mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
-                runOnUiThread { setStatus("MQTT Connected to test.mosquitto.org") }
+                runOnUiThread { setStatus("MQTT Connected to $brokerUri") }
 
             } catch (e: Exception) {
                 runOnUiThread { setStatus("MQTT Setup Failed: ${e.message}") }
@@ -1349,11 +1455,15 @@ class MainActivity : AppCompatActivity() {
         val persona = payload.optString("persona").ifBlank { null }
 
         val detections = mutableListOf<String>()
+        val detectionLabels = mutableListOf<String>()
         val detArray = payload.optJSONArray("detections")
         if (detArray != null) {
             for (i in 0 until detArray.length()) {
-                val name = detArray.optJSONObject(i)?.optString("class_name")?.trim() ?: continue
-                if (name.isNotBlank()) detections.add(name)
+                val obj = detArray.optJSONObject(i) ?: continue
+                val name = obj.optString("class_name").trim().takeIf { it.isNotBlank() } ?: continue
+                detections.add(name)
+                val color = obj.optString("color_name").trim()
+                detectionLabels.add(if (color.isNotBlank()) "$color ${name.replace('_', ' ')}" else name.replace('_', ' '))
             }
         }
 
@@ -1367,16 +1477,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         val annotatedFrame = payload.optString("annotated_frame").ifBlank { null }
-
-        val detectedColor = detArray?.optJSONObject(0)?.optString("color_name")?.trim().orEmpty()
-        val detectedBodyType = payload.optJSONObject("body_analysis")
-            ?.optString("body_shape")?.trim()
+        val bodyAnnotatedFrame = payload.optString("body_annotated_frame").ifBlank { null }
+        val bodyAnalysis = payload.optJSONObject("body_analysis")
+        val bodyShape = bodyAnalysis?.optString("body_shape")
             ?.takeIf { it.isNotBlank() && it != "unknown" }
-            .orEmpty()
+        val detectedColor = detArray?.optJSONObject(0)?.optString("color_name")?.trim().orEmpty()
+        val detectedBodyType = bodyShape.orEmpty()
         val baseUrl = normalizedBaseUrl()
 
         viewModel.injectScanResult(
-            sessionId, detections, recommendations, annotatedFrame,
+            sessionId, detections, detectionLabels, recommendations,
+            annotatedFrame, bodyAnnotatedFrame, bodyShape,
             detectedColor, detectedBodyType, baseUrl,
         )
         if (persona != null) {
@@ -1395,7 +1506,7 @@ class MainActivity : AppCompatActivity() {
             val motionOk = if (motionManager  != null) "✓" else "✗"
             val sensorOk = if (cruzrSensorManager != null) "✓" else "✗"
             runOnUiThread { setStatus("Hardware ready — motion:$motionOk sensor:$sensorOk") }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             runOnUiThread { setStatus("Manager Init Failed: ${e.message}") }
         }
     }
