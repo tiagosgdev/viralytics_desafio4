@@ -59,17 +59,18 @@ else:                                        # focused retrieval (~45, colour �
 
 | Colour personality      |   Mean review (1–5)  |
 | ----------------------- | :------------------: |
-| purist (on-theme)       |     `[TBD-grid]`     |
-| harmonizer              |     `[TBD-grid]`     |
-| adventurous (contrast)  |     `[TBD-grid]`     |
-| **spread**              |   **`[TBD-grid]`**   |
+| purist (on-theme)       |         2.42         |
+| harmonizer              |         2.35         |
+| adventurous (contrast)  |         2.33         |
+| **spread**              |       **0.09**       |
 
-Per-persona mean: office `[TBD-grid]` / casual `[TBD-grid]` / party `[TBD-grid]`.
+Per-persona mean: office 2.48 / casual 2.16 / party 2.46.
 
 **Explanation.** Holding the RL agent fixed, we swept all agent-personality combinations to see whether the autonomous
-agents' behaviour changes the recommendation quality. The spread across personalities (`[TBD-grid]`) shows the degree to
-which a single agent's strategy steers the customer's review — the core multi-agent result: the agents
-`[are / are not]` consequential to the outcome under the deployed Borda mechanism.
+agents' behaviour changes the recommendation quality. The spread across personalities is only **0.09** (and ≤ 0.09 for
+*every* agent dimension) — within noise. So under the deployed Borda mechanism the agents **are not** individually
+consequential to the review; they still shape it through their weighted scores, just not via their personality variant
+(matching the Δ ≤ 0.06 seen in the paper's Borda arm).
 
 **Key code** — `multi_agent/strategies/colour.py`, `multi_agent/strategies/registry.py`
 ```python
@@ -118,7 +119,7 @@ RL_WEIGHT = float(os.environ.get("RL_WEIGHT", "0.15"))
 ## Slide 5 — Takeaways / future work
 
 **Explanation.** The multi-agent Borda recommender delivers the best customer satisfaction and runs end-to-end on the
-physical robot. Agent personalities `[do / do not]` measurably steer recommendations (Sim A); the RL agent does not yet
+physical robot. Agent personalities **do not** measurably steer recommendations (Sim A, spread ≤ 0.09); the RL agent does not yet
 learn from feedback (Sim B), limited by reward dilution and a low-variance review signal. The most promising next step is
 to **promote RL from a peer voter to the orchestrating aggregator** (so the review becomes the direct, attributable
 consequence of its own decision), alongside training on **real production feedback** and a coherence-correlated catalog

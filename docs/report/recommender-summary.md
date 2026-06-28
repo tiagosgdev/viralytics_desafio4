@@ -1,8 +1,7 @@
 # Multi-Agent Clothing Recommender — Architecture & Evaluation
 
-> ⏳ **Results pending.** The two simulations are still running; every number marked **`[TBD]`** below is a
-> placeholder to be replaced once the runs finish (the §4 conclusion will be finalised then too). The architecture
-> (§1) and experimental design (§2) are final.
+> ✅ **Both simulations complete.** Sim A (agent personalities, exp #30, 729 episodes) and Sim B (RL learning, exp #29,
+> 300 episodes) are filled in below. The Borda-vs-Veto figures in §3.1 are from a prior evaluation run (flagged there).
 
 ## 1. System architecture
 
@@ -88,7 +87,7 @@ Both simulations drive the real recommender end-to-end (no mocks) and report `0 
 
 ## 3. Results
 
-> ⏳ Values below are placeholders pending the in-progress runs.
+> All values below are final (Sim A = exp #30, Sim B = exp #29). §3.1 Borda-vs-Veto is from a prior run (flagged).
 
 ### 3.1 Why Borda (brief comparison)
 
@@ -109,19 +108,21 @@ trades away relevance. Because the product goal is customer satisfaction, **Bord
 
 **Table 2 — Mean review by agent personality (Borda, marginal over all combos).**
 
-| Agent / personality        | Mean review (1–5) |
-| -------------------------- | :---------------: |
-| colour — purist            |      [TBD]        |
-| colour — harmonizer        |      [TBD]        |
-| colour — adventurous       |      [TBD]        |
-| _(other agents …)_         |      [TBD]        |
-| **spread across combos**   |    **[TBD]**      |
+| Agent / personality            |  Mean review (1–5)  |
+| ------------------------------ | :-----------------: |
+| colour — purist                |        2.42         |
+| colour — harmonizer            |        2.35         |
+| colour — adventurous           |        2.33         |
+| colour spread                  |        0.09         |
+| body / clothing / stock spread |  0.05 / 0.08 / 0.09 |
+| **max spread (any agent)**     |      **0.09**       |
 
-_Per-persona means:_ office `[TBD]` / casual `[TBD]` / party `[TBD]`. _Best combination per persona:_ `[TBD]`.
+_Per-persona means:_ office 2.48 / casual 2.16 / party 2.46. _Best combination per persona:_ within noise (n = 3 / combo).
 
-_Interpretation (to finalise):_ the spread of `[TBD]` across personalities shows that **changing an agent's behaviour
-`[does / does not]` measurably move the customer's review** — i.e. the autonomous personalities `[are / are not]`
-consequential to the recommendation quality.
+_Interpretation:_ the spread is only **0.09** (≤ 0.09 for every agent dimension), so **changing an agent's behaviour
+does not measurably move the customer's review** — under the deployed Borda mechanism the autonomous personalities are
+**not** individually consequential (they still contribute through their weighted scores). This matches the paper's
+Δ ≤ 0.06 observation for the Borda arm.
 
 ### 3.3 Simulation B — RL learning affects the rating
 
@@ -129,21 +130,22 @@ consequential to the recommendation quality.
 
 | Phase                          | Mean review (1–5) | Mean return |
 | ------------------------------ | :---------------: | :---------: |
-| Early (first 25% of episodes)  |      [TBD]        |    [TBD]    |
-| Late (last 25% of episodes)    |      [TBD]        |    [TBD]    |
-| **Δ (late − early)**           |    **[TBD]**      |  **[TBD]**  |
+| Early (first 25% of episodes)  |       2.44        |    0.185    |
+| Late (last 25% of episodes)    |       2.48        |    0.078    |
+| **Δ (late − early)**           |     **+0.04**     | **−0.107**  |
 
-_Interpretation:_ over training the mean review changed by `[TBD]` (target ≥ +0.20), so in this run the RL agent **did
+_Interpretation:_ over training the mean review changed by **+0.04** (target ≥ +0.20), so in this run the RL agent **did
 not show a clear gain in customer satisfaction** from the per-item feedback. The likely reasons and the changes most
 likely to improve it are discussed in §4.
 
 ## 4. Conclusion
 
-> ⏳ To finalise once both simulations complete.
 
-- **Selection mechanism.** `[Borda chosen — restate the satisfaction advantage with the §3.1 numbers.]`
-- **Agent personalities.** `[State whether/how personalities move the review, citing the §3.2 spread.]`
-- **RL learning.** In this evaluation the RL agent **did not learn to raise customer satisfaction** (Δreview `[TBD]`,
+- **Selection mechanism.** Borda is the deployed choice — it wins the primary metric, customer satisfaction (1.57 vs
+  1.28), trading away the broad pool's variety for relevance.
+- **Agent personalities.** Under Borda, personalities do **not** measurably move the review (spread ≤ 0.09 across every
+  agent dimension, within noise) — the agents contribute through their weighted scores, not their personality variant.
+- **RL learning.** In this evaluation the RL agent **did not learn to raise customer satisfaction** (Δreview **+0.04**,
   below the +0.20 target; mean return did not trend up). This is an honest negative result; §4.1 explains why and §4.2
   proposes the changes most likely to fix it.
 
@@ -183,6 +185,11 @@ learn from**, not the implementation:
 
 ### 4.3 Overall
 
-`[One-paragraph synthesis: the final Borda-based, per-item-feedback multi-agent architecture; that the two isolated
-simulations measured the personality effect (§3.2) and the RL-learning effect (§3.3) independently; the honest RL
-negative result and the clear path to improve it (§4.2); and the recommended next step.]`
+The final system is a Borda-based, per-item-feedback multi-agent recommender that runs end-to-end on the physical
+robot, with Borda chosen for its higher customer satisfaction. Two isolated simulations measured each effect
+independently: the **agent personalities** do not measurably move the review under Borda (Sim A, spread ≤ 0.09), and the
+**RL agent** does not yet learn to raise satisfaction (Sim B, Δreview +0.04) — an honest negative result driven by reward
+dilution and a low-variance review signal, not by the implementation. The clearest path forward is to promote the RL
+policy from a peer voter to the orchestrating aggregator (so the review becomes its own attributable reward) and to
+train on real production feedback over a coherence-correlated catalog, which would also give the agent personalities a
+signal worth differentiating on.

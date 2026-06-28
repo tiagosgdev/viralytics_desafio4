@@ -7,6 +7,10 @@
 >
 > ✅ **RL results final (exp #29, 300 episodes, 224 PPO updates, 0 dropped):** early review 2.44 → late 2.48,
 > **Δ = +0.04** (below the +0.20 target); mean return **declined** 0.185 → 0.078. Filled into Table VI and the prose below.
+>
+> ✅ **Simulation A final (exp #30, 729-episode Borda grid, per-item reviews):** agent personalities do **not** move the
+> review — colour spread **0.09** (≤ 0.09 for every agent dimension); per-persona daniel 2.48 / maya 2.46 / sofia 2.16.
+> See the "Fresh per-item-era confirmation" block in IV-A.
 
 ---
 
@@ -45,6 +49,23 @@ high-entropy evaluation of a realistic retail environment"):
 
 **Optional — Table IV "Primary Failure Mode" row** reads pro-veto ("Borda: Safe but redundant uniformity"). To match the
 reframe: Borda → *"Lower output variety"*; Veto-Batch → *"Lower satisfaction from high-entropy slate."*
+
+**Fresh per-item-era confirmation (Simulation A, exp #30).** A new 729-episode full-factorial **Borda** grid was run
+under the per-item review metric, and it **confirms the personality finding**: marginal mean reviews are purist 2.42,
+harmonizer 2.35, adventurous 2.33 (colour **spread 0.09**), and ≤ 0.09 for *every* agent dimension (body 0.05, clothing
+0.08, stock 0.09). Under Borda the agents are **not individually consequential** — consistent with the Δ ≤ 0.06 in
+Table III. Per-persona means: daniel 2.48 / maya 2.46 / sofia 2.16. You can add one sentence to IV-A to this effect, e.g.:
+
+> *A subsequent full-factorial Borda grid under per-item review (729 episodes) reproduces this result: every agent
+> dimension shows a marginal spread ≤ 0.09 across its personalities, confirming that personality variation does not
+> meaningfully steer the review under Borda.*
+
+⚠️ **Keep Tables II–III at their current (prior-run) numbers — do not overwrite them with exp #30.** Tables II–III are an
+internally consistent **Borda-vs-Veto** pair from the same earlier run; exp #30 re-ran **Borda only**, under a
+**different (per-item) review metric**, so its numbers are *not comparable* to those holistic-review figures. The
+per-item metric averages all ten shown items and runs ~0.2 lower (the same Borda grid scored **2.56 holistically** in
+the prior run vs **2.37 per-item**), so mixing them in one table would mislead. If you want the fresh numbers in the
+paper, present them as a **separate Borda-only, per-item** table — never replacing the Borda/Veto columns.
 
 ---
 

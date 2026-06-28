@@ -51,15 +51,16 @@ else:                                        # focused retrieval (~45, colour �
 
 | Personalidade de cor    | Avaliação média (1–5) |
 | ----------------------- | :-------------------: |
-| purista (no tema)       |     `[TBD-grid]`      |
-| harmonizador            |     `[TBD-grid]`      |
-| aventureiro (contraste) |     `[TBD-grid]`      |
-| **amplitude**           |   **`[TBD-grid]`**    |
+| purista (no tema)       |         2,42          |
+| harmonizador            |         2,35          |
+| aventureiro (contraste) |         2,33          |
+| **amplitude**           |       **0,09**        |
 
-Média por persona: escritório `[TBD-grid]` / casual `[TBD-grid]` / festa `[TBD-grid]`.
+Média por persona: escritório 2,48 / casual 2,16 / festa 2,46.
 
-**Explicação.** Com o RL fixo, varremos todas as combinações de personalidades. A amplitude `[TBD-grid]` mostra se os
-agentes `[são / não são]` determinantes na avaliação.
+**Explicação.** Com o RL fixo, varremos todas as combinações de personalidades. A amplitude é apenas **0,09** (≤ 0,09 em
+todas as dimensões) — dentro do ruído: sob o mecanismo Borda os agentes **não são** determinantes na avaliação (ainda
+contribuem pelas suas pontuações ponderadas, mas não pela variante de personalidade).
 
 **Código-chave** — `multi_agent/strategies/colour.py`, `multi_agent/strategies/registry.py`
 ```python
@@ -105,7 +106,7 @@ RL_WEIGHT = float(os.environ.get("RL_WEIGHT", "0.15"))
 ## Slide 5 — Conclusões / trabalho futuro
 
 **Explicação.** O recomendador multi-agente baseado em Borda oferece a melhor satisfação do cliente e corre de ponta a
-ponta no robô físico. As personalidades dos agentes `[alteram / não alteram]` de forma mensurável as recomendações
+ponta no robô físico. As personalidades dos agentes **não alteram** de forma mensurável as recomendações (amplitude ≤ 0,09)
 (Sim A); o agente RL ainda não aprende com o feedback (Sim B), limitado pela diluição da recompensa e por um sinal de
 avaliação de baixa variância. O passo mais promissor é promover o RL de simples votante para o **agregador
 orquestrador** — que consome as pontuações dos quatro agentes e produz ele próprio o top-10, fazendo com que a avaliação
