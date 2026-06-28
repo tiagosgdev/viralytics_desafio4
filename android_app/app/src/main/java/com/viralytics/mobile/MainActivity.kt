@@ -283,6 +283,7 @@ class MainActivity : AppCompatActivity() {
                 checkedIds.contains(binding.chipOther?.id) -> "other"
                 else -> ""
             }
+            publishProfile()
         }
 
         binding.heightInput?.addTextChangedListener(object : android.text.TextWatcher {
@@ -290,6 +291,7 @@ class MainActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
                 viewModel.selectedHeightCm = s?.toString()?.trim()?.toIntOrNull() ?: 0
+                publishProfile()
             }
         })
 
@@ -1357,6 +1359,29 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    /**
+     * Publishes the customer profile (gender + height) so the phone camera can attach
+     * it to the next scan upload — the server uses height_cm to convert body-analysis
+     * measurements to centimetres. Retained so a phone that scans later still gets the
+     * latest profile. Only meaningful from the tablet (where the profile card lives).
+     */
+    private fun publishProfile() {
+        val gender = viewModel.selectedGender
+        val heightCm = viewModel.selectedHeightCm
+        Thread {
+            try {
+                val payload = JSONObject()
+                    .put("gender", gender)
+                    .put("height_cm", heightCm)
+                    .toString()
+                mqttClient?.publish("cruzr/profile", MqttMessage(payload.toByteArray()).apply {
+                    qos = 1
+                    isRetained = true
+                })
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     private fun applyPersona(persona: String) {
         viewModel.selectedPersona = persona
         binding.personaChip?.text = if (persona == "edna") "EDNA active" else "CRUELLA active"
@@ -1555,6 +1580,7 @@ class MainActivity : AppCompatActivity() {
                             mqttClient?.subscribe("cruzr/commands", 1)
                             mqttClient?.subscribe("cruzr/scan_result", 1)
                             mqttClient?.subscribe("cruzr/scan_status", 0)
+                            mqttClient?.subscribe("cruzr/profile", 1)
                         } catch (_: Exception) {}
                         mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
                         runOnUiThread { setStatus("MQTT Reconnected to $brokerUri") }
@@ -1573,6 +1599,19 @@ class MainActivity : AppCompatActivity() {
                             if (topic == "cruzr/persona") {
                                 val p = json.optString("persona").ifBlank { null } ?: return
                                 runOnUiThread { applyPersona(p); savePersona(p) }
+                                return
+                            }
+
+                            if (topic == "cruzr/profile") {
+                                // Customer profile (gender + height) is entered on the tablet,
+                                // but the SCAN — and its server-side body analysis — runs on the
+                                // phone camera. Relay the tablet's profile so the phone's upload
+                                // carries height_cm (→ cm measurements) and gender. The tablet is
+                                // the source of truth, so it ignores its own relayed message.
+                                if (appMode == AppMode.PHONE_CAMERA) {
+                                    viewModel.selectedGender = json.optString("gender")
+                                    viewModel.selectedHeightCm = json.optInt("height_cm", 0)
+                                }
                                 return
                             }
 
@@ -1719,6 +1758,7 @@ class MainActivity : AppCompatActivity() {
                 mqttClient?.subscribe("cruzr/commands", 1)
                 mqttClient?.subscribe("cruzr/scan_result", 1)
                 mqttClient?.subscribe("cruzr/scan_status", 0)
+                mqttClient?.subscribe("cruzr/profile", 1)
                 mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
                 runOnUiThread { setStatus("MQTT Connected to $brokerUri") }
 
