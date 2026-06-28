@@ -84,6 +84,8 @@ class MainViewModel : ViewModel() {
     var detectedType: String = ""
     var detectedColor: String = ""
     var detectedBodyType: String = ""
+    var selectedGender: String = ""
+    var selectedHeightCm: Int = 0
     var currentRoundId: String? = null
     private val searchIntentMessages = mutableListOf<String>()
 
@@ -91,7 +93,7 @@ class MainViewModel : ViewModel() {
         selectedPersona = persona
         viewModelScope.launch {
             _events.value = UiEvent.SetStatus("Uploading scan...")
-            scanRepository.scan(bitmap, baseUrl, persona)
+            scanRepository.scan(bitmap, baseUrl, persona, userGender = selectedGender, userHeightCm = selectedHeightCm)
                 .onSuccess { result ->
                     currentSessionId = result.sessionId
                     currentConversationState = null
@@ -151,6 +153,7 @@ class MainViewModel : ViewModel() {
             detectedBodyType = bodyType,
             detectedColor = color,
             userAnswer = userAnswer,
+            userGender = selectedGender,
         )
             .onSuccess { (roundId, recs) ->
                 if (recs.isNotEmpty()) {
@@ -303,6 +306,8 @@ class MainViewModel : ViewModel() {
         currentRecommendations.clear()
         currentRoundId = null
         searchIntentMessages.clear()
+        selectedGender = ""
+        selectedHeightCm = 0
     }
 
     /**

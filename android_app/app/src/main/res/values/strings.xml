@@ -46,6 +46,7 @@
     <string name="live_preview">LIVE PREVIEW</string>
     <string name="camera_stage_title">Stand in front\nof camera</string>
     <string name="camera_stage_analysing">Analysing\nyour image…</string>
+    <string name="camera_stage_complete">Analysis\ncomplete!</string>
     <string name="camera_stage_hint">The AI detects clothing, dominant colour, silhouette and style intent to recommend matching pieces.</string>
     <string name="chat_thread_welcome">Hi — I\'m your digital stylist. Scan an outfit, then ask me for colours, fits or sizes.</string>
     <string name="stylist_modal_kicker">FASHIONSENSE · PERSONAL STYLING</string>

@@ -61,11 +61,21 @@ def _prune_to_stock_keys(sub: dict | None) -> dict:
 
 
 def _prep_query_filters(weights_result: dict, context: dict) -> dict:
-    """Build the stock-query filters: prune to stock keys + inject soft gender.
+    """Build the stock-query filters: prune to stock keys + inject gender filter.
 
-    Shared by the legacy exact-filter path and the broad-random path so both see
-    the same conversation filters (minus vector-only fields like body_type) and
-    the same gender soft-include. Non-mutating w.r.t. the caller's weights_result.
+    Gender rules (mirrors the frontend chip selection):
+      male   → include [male, unisex],   hard-exclude female
+      female → include [female, unisex], hard-exclude male
+      other / not set → no gender filter; pool contains all genders
+
+    The hard exclude (not just a soft include) is required because without it,
+    a female item that also matches color+type accumulates match_count=2 and
+    outranks a male item that only matched gender (match_count=1).
+
+    Unisex items are never excluded regardless of the selected gender.
+
+    Shared by the legacy exact-filter path and the broad-random path.
+    Non-mutating w.r.t. the caller's weights_result.
     """
     query_filters: dict = dict(weights_result.get("filters") or {})
     query_filters["include"] = _prune_to_stock_keys(query_filters.get("include"))
@@ -73,10 +83,21 @@ def _prep_query_filters(weights_result: dict, context: dict) -> dict:
 
     gender = str(context.get("user_gender") or "").strip().lower()
     if gender in ("male", "female"):
+        opposite = "female" if gender == "male" else "male"
+
+        # Soft include: ranking boost for gender-matching + unisex items.
         inc = dict(query_filters.get("include") or {})
         if "gender" not in inc:
             inc["gender"] = [gender, "unisex"]
             query_filters = {**query_filters, "include": inc}
+
+        # Hard exclude: drop items explicitly tagged for the opposite gender.
+        # Only applied when the LLM hasn't already constrained gender in exclude.
+        exc = dict(query_filters.get("exclude") or {})
+        if "gender" not in exc:
+            exc["gender"] = [opposite]
+            query_filters = {**query_filters, "exclude": exc}
+
     return query_filters
 
 

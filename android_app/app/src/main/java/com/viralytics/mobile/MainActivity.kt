@@ -233,6 +233,7 @@ class MainActivity : AppCompatActivity() {
                 return@registerForActivityResult
             }
             setScanStageAnalysing(true)
+            publishScanStatus("analysing")
             val baseUrl = normalizedBaseUrl() ?: return@registerForActivityResult
             viewModel.uploadScan(bitmap, baseUrl, loadPersona())
         }
@@ -274,6 +275,24 @@ class MainActivity : AppCompatActivity() {
             if (loadPersona().isBlank()) { showPersonaDialog(); return@setOnClickListener }
             launchCamera()
         }
+
+        binding.genderChipGroup?.setOnCheckedStateChangeListener { _, checkedIds ->
+            viewModel.selectedGender = when {
+                checkedIds.contains(binding.chipMale?.id) -> "male"
+                checkedIds.contains(binding.chipFemale?.id) -> "female"
+                checkedIds.contains(binding.chipOther?.id) -> "other"
+                else -> ""
+            }
+        }
+
+        binding.heightInput?.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                viewModel.selectedHeightCm = s?.toString()?.trim()?.toIntOrNull() ?: 0
+            }
+        })
+
         binding.sendChatButton.setOnClickListener { sendChat() }
         binding.chatInput.setOnEditorActionListener { _, _, _ -> sendChat(); true }
         binding.recommendationsLeftButton.setOnClickListener { scrollRecommendations(-1) }
@@ -301,7 +320,7 @@ class MainActivity : AppCompatActivity() {
                 is UiEvent.ShowToast -> toast(event.message)
                 is UiEvent.ScanComplete -> {
                     if (appMode == AppMode.PHONE_CAMERA) {
-                        setScanStageAnalysing(false)
+                        setScanStageComplete()
                         toast("Scan sent to tablet!")
                     } else {
                         setScanStageAnalysing(false)
@@ -409,10 +428,20 @@ class MainActivity : AppCompatActivity() {
         if (analysing) {
             binding.cameraStageTitleText?.text = getString(R.string.camera_stage_analysing)
             binding.cameraStageHintText?.isVisible = false
+            // Do NOT force cameraStageDecor visible here. If a result image is already displayed
+            // the decor was hidden by updateAnnotatedImage and should stay hidden — the status pill
+            // carries the feedback. For the first scan the decor is already visible from its
+            // initial state, so the text update above is all that is needed.
         } else {
             binding.cameraStageTitleText?.text = getString(R.string.camera_stage_title)
             binding.cameraStageHintText?.isVisible = true
         }
+    }
+
+    private fun setScanStageComplete() {
+        binding.cameraStageTitleText?.text = getString(R.string.camera_stage_complete)
+        binding.cameraStageHintText?.isVisible = false
+        Handler(Looper.getMainLooper()).postDelayed({ setScanStageAnalysing(false) }, 3000L)
     }
 
     private fun sendChat() {
@@ -1319,6 +1348,15 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun publishScanStatus(status: String) {
+        Thread {
+            try {
+                val payload = JSONObject().put("status", status).toString()
+                mqttClient?.publish("cruzr/scan_status", MqttMessage(payload.toByteArray()).apply { qos = 0 })
+            } catch (_: Exception) {}
+        }.start()
+    }
+
     private fun applyPersona(persona: String) {
         viewModel.selectedPersona = persona
         binding.personaChip?.text = if (persona == "edna") "EDNA active" else "CRUELLA active"
@@ -1473,6 +1511,8 @@ class MainActivity : AppCompatActivity() {
             applyPersona(persona)
             publishPersona(persona)
             viewModel.clearSession()
+            binding.genderChipGroup?.clearCheck()
+            binding.heightInput?.text?.clear()
             currentBodyAnalysis = null
             renderDetections()
             renderRecommendations()
@@ -1514,6 +1554,7 @@ class MainActivity : AppCompatActivity() {
                             mqttClient?.subscribe("cruzr/persona", 1)
                             mqttClient?.subscribe("cruzr/commands", 1)
                             mqttClient?.subscribe("cruzr/scan_result", 1)
+                            mqttClient?.subscribe("cruzr/scan_status", 0)
                         } catch (_: Exception) {}
                         mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
                         runOnUiThread { setStatus("MQTT Reconnected to $brokerUri") }
@@ -1537,6 +1578,14 @@ class MainActivity : AppCompatActivity() {
 
                             if (topic == "cruzr/scan_result") {
                                 handleScanResult(json)
+                                return
+                            }
+
+                            if (topic == "cruzr/scan_status") {
+                                if (appMode == AppMode.TABLET &&
+                                    json.optString("status") == "analysing") {
+                                    runOnUiThread { setScanStageAnalysing(true) }
+                                }
                                 return
                             }
 
@@ -1669,6 +1718,7 @@ class MainActivity : AppCompatActivity() {
                 mqttClient?.subscribe("cruzr/persona", 1)
                 mqttClient?.subscribe("cruzr/commands", 1)
                 mqttClient?.subscribe("cruzr/scan_result", 1)
+                mqttClient?.subscribe("cruzr/scan_status", 0)
                 mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
                 runOnUiThread { setStatus("MQTT Connected to $brokerUri") }
 
