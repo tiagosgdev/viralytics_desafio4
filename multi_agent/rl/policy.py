@@ -56,13 +56,15 @@ logger = logging.getLogger(__name__)
 # Ordered feature schema — each name's index is its position in the input vector.
 # Persisted with the checkpoint so a saved policy is validated against the code.
 FEATURE_NAMES: tuple[str, ...] = (
-    "bias",          # constant 1.0 (harmless; the linear layers also have biases)
-    "color_match",   # 1.0 if item colour == detected colour
-    "type_match",    # 1.0 if item type   == detected type
-    "gender_match",  # 1.0 if item gender ∈ {user_gender, "unisex"}
-    "push_norm",     # push_score   min-max normalised across the candidate set
-    "price_norm",    # price        min-max normalised across the candidate set
-    "stock_norm",    # stock_count  min-max normalised across the candidate set
+    "bias",            # constant 1.0 (harmless; the linear layers also have biases)
+    "color_match",     # 1.0 if item colour matches include.color (else detected colour)
+    "type_match",      # 1.0 if item type   matches include.type  (else detected type)
+    "gender_match",    # 1.0 if item gender ∈ {user_gender, "unisex"}
+    "push_norm",       # push_score   min-max normalised across the candidate set
+    "price_norm",      # price        min-max normalised across the candidate set
+    "stock_norm",      # stock_count  min-max normalised across the candidate set
+    "style_match",     # 1.0 if item style    ∈ include.style    (refined conversation)
+    "occasion_match",  # 1.0 if item occasion ∈ include.occasion (refined conversation)
 )
 N_FEATURES = len(FEATURE_NAMES)
 
@@ -86,14 +88,34 @@ def _item_key(item_id, size) -> str:
     return f"{item_id}:{size}"
 
 
-def extract_features(candidates: list[dict], context: dict) -> dict[str, list[float]]:
+def _include_values(include: dict, axis: str) -> set[str]:
+    """Case-insensitive set of include-filter values for `axis` (empty if absent)."""
+    return {str(v).lower().strip() for v in (include.get(axis) or [])}
+
+
+def extract_features(
+    candidates: list[dict],
+    context: dict,
+    weights_result: dict | None = None,
+) -> dict[str, list[float]]:
     """
     Build the per-item feature vector for every candidate, using only fields
     available during a sealed bid (CFP payload + round context).
+
+    `weights_result` carries the refined conversation filters
+    (`filters.include`). When an axis is present there it drives the match flags
+    (style/occasion, and refined color/type); otherwise color/type fall back to
+    the raw scan context. All membership tests are case-insensitive.
     """
     detected_color = str(context.get("detected_color") or "").lower().strip()
     detected_type  = str(context.get("detected_type")  or "").lower().strip()
     user_gender    = str(context.get("user_gender")    or "").lower().strip()
+
+    include = ((weights_result or {}).get("filters") or {}).get("include") or {}
+    inc_color    = _include_values(include, "color")
+    inc_type     = _include_values(include, "type")
+    inc_style    = _include_values(include, "style")
+    inc_occasion = _include_values(include, "occasion")
 
     push  = _norm_map(candidates, "push_score")
     price = _norm_map(candidates, "price")
@@ -101,16 +123,29 @@ def extract_features(candidates: list[dict], context: dict) -> dict[str, list[fl
 
     features: dict[str, list[float]] = {}
     for i, c in enumerate(candidates):
-        item_color  = str(c.get("color")  or "").lower().strip()
-        item_type   = str(c.get("type")   or "").lower().strip()
-        item_gender = str(c.get("gender") or "").lower().strip()
+        item_color    = str(c.get("color")    or "").lower().strip()
+        item_type     = str(c.get("type")     or "").lower().strip()
+        item_gender   = str(c.get("gender")   or "").lower().strip()
+        item_style    = str(c.get("style")    or "").lower().strip()
+        item_occasion = str(c.get("occasion") or "").lower().strip()
 
-        color_match  = 1.0 if (detected_color and item_color == detected_color) else 0.0
-        type_match   = 1.0 if (detected_type  and item_type  == detected_type)  else 0.0
-        gender_match = 1.0 if (user_gender and item_gender in (user_gender, "unisex")) else 0.0
+        # Refined filter takes precedence; fall back to the raw scan when absent.
+        if inc_color:
+            color_match = 1.0 if item_color in inc_color else 0.0
+        else:
+            color_match = 1.0 if (detected_color and item_color == detected_color) else 0.0
+        if inc_type:
+            type_match = 1.0 if item_type in inc_type else 0.0
+        else:
+            type_match = 1.0 if (detected_type and item_type == detected_type) else 0.0
+
+        gender_match   = 1.0 if (user_gender and item_gender in (user_gender, "unisex")) else 0.0
+        style_match    = 1.0 if (inc_style    and item_style    in inc_style)    else 0.0
+        occasion_match = 1.0 if (inc_occasion and item_occasion in inc_occasion) else 0.0
 
         features[_item_key(c["item_id"], c["size"])] = [
-            1.0, color_match, type_match, gender_match, push[i], price[i], stock[i],
+            1.0, color_match, type_match, gender_match,
+            push[i], price[i], stock[i], style_match, occasion_match,
         ]
     return features
 
@@ -208,7 +243,10 @@ class PPOPolicy:
 
             # One-step episodes ⇒ no temporal discounting; advantage = return - baseline.
             adv = returns - old_val
-            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+            # Guard against near-constant returns: when the spread is tiny, only
+            # center (dividing by ~0 std would blow tiny differences into noise).
+            std = adv.std()
+            adv = (adv - adv.mean()) / std if std > 1e-3 else (adv - adv.mean())
 
             n = len(transitions)
             mb = min(PPO_MINIBATCH, n)

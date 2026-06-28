@@ -92,7 +92,7 @@ _CFP_FIELDS: dict[str, frozenset[str]] = {
                            "season", "style", "pattern", "material", "gender", "fit"}),
     # rl_agent: builds match + normalised inventory/price features from these fields
     "rl":       frozenset({"item_id", "size", "color", "type", "gender",
-                           "price", "stock_count", "push_score"}),
+                           "price", "stock_count", "push_score", "style", "occasion"}),
 }
 
 

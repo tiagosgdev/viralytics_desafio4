@@ -76,7 +76,7 @@ USER_WEIGHT       = 0.80  # legacy reference; no longer a fixed user-preference 
 # RL_WEIGHT is the ONE fixed-slice budget: it is carved off the top for the RL
 # agent's learned signal, and the four conversation emphases share the remaining
 # 1 - RL_WEIGHT. 0 (or RL_ENABLED=False) omits the RL agent entirely.
-RL_WEIGHT         = 0.15  # fixed weight for the RLRecommenderAgent (learned signal)
+RL_WEIGHT         = float(os.environ.get("RL_WEIGHT", "0.15"))  # fixed weight for the RLRecommenderAgent (learned signal)
 
 # ── PPO hyperparameters ──────────────────────────────────────────────────────────
 # The RL agent is a PyTorch actor-critic trained with Proximal Policy Optimisation.

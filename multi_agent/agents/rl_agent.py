@@ -45,13 +45,14 @@ class RLScoreBehaviour(CyclicBehaviour):
         conv_id         = data.get("conv_id", "")
         candidates_info = data.get("candidates", [])
         context         = data.get("context", {})
+        weights_result  = data.get("weights_result", {})
 
         if not candidates_info:
             return
 
         # Forward pass + sample (sampling = exploration); cache the transitions so
         # the reward passes can run PPO over them later.
-        features = extract_features(candidates_info, context)
+        features = extract_features(candidates_info, context, weights_result)
         scores, transitions = rl_policy.act(features)
         rl_store.record_transitions(conv_id, transitions)
 
