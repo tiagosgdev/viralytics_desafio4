@@ -162,27 +162,58 @@ Concrete (real `review_reason` text, borda, **same persona, same colour, stock f
 
 ## RL-agent impact
 
-The RL agent is **1 of 5 Borda voters** and is **not** a varied factor in the grids
-(only colour/body/clothing/stock vary), so its effect is measured by the dedicated
-learning curve, not the grids.
+The RL agent has a **fixed 0.15 Borda weight** (`config.py:79`; the other 4 agents
+share 0.85 by emphasis×confidence) and is **not** a varied factor in the grids, so its
+effect is measured by dedicated learning curves. **Three curves were run to isolate
+mode + reward source. All NULL — RL does not learn in any configuration.**
 
-**Curve #22 (300 eps, 224 PPO updates, 0 dropped) — RL has ~no measurable impact / does
-not learn:**
-| signal | value | meaning |
-|--------|:--:|--------|
-| naive Δ(late−early) | −0.067 | persona-confounded (early=maya, late=sofia) — discard |
-| within-persona Δ (1st→2nd half) | maya +0.18 · daniel +0.08 · sofia +0.04 | weakly +ve… |
-| **mean_return** | −0.0169 → −0.0164 (**flat, all 224 updates**) | **no advantage signal ⇒ policy isn't moving** |
+| exp | selection | reward | order | mean | mean_return (first75→last75) | early→late review | within-persona Δ (½→½) | learns? |
+|:--:|---|---|---|:--:|:--:|:--:|---|:--:|
+| #22 | veto | rating | persona-major | 2.16 | −0.015 (flat) | 2.05→1.99* | maya+.18 dan+.08 sof+.04 | **no** |
+| #23 | borda | rating | interleave | 2.75 | −0.005 (flat) | **2.81→2.75** | dan+.02 maya−.24 sof−.06 | **no** |
+| #24 | borda | both | interleave | 2.80 | +0.085 → +0.080 (**down**) | **2.81→2.73** | dan±0 maya−.32 sof+.07 | **no** |
 
-The weak positive within-persona rating drift can't be credited to PPO because
-`mean_return` never develops — the critic still predicts the (negative) constant
-reward, advantages collapse to ≈0, identical to the exp #12 null. RL neither helps nor
-hurts the recommendation here; it's a passive 5th vote.
+\*#22 early/late is persona-confounded (persona-major order). #23/#24 use `interleave`
+so their early→late is clean — and both are flat/slightly negative. All: 224 PPO
+updates, 0 rewards dropped.
 
-**Why:** the curve runs in `veto_batch`, the mode the fix helped least → reviews stay
-floor-bound (2.16) → rewards mostly ≤0 → no learnable variance. **Lever:** run the curve
-in `borda` (40% 3s + 8% 4s = positive reward mass), interleave personas, boost RL's
-Borda weight.
+**Reading it:**
+- **Borda lifts the reward mass but not learning.** #23/#24 reviews (~2.8) and
+  mean_return (−0.005 / +0.085) are far above veto #22 (2.16 / −0.015), so the "run it
+  in borda" lever did raise the reward — but the curve stayed flat. Higher reward
+  *level* ≠ learning.
+- **`both` (dense pass-rate) doesn't help either** — #24's mean_return is positive
+  (pass-rate is mostly +) but **trends down**, and review is flat. The dense reward adds
+  no learning trend.
+- The earlier "#22 within-persona weakly +ve" hint did **not** replicate under the
+  cleaner #23/#24 (maya actually drifts down) → it was noise.
+
+### Why — code audit verdict: DESIGN FLAW, not a bug (results are valid)
+A full audit of the RL loop (`multi_agent/rl/`, `aggregator.py`, `orchestrator.py`)
+confirmed the PPO machinery is correct (gradients flow, GAE/advantage math right,
+transitions/reward attachment correct, `mean_return`=reward-mean so flat is the
+*expected* symptom). The flat curves are **genuine negatives**. Root causes:
+1. **RL is blind to the reward-driving axes.** It's shipped only 8 fields
+   (`orchestrator.py:94`) and uses 7 features (color/type/gender match + push/price/
+   stock; `policy.py:58-66`); it never sees style/occasion — the very axes the reviewer
+   rates on. Mutual info(features, reward) ≈ 0.
+2. **In `rating` mode the reward isn't attributable to RL's own picks** — the rating
+   goes to the Borda top-K (all 5 agents) and `rating` zeroes pass-rate (`store.py:169`),
+   the only RL-attributable reward. (`both`/#24 restores it but the other flaws dominate.)
+3. **0.15 leverage** + **floor-bound near-constant reward** → little contrast.
+Two minor bugs (degrade, don't invalidate): ~80-90% of rollout transitions carry reward
+0 (`store.py:190`); advantage-norm amplifies noise when reward is near-constant
+(`policy.py:210`).
+
+### Fix plan (NOT implemented — pending decision)
+`docs/plans/rl-learning-fix-plan.md` (+ review `…-review.md`, verdict APPROVE-WITH-
+CHANGES). Highest-impact = give RL style/occasion **features** (now possible since the
+parser fix populates `include`) + a reward **attributable to RL's own picks** + raise
+`RL_WEIGHT`→0.5 — these are **co-necessary** (each flaw alone is near-fatal), so run #1
+should bundle A+B(`both`)+C(0.5) interleaved. Reviewer caveats: fix `_axis_hit`
+case-sensitivity, hold reward-mode fixed when isolating, add a review-variance
+pre-check, and `tests/test_rl_policy.py:64` hardcodes 7-length vectors (will raise under
+9 features).
 
 ## Status / reproduce
 

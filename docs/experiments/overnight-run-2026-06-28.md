@@ -105,3 +105,44 @@ left those uncorrelated), so a set is rarely "perfect" enough for a 5.
 to `include` (parser change; already valid `ALL_MAPPINGS` keys), or (b) extend the
 catalog repair to condition pattern/material on style/occasion so a style match
 drags them on-theme. Same playbook as this fix, one more axis.
+
+## ━━ FOLLOW-UP: borda-mode RL curve (#23) — 2026-06-28 11:02 ━━
+Per the RL lever: re-run the learning curve in **borda** mode (where the parser fix
+produced real positive-reward mass) to give PPO learnable variance. All flags verified
+live: EXPERIMENT_MODE=curve, SELECTION_MODE=borda (0 batch lines), EXPERIMENT_ORDER=
+interleave (clean early-vs-late), RL_REWARD_MODE=rating (passrate zeroed), RL_FRESH_START=1,
+RL_CHECKPOINT_PATH=rl_ppo_curve_borda.pt (isolated; prod untouched), EXPERIMENT_REPEATS=100.
+300 eps, ~100 min. Verdict pending (within-persona slopes + clean interleaved early-vs-late + mean_return).
+
+## TODO (next) — RL leverage test: RL_WEIGHT 0.15 → 0.5
+The RL agent's Borda weight is a FIXED 0.15 slice (`config.py:79`; other 4 agents
+share 0.85 by emphasis×confidence). Hypothesis for the persistent RL null: leverage,
+not reward — at 15% influence RL's reordering barely moves the top-10, so the reward
+carries almost no info about RL's own choices → flat PPO advantages. **Next curve:
+set `RL_WEIGHT=0.5`** (edit config or env if wired) + borda + interleave + fresh
+isolated ckpt, and check whether mean_return / within-persona slopes finally trend up.
+Goal is purely "does it learn?" — absolute review level is irrelevant.
+Reward mode for that test: **use `both`** (see reasoning in summary doc) — densest,
+most-attributable signal = best chance to detect ANY learning trend.
+
+## RL DEEP-DIVE VERDICT (agent audit, 2026-06-28) — DESIGN FLAW, not a bug. Results VALID.
+PPO plumbing is correct (gradients flow, GAE/advantage math right, transitions/reward
+attachment correct, same policy proposes+updates, mean_return=reward-mean so flat=expected).
+The flat curves are REAL negatives, not artifacts. Root causes (design):
+1. [fatal] In `rating` mode the reward is NOT attributable to RL's own picks — the rating
+   goes to the Borda top-K (all 5 agents), and `rating` mode ZEROES passrate (store.py:169),
+   which is the ONLY RL-attributable reward. → #22/#23 gave RL literally zero self-credit signal.
+   **⇒ rating-mode curves CANNOT learn by construction. Use passrate/both.**
+2. [fatal] State features (color/type/gender match + push/price/stock; policy.py:89-115) can't
+   predict the reward (driven by style/occasion). Mutual info ~0. NOTE: our parser fix put
+   style/occasion in `include`, but the RL feature extractor still doesn't consume them →
+   concrete follow-up: add style/occasion to extract_features.
+3. [major] Floor-bound near-constant reward → no contrast. 4. [major] 0.15 leverage.
+Two MINOR bugs (degrade, don't invalidate): rollout diluted by 80-90% zero-reward transitions
+(store.py:190/209 add every candidate to PPO batch, only ~10 get reward); adv-normalization
+amplifies noise when reward near-constant (policy.py:210-211).
+Ranked fixes: (quick) passrate/both + RL_WEIGHT 0.4-0.6 + stop rollout dilution + skip update
+when adv.std tiny; (deep) predictive features [needs style/occasion in extract_features — now
+possible post-parser-fix] + per-item credit + fix floor-bound reward. Highest impact = predictive
+features + reward tied to RL's own picks.
+**Implication for the RL_WEIGHT=0.5 test:** MUST pair with passrate or both (rating can't work).
