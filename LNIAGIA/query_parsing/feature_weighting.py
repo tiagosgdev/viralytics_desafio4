@@ -21,7 +21,7 @@ for _path in (_LNIAGIA_DIR, _SCRIPT_DIR):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from DB.models import TYPE, COLOR, BODY_TYPE
+from DB.models import TYPE, COLOR, BODY_TYPE, STYLE, OCCASION
 from query_parsing.llm_query_parser import (
     OLLAMA_REFINER_MODEL,
     _build_system_prompt,
@@ -131,6 +131,8 @@ def _build_intent_system_prompt() -> str:
     color_values = json.dumps(sorted(COLOR))
     type_values = json.dumps(sorted(TYPE))
     body_type_values = json.dumps(sorted(BODY_TYPE))
+    style_values = json.dumps(sorted(STYLE))
+    occasion_values = json.dumps(sorted(OCCASION))
     base_prompt = _build_system_prompt()
 
     return f"""\
@@ -140,7 +142,9 @@ def _build_intent_system_prompt() -> str:
 IN-STORE SCAN MODE — THIS SUPERSEDES THE OUTPUT SCHEMA ABOVE
 ═══════════════════════════════════════════════════════════════
 
-You weigh three clothing features by user intent and produce scan filters.
+You weigh clothing features by user intent and produce scan filters. The
+filters drive what the store retrieves and how the recommender scores items,
+so capture EVERY feature the shopper signals — including style and occasion.
 
 Inputs:
 - detected_color, detected_type, detected_body_type (from the vision scan)
@@ -156,6 +160,16 @@ SCAN FILTER RULES (in addition to ALL rules above):
     put detected_body_type in include.body_type, UNLESS the shopper
     explicitly names a different body shape — then use the shopper's shape.
     Use ONLY the valid values listed below.
+- STYLE: when the answer signals a look or aesthetic (e.g. "smart",
+    "minimalist", "elegant", "sporty", "streetwear", "casual"), put the
+    matching value(s) in include.style. Map the shopper's words to the
+    CLOSEST valid style value(s) below. Omit style only when the answer
+    gives no style signal at all. Do NOT invent a style the shopper didn't
+    imply.
+- OCCASION: when the answer signals a context or event (e.g. "for work",
+    "for a party", "date night", "everyday", "the beach", "a wedding"),
+    put the matching value(s) in include.occasion. Map to the CLOSEST valid
+    occasion value(s) below. Omit occasion only when no occasion is implied.
 - Only add something to exclude when the shopper explicitly says they do
     NOT want it (direct negation like "not", "don't want", "avoid"). Do not
     infer excludes from preferences alone.
@@ -182,6 +196,8 @@ VALID VALUES (use ONLY these exact strings):
 - color:    {color_values}
 - type:     {type_values}
 - bodyType: {body_type_values}
+- style:    {style_values}
+- occasion: {occasion_values}
 
 EXAMPLES (detected_color=red, detected_type=short_sleeve_top, detected_body_type=hourglass).
 These examples show ONLY the weights block for clarity; still return the
@@ -197,7 +213,9 @@ Example A — user_answer: "I am looking for a t-shirt"
     }}
 
 Example B — user_answer: "I want a red casual t-shirt"
-    Mentions color + type. "casual" is style and is ignored. Body type not mentioned.
+    Mentions color + type + style ("casual" → include.style=["casual"]).
+    Body type not mentioned. (Style/occasion go in include only — the FOUR
+    weighted features below are still color/type/bodyType/stock.)
     {{
         "color":    {{"value": "red", "importance": 43}},
         "type":     {{"value": "short_sleeve_top", "importance": 43}},
@@ -249,6 +267,23 @@ Example G — user_answer: "Just show me what's popular and on sale"
         "bodyType": {{"value": "pear", "importance": 12}},
         "stock":    {{"importance": 64}}
     }}
+
+Example H — user_answer: "a smart minimalist top for work"
+    Signals style ("smart"→smart casual, "minimalist") AND occasion
+    ("for work"→work) in addition to type. This example shows the FILTERS
+    block (not just weights) to make the include capture explicit:
+    "filters": {{
+        "include": {{
+            "color":    ["red"],
+            "type":     ["long_sleeve_top"],
+            "body_type":["hourglass"],
+            "style":    ["smart casual", "minimalist"],
+            "occasion": ["work"]
+        }},
+        "exclude": {{}}
+    }}
+    (Note "smart top" → a top garment, e.g. long_sleeve_top; do NOT collapse
+    it to short_sleeve_top just because the detected garment was one.)
 
 FINAL SCAN OUTPUT — return ONLY this JSON object (no markdown, no prose):
 {{
