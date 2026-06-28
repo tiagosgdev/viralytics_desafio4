@@ -41,10 +41,9 @@ android {
     }
 }
 
-// Compatibility shim: older Android Studio versions request this removed task
-tasks.register("unitTestClasses") {
-    dependsOn("compileDebugUnitTestSources")
-}
+// Compatibility shims: older Android Studio versions request tasks removed in AGP 8+
+tasks.register("unitTestClasses")
+tasks.register("androidTestClasses")
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
