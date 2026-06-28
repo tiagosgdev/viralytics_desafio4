@@ -40,4 +40,21 @@
     <string name="chat_welcome_sub">Ask for different colors, styles, formality, or tell it to ignore the scan.</string>
     <string name="persona_dialog_title">Choose Your Stylist</string>
     <string name="switch_stylist">Switch Stylist</string>
+
+    <!-- FashionSense restyle additions -->
+    <string name="brand_kicker">OUTFIT SCANNER</string>
+    <string name="live_preview">LIVE PREVIEW</string>
+    <string name="camera_stage_title">Stand in front\nof camera</string>
+    <string name="camera_stage_analysing">Analysing\nyour image…</string>
+    <string name="camera_stage_hint">The AI detects clothing, dominant colour, silhouette and style intent to recommend matching pieces.</string>
+    <string name="chat_thread_welcome">Hi — I\'m your digital stylist. Scan an outfit, then ask me for colours, fits or sizes.</string>
+    <string name="stylist_modal_kicker">FASHIONSENSE · PERSONAL STYLING</string>
+    <string name="stylist_modal_title">Choose your stylist</string>
+    <string name="stylist_modal_sub">An AI fashion experience with computer vision and personalised in-store recommendations.</string>
+    <string name="stylist_cruella_name">Cruella</string>
+    <string name="stylist_cruella_desc">Bold, editorial and confident. Striking picks with real presence.</string>
+    <string name="stylist_cruella_tag">DRAMATIC · BOLD · LUXURY</string>
+    <string name="stylist_edna_name">Edna</string>
+    <string name="stylist_edna_desc">Functional, smart and minimal. Well-considered, practical, elegant pieces.</string>
+    <string name="stylist_edna_tag">SMART · CLEAN · ICONIC</string>
 </resources>

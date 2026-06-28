@@ -12,4 +12,6 @@
     <dimen name="capture_button_min_height">46dp</dimen>
     <dimen name="header_title_size">19sp</dimen>
     <dimen name="section_label_size">9sp</dimen>
+    <dimen name="camera_stage_title_size">20sp</dimen>
+    <dimen name="camera_stage_icon_size">40dp</dimen>
 </resources>

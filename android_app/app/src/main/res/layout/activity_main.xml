@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/brand_bg"
+    android:background="@drawable/mobile_app_bg"
     android:fillViewport="true">
 
     <LinearLayout
@@ -19,59 +19,46 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
+            <!-- Brand mark badge -->
+            <FrameLayout
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginEnd="10dp"
+                android:background="@drawable/mobile_brand_mark">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:contentDescription="@string/app_name"
+                    android:src="@drawable/ic_checkroom"
+                    app:tint="@color/brand_accent" />
+            </FrameLayout>
+
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="vertical">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:fontFamily="serif"
                     android:text="@string/app_name"
                     android:textColor="@color/brand_text"
                     android:textSize="@dimen/header_title_size"
-                    android:textStyle="bold"
-                    android:fontFamily="serif" />
+                    android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:fontFamily="monospace"
                     android:tag="color_accent"
-                    android:text="OUTFIT SCANNER"
+                    android:text="@string/brand_kicker"
                     android:textColor="@color/brand_accent"
                     android:textSize="@dimen/section_label_size"
-                    android:textStyle="bold"
-                    android:letterSpacing="0.10" />
-            </LinearLayout>
-
-            <!-- Status pill: dot + label -->
-            <LinearLayout
-                android:id="@+id/statusPill"
-                android:layout_width="wrap_content"
-                android:layout_height="32dp"
-                android:gravity="center_vertical"
-                android:background="@drawable/mobile_status_pill"
-                android:paddingStart="10dp"
-                android:paddingEnd="14dp"
-                android:layout_marginEnd="8dp">
-
-                <View
-                    android:id="@+id/statusDot"
-                    android:layout_width="8dp"
-                    android:layout_height="8dp"
-                    android:background="@drawable/mobile_status_dot" />
-
-                <TextView
-                    android:id="@+id/statusText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:text="Ready"
-                    android:textColor="@color/brand_text"
-                    android:textSize="12sp" />
+                    android:letterSpacing="0.18" />
             </LinearLayout>
 
             <ImageButton
@@ -85,12 +72,39 @@
                 android:tint="@color/brand_text" />
         </LinearLayout>
 
+        <!-- Status pill on its own row so it never squishes the title -->
+        <LinearLayout
+            android:id="@+id/statusPill"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginTop="6dp"
+            android:gravity="center_vertical"
+            android:background="@drawable/mobile_status_pill"
+            android:paddingStart="10dp"
+            android:paddingEnd="14dp">
+
+            <View
+                android:id="@+id/statusDot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@drawable/mobile_status_dot" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="Ready"
+                android:textColor="@color/brand_text"
+                android:textSize="12sp" />
+        </LinearLayout>
+
         <!-- Persona chip + switch button -->
         <LinearLayout
             android:id="@+id/personaRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:visibility="gone">
@@ -100,12 +114,14 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:background="@drawable/mobile_persona_chip"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp"
+                android:fontFamily="monospace"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="5dp"
                 android:textColor="@color/white"
-                android:textSize="11sp"
+                android:textSize="10sp"
+                android:letterSpacing="0.10"
                 android:textStyle="bold" />
 
             <com.google.android.material.button.MaterialButton
@@ -125,7 +141,7 @@
             android:id="@+id/sessionText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="6dp"
             android:text="@string/session_waiting"
             android:textColor="@color/brand_muted"
             android:textSize="11sp" />
@@ -135,17 +151,18 @@
             android:id="@+id/modeIndicatorText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
+            android:layout_marginTop="4dp"
             android:layout_marginBottom="12dp"
             android:background="@drawable/mobile_status_pill"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
+            android:fontFamily="monospace"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
             android:paddingTop="3dp"
             android:paddingBottom="3dp"
             android:textColor="@color/brand_muted"
             android:textSize="10sp"
             android:textStyle="bold"
-            android:letterSpacing="0.08" />
+            android:letterSpacing="0.10" />
 
         <!-- ── TAB BAR ──────────────────────────────────────────────── -->
         <LinearLayout
@@ -154,7 +171,7 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
             android:background="@drawable/mobile_tab_bar_bg"
-            android:padding="4dp"
+            android:padding="5dp"
             android:orientation="horizontal">
 
             <com.google.android.material.button.MaterialButton
@@ -168,8 +185,8 @@
                 app:icon="@drawable/ic_camera"
                 app:iconGravity="start"
                 app:iconSize="16dp"
-                app:backgroundTint="@color/brand_text"
-                app:cornerRadius="14dp"
+                app:backgroundTint="@color/brand_accent"
+                app:cornerRadius="999dp"
                 app:elevation="0dp" />
 
             <com.google.android.material.button.MaterialButton
@@ -185,7 +202,7 @@
                 app:icon="@drawable/ic_chat"
                 app:iconGravity="start"
                 app:iconSize="16dp"
-                app:cornerRadius="14dp"
+                app:cornerRadius="999dp"
                 app:strokeColor="@color/brand_border" />
         </LinearLayout>
 
@@ -217,12 +234,13 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
                         android:tag="color_muted"
                         android:text="CUSTOMER PROFILE"
                         android:textColor="@color/brand_muted"
                         android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
-                        android:letterSpacing="0.12" />
+                        android:letterSpacing="0.16" />
 
                     <!-- Gender row -->
                     <LinearLayout
@@ -343,12 +361,13 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
                         android:tag="color_muted"
                         android:text="SCAN CONTROLS"
                         android:textColor="@color/brand_muted"
                         android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
-                        android:letterSpacing="0.12" />
+                        android:letterSpacing="0.16" />
 
                     <TextView
                         android:layout_width="match_parent"
@@ -369,21 +388,10 @@
                         app:icon="@drawable/ic_camera"
                         app:iconGravity="start"
                         app:iconSize="18dp"
-                        app:backgroundTint="@color/brand_text"
-                        app:cornerRadius="16dp" />
+                        app:backgroundTint="@color/brand_accent"
+                        app:cornerRadius="999dp" />
 
-                    <TextView
-                        android:id="@+id/scanWaitingText"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:background="@drawable/mobile_empty_state"
-                        android:gravity="center"
-                        android:padding="16dp"
-                        android:text="Waiting for scan from phone…"
-                        android:textColor="@color/brand_muted"
-                        android:visibility="gone" />
-
+                    <!-- Camera stage -->
                     <FrameLayout
                         android:layout_width="match_parent"
                         android:layout_height="@dimen/scan_image_height"
@@ -397,6 +405,122 @@
                             android:background="@drawable/mobile_camera_surface"
                             android:contentDescription="@string/annotated_scan"
                             android:scaleType="fitCenter" />
+
+                        <!-- Camera-stage decorations (hidden once a scan image is shown) -->
+                        <FrameLayout
+                            android:id="@+id/cameraStageDecor"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent">
+
+                            <View
+                                android:id="@+id/scanOval"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:layout_gravity="center"
+                                android:layout_marginStart="42dp"
+                                android:layout_marginEnd="42dp"
+                                android:layout_marginTop="12dp"
+                                android:layout_marginBottom="12dp"
+                                android:background="@drawable/mobile_scan_oval" />
+
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="top|start"
+                                android:layout_margin="10dp"
+                                android:contentDescription="@null"
+                                android:src="@drawable/ic_corner_bracket" />
+
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="bottom|end"
+                                android:layout_margin="10dp"
+                                android:contentDescription="@null"
+                                android:rotation="180"
+                                android:src="@drawable/ic_corner_bracket" />
+
+                            <View
+                                android:id="@+id/scanLine"
+                                android:layout_width="match_parent"
+                                android:layout_height="2dp"
+                                android:layout_gravity="top"
+                                android:layout_marginStart="14dp"
+                                android:layout_marginEnd="14dp"
+                                android:background="@drawable/mobile_scan_line" />
+
+                            <LinearLayout
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="center"
+                                android:layout_marginStart="54dp"
+                                android:layout_marginEnd="54dp"
+                                android:layout_marginTop="24dp"
+                                android:layout_marginBottom="24dp"
+                                android:gravity="center"
+                                android:orientation="vertical">
+
+                                <ImageView
+                                    android:layout_width="@dimen/camera_stage_icon_size"
+                                    android:layout_height="@dimen/camera_stage_icon_size"
+                                    android:contentDescription="@string/camera_stage_title"
+                                    android:src="@drawable/ic_accessibility" />
+
+                                <TextView
+                                    android:id="@+id/cameraStageTitleText"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="12dp"
+                                    android:fontFamily="serif"
+                                    android:gravity="center"
+                                    android:text="@string/camera_stage_title"
+                                    android:textColor="@color/brand_text"
+                                    android:textSize="@dimen/camera_stage_title_size" />
+
+                                <TextView
+                                    android:id="@+id/cameraStageHintText"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="8dp"
+                                    android:gravity="center"
+                                    android:tag="color_muted"
+                                    android:text="@string/camera_stage_hint"
+                                    android:textColor="@color/brand_muted"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+                        </FrameLayout>
+
+                        <!-- Live preview status chip -->
+                        <LinearLayout
+                            android:id="@+id/cameraStatusChip"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="top|start"
+                            android:layout_margin="12dp"
+                            android:background="@android:color/transparent"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="9dp"
+                            android:paddingEnd="11dp"
+                            android:paddingTop="5dp"
+                            android:paddingBottom="5dp">
+
+                            <View
+                                android:id="@+id/liveDot"
+                                android:layout_width="7dp"
+                                android:layout_height="7dp"
+                                android:background="@drawable/mobile_status_dot" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="6dp"
+                                android:fontFamily="monospace"
+                                android:text="@string/live_preview"
+                                android:textColor="@color/brand_text"
+                                android:textSize="9sp"
+                                android:letterSpacing="0.12" />
+                        </LinearLayout>
 
                         <TextView
                             android:id="@+id/bodyShapeLabel"
@@ -439,12 +563,13 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
                         android:tag="color_muted"
                         android:text="DETECTED CLOTHING"
                         android:textColor="@color/brand_muted"
                         android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
-                        android:letterSpacing="0.12" />
+                        android:letterSpacing="0.16" />
 
                     <com.google.android.material.chip.ChipGroup
                         android:id="@+id/detectionsGroup"
@@ -491,12 +616,13 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:fontFamily="monospace"
                             android:tag="color_muted"
                             android:text="STORE RECOMMENDATIONS"
                             android:textColor="@color/brand_muted"
                             android:textSize="@dimen/section_label_size"
                             android:textStyle="bold"
-                            android:letterSpacing="0.12" />
+                            android:letterSpacing="0.16" />
 
                         <ImageButton
                             android:id="@+id/recommendationsLeftButton"
@@ -577,41 +703,56 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
                         android:tag="color_muted"
-                        android:text="REFINE SEARCH"
+                        android:text="STYLIST CHAT"
                         android:textColor="@color/brand_muted"
                         android:textSize="@dimen/section_label_size"
                         android:textStyle="bold"
-                        android:letterSpacing="0.12" />
+                        android:letterSpacing="0.16" />
 
-                    <LinearLayout
+                    <!-- Chat message thread -->
+                    <ScrollView
+                        android:id="@+id/chatThreadScroll"
                         android:layout_width="match_parent"
+                        android:layout_height="240dp"
+                        android:layout_marginTop="12dp"
+                        android:fillViewport="true"
+                        android:overScrollMode="never"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/chatThreadContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </ScrollView>
+
+                    <!-- Typing indicator (hidden by default) -->
+                    <LinearLayout
+                        android:id="@+id/chatTypingRow"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:gravity="center"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="6dp">
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/mobile_chat_bubble_bot"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:paddingTop="10dp"
+                        android:paddingBottom="10dp"
+                        android:visibility="gone">
 
                         <TextView
+                            android:id="@+id/typingDots"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@string/chat_welcome_title"
-                            android:textColor="@color/brand_text"
-                            android:textSize="15sp"
-                            android:textStyle="bold"
-                            android:gravity="center" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:tag="color_muted"
-                            android:text="@string/chat_welcome_sub"
+                            android:text="•  ·  ·"
                             android:textColor="@color/brand_muted"
-                            android:textSize="12sp"
-                            android:gravity="center" />
+                            android:textSize="14sp" />
                     </LinearLayout>
 
+                    <!-- Retained system reply line (hidden; thread is primary) -->
                     <TextView
                         android:id="@+id/chatReplyText"
                         android:layout_width="match_parent"
@@ -646,10 +787,10 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             app:boxBackgroundColor="@color/brand_surface_soft"
-                            app:boxCornerRadiusBottomEnd="16dp"
-                            app:boxCornerRadiusBottomStart="16dp"
-                            app:boxCornerRadiusTopEnd="16dp"
-                            app:boxCornerRadiusTopStart="16dp"
+                            app:boxCornerRadiusBottomEnd="999dp"
+                            app:boxCornerRadiusBottomStart="999dp"
+                            app:boxCornerRadiusTopEnd="999dp"
+                            app:boxCornerRadiusTopStart="999dp"
                             app:boxStrokeColor="@color/brand_border"
                             app:hintTextColor="@color/brand_muted">
 

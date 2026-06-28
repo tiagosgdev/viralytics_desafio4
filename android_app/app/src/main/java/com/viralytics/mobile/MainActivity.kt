@@ -181,6 +181,18 @@ class MainActivity : AppCompatActivity() {
     private var entranceCoordsSet = false
     private val sessionHandler = Handler(Looper.getMainLooper())
     private val sessionTimeoutRunnable = Runnable { endCustomerSession("timeout") }
+
+    // Typing indicator animation — cycles "•  ·  ·" → "•  •  ·" → "•  •  •" every 400 ms.
+    private val typingHandler = Handler(Looper.getMainLooper())
+    private var typingStep = 0
+    private val typingRunnable = object : Runnable {
+        private val frames = arrayOf("•  ·  ·", "•  •  ·", "•  •  •")
+        override fun run() {
+            binding.typingDots?.text = frames[typingStep % 3]
+            typingStep++
+            typingHandler.postDelayed(this, 400)
+        }
+    }
     private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L   // 3 minutes
     private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L      // 25 seconds — nobody showed up at entrance
     private val lidarWaitHandler = Handler(Looper.getMainLooper())
@@ -220,6 +232,7 @@ class MainActivity : AppCompatActivity() {
                 setStatus("Failed to decode captured image.")
                 return@registerForActivityResult
             }
+            setScanStageAnalysing(true)
             val baseUrl = normalizedBaseUrl() ?: return@registerForActivityResult
             viewModel.uploadScan(bitmap, baseUrl, loadPersona())
         }
@@ -246,6 +259,8 @@ class MainActivity : AppCompatActivity() {
         updateSessionLabel()
         renderDetections()
         renderRecommendations()
+        renderChatThread()
+        renderBodyAnalysis(currentBodyAnalysis)
         switchTab("scan")
 
         textToSpeech = TextToSpeech(this) { status ->
@@ -269,6 +284,8 @@ class MainActivity : AppCompatActivity() {
         binding.tabRefineButton.setOnClickListener { switchTab("refine") }
         binding.resultImage.setOnClickListener { openImageFullscreen() }
 
+        startStageAnimations()
+
         val storedPersona = loadPersona()
         if (storedPersona.isNotBlank()) {
             applyPersona(storedPersona)
@@ -284,33 +301,50 @@ class MainActivity : AppCompatActivity() {
                 is UiEvent.ShowToast -> toast(event.message)
                 is UiEvent.ScanComplete -> {
                     if (appMode == AppMode.PHONE_CAMERA) {
+                        setScanStageAnalysing(false)
                         toast("Scan sent to tablet!")
                     } else {
+                        setScanStageAnalysing(false)
                         setStatus("Scan received from phone.")
                         renderDetections()
                         renderRecommendations()
                         updateAnnotatedImage(event.annotatedFrameBase64, event.bodyAnnotatedFrameBase64)
                         renderBodyShape(event.bodyShape)
+                        renderBodyAnalysis(currentBodyAnalysis)
                         switchTab("scan")
                         updateSessionLabel("Vision-led")
                         showChatReply("Scan complete. Tap a recommendation to inspect it, or refine with chat.")
                         extendSession()
                     }
                 }
-                is UiEvent.ScanError -> showChatReply(event.message)
+                is UiEvent.ScanError -> {
+                    setScanStageAnalysing(false)
+                    showChatReply(event.message)
+                }
                 is UiEvent.ChatComplete -> {
+                    typingHandler.removeCallbacks(typingRunnable)
+                    binding.chatTypingRow?.isVisible = false
+                    chatSystemBubble = null
                     renderRecommendations()
+                    if (binding.replaceVisionSwitch.isChecked) {
+                        viewModel.detectedCategories.clear()
+                        viewModel.detectionLabels.clear()
+                        renderDetections()
+                    }
+                    renderChatThread()
                     switchTab("refine")
                     val mode = if (binding.replaceVisionSwitch.isChecked) "Search-led override" else "Vision + search"
                     updateSessionLabel(mode)
-                    showChatReply(event.reply)
-                    binding.chatInput.text?.clear()
                     extendSession()
                 }
                 is UiEvent.AgentRecsComplete -> {
                     if (appMode == AppMode.TABLET) renderRecommendations()
                 }
-                is UiEvent.ChatError -> showChatReply(event.message)
+                is UiEvent.ChatError -> {
+                    typingHandler.removeCallbacks(typingRunnable)
+                    binding.chatTypingRow?.isVisible = false
+                    showChatReply(event.message)
+                }
             }
         }
     }
@@ -349,7 +383,6 @@ class MainActivity : AppCompatActivity() {
             AppMode.TABLET -> {
                 requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 binding.captureButton.isVisible = false
-                binding.scanWaitingText?.isVisible = true
                 binding.customerProfileCard?.isVisible = true
                 binding.detectedClothingCard?.isVisible = true
                 binding.recommendationsSection?.isVisible = true
@@ -372,6 +405,16 @@ class MainActivity : AppCompatActivity() {
         cameraActivityLauncher.launch(Intent(this, CameraActivity::class.java))
     }
 
+    private fun setScanStageAnalysing(analysing: Boolean) {
+        if (analysing) {
+            binding.cameraStageTitleText?.text = getString(R.string.camera_stage_analysing)
+            binding.cameraStageHintText?.isVisible = false
+        } else {
+            binding.cameraStageTitleText?.text = getString(R.string.camera_stage_title)
+            binding.cameraStageHintText?.isVisible = true
+        }
+    }
+
     private fun sendChat() {
         val persona = loadPersona()
         if (persona.isBlank()) {
@@ -390,6 +433,16 @@ class MainActivity : AppCompatActivity() {
             replaceVision = binding.replaceVisionSwitch.isChecked,
             persona = persona,
         )
+        // viewModel.sendChat appends the user turn to chatHistory synchronously, so the
+        // thread now includes it. Render it and show the "typing" indicator.
+        binding.chatInput.text?.clear()
+        chatSystemBubble = null
+        renderChatThread()
+        typingStep = 0
+        typingHandler.removeCallbacks(typingRunnable)
+        typingHandler.post(typingRunnable)
+        binding.chatTypingRow?.isVisible = true
+        scrollChatToBottom()
     }
 
     private fun renderDetections() {
@@ -414,6 +467,104 @@ class MainActivity : AppCompatActivity() {
         }
         binding.bodyShapeLabel?.text = bodyShape.replaceFirstChar { it.uppercase() }
         binding.bodyShapeLabel?.isVisible = true
+    }
+
+    // Full body-analysis payload from the last scan (tablet). Rendered into the
+    // right-column "Body Analysis" card; null until a scan arrives.
+    private var currentBodyAnalysis: JSONObject? = null
+
+    /**
+     * Renders the silhouette + measurement panel (tablet only). Mirrors the web
+     * `renderBodyAnalysis` (frontend/js/ui/camera.js): shape, confidence, pose score,
+     * landmark count, and shoulder/hip/waist measurements (cm when available, else ratios).
+     */
+    private fun renderBodyAnalysis(analysis: JSONObject?) {
+        val container = binding.bodyAnalysisContainer ?: return
+        container.removeAllViews()
+
+        val landmarks = analysis?.optInt("landmarks_detected", 0) ?: 0
+        if (analysis == null || landmarks <= 0) {
+            container.addView(TextView(this).apply {
+                text = "Body insights appear after a full-body, front-facing scan."
+                setTextColor(ContextCompat.getColor(context, R.color.brand_muted))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            })
+            return
+        }
+
+        val shape = analysis.optString("body_shape", "unknown")
+            .replace('_', ' ').replaceFirstChar { it.uppercase() }
+        val confidence = (analysis.optDouble("confidence", 0.0) * 100).toInt()
+        val poseScore = ((analysis.optJSONObject("pose_validation")
+            ?.optDouble("score", 0.0) ?: 0.0) * 100).toInt()
+
+        val rows = mutableListOf<Pair<String, String>>()
+        rows += "Silhouette" to shape
+        rows += "Confidence" to "$confidence%"
+        rows += "Pose score" to "$poseScore%"
+        rows += "Landmarks" to landmarks.toString()
+
+        val m = analysis.optJSONObject("measurements")
+        if (m != null) {
+            fun meas(label: String, rawKey: String, cmKey: String): String {
+                val cm = m.optDouble(cmKey, Double.NaN)
+                return if (!cm.isNaN() && cm > 0) "%.1f cm".format(cm)
+                else "%.2f".format(m.optDouble(rawKey, 0.0))
+            }
+            rows += "Shoulders" to meas("Shoulders", "shoulder_width", "shoulder_width_cm")
+            rows += "Hips" to meas("Hips", "hip_width", "hip_width_cm")
+            rows += "Waist" to meas("Waist", "waist_width", "waist_width_cm")
+            if (m.has("shoulder_hip_ratio")) {
+                rows += "S/H ratio" to "%.2f".format(m.optDouble("shoulder_hip_ratio", 0.0))
+            }
+        }
+
+        rows.forEachIndexed { index, (label, value) ->
+            container.addView(buildBodyMetricRow(label, value, highlight = index == 0))
+            if (index != rows.lastIndex) container.addView(buildBodyDivider())
+        }
+
+        val warnings = analysis.optJSONArray("warnings")
+        if (warnings != null && warnings.length() > 0) {
+            val first = warnings.optString(0).trim()
+            if (first.isNotBlank()) {
+                container.addView(TextView(this).apply {
+                    text = first
+                    setTextColor(ContextCompat.getColor(context, R.color.brand_red))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setPadding(0, dp(8), 0, 0)
+                })
+            }
+        }
+    }
+
+    private fun buildBodyMetricRow(label: String, value: String, highlight: Boolean): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            setTextColor(ContextCompat.getColor(context, R.color.brand_muted))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(TextView(this).apply {
+            text = value
+            setTextColor(ContextCompat.getColor(context,
+                if (highlight) R.color.brand_accent_strong else R.color.brand_text))
+            setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        })
+        return row
+    }
+
+    private fun buildBodyDivider(): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+        )
+        setBackgroundColor(ContextCompat.getColor(context, R.color.brand_border))
     }
 
     private fun buildDetectionChip(label: String): Chip {
@@ -517,15 +668,15 @@ class MainActivity : AppCompatActivity() {
             text = item.category.replace("_", " ").uppercase()
             setTextColor(mutedColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
-            setTypeface(typeface, Typeface.BOLD)
-            letterSpacing = 0.08f
+            setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD))
+            letterSpacing = 0.10f
         })
 
         content.addView(TextView(this).apply {
             text = item.name
             setTextColor(textColor)
-            setTypeface(typeface, Typeface.BOLD)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(0, dp(3), 0, 0)
@@ -782,6 +933,11 @@ class MainActivity : AppCompatActivity() {
         val frame = annotatedFrame?.takeIf { it.isNotBlank() } ?: bodyFrame
         if (frame.isNullOrBlank()) return
         binding.resultImage.setImageBitmap(decodeBitmap(frame))
+        // A real result is now showing — retire the ambient "live preview" decorations.
+        binding.scanLine?.clearAnimation()
+        binding.scanOval?.clearAnimation()
+        binding.cameraStageDecor?.isVisible = false
+        binding.cameraStatusChip?.isVisible = false
     }
 
     private fun openImageFullscreen() {
@@ -908,13 +1064,82 @@ class MainActivity : AppCompatActivity() {
         val showingScan = tab == "scan"
         binding.scanSection.isVisible = showingScan
         binding.refineSection.isVisible = !showingScan
+        if (appMode == AppMode.TABLET) {
+            binding.customerProfileCard?.isVisible = showingScan
+            binding.detectedClothingCard?.isVisible = showingScan
+            binding.bodyAnalysisCard?.isVisible = showingScan
+        }
         styleTabButton(binding.tabScanButton, selected = showingScan)
         styleTabButton(binding.tabRefineButton, selected = !showingScan)
     }
 
+    // System/status line shown as a trailing bot bubble in the chat thread
+    // (e.g. scan-complete hint, error messages). Not part of viewModel.chatHistory.
+    private var chatSystemBubble: String? = null
+
     private fun showChatReply(message: String) {
-        binding.chatReplyText.text = message
-        binding.chatReplyText.isVisible = true
+        chatSystemBubble = message
+        renderChatThread()
+    }
+
+    /** Rebuilds the chat thread from the welcome line + viewModel.chatHistory + optional system bubble. */
+    private fun renderChatThread() {
+        val container = binding.chatThreadContainer ?: return
+        container.removeAllViews()
+
+        container.addView(buildChatBubble(getString(R.string.chat_thread_welcome), fromUser = false))
+        viewModel.chatHistory.forEach { entry ->
+            container.addView(buildChatBubble(entry.content, fromUser = entry.role == "user"))
+        }
+        chatSystemBubble?.takeIf { it.isNotBlank() }?.let {
+            container.addView(buildChatBubble(it, fromUser = false))
+        }
+        scrollChatToBottom()
+    }
+
+    private fun buildChatBubble(text: String, fromUser: Boolean): View {
+        val isCruella = viewModel.selectedPersona == "cruella"
+        val textColor = ContextCompat.getColor(this,
+            if (isCruella) R.color.cruella_text else R.color.brand_text)
+        val bubble = TextView(this).apply {
+            this.text = text
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+            maxWidth = dp(280)
+            background = ContextCompat.getDrawable(
+                context,
+                if (fromUser) R.drawable.mobile_chat_bubble_user else R.drawable.mobile_chat_bubble_bot
+            )
+            setTextColor(textColor)
+        }
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).also {
+            it.topMargin = dp(6)
+            it.gravity = if (fromUser) Gravity.END else Gravity.START
+        }
+        bubble.layoutParams = lp
+        return bubble
+    }
+
+    private fun scrollChatToBottom() {
+        binding.chatThreadScroll?.post {
+            binding.chatThreadScroll?.fullScroll(View.FOCUS_DOWN)
+        }
+    }
+
+    /** Starts the ambient camera-stage animations (scan-line sweep + live-dot pulse + oval breathe). */
+    private fun startStageAnimations() {
+        binding.scanLine?.let {
+            it.startAnimation(android.view.animation.AnimationUtils.loadAnimation(this, R.anim.scan_line))
+        }
+        binding.liveDot?.let {
+            it.startAnimation(android.view.animation.AnimationUtils.loadAnimation(this, R.anim.live_dot_pulse))
+        }
+        binding.scanOval?.let {
+            it.startAnimation(android.view.animation.AnimationUtils.loadAnimation(this, R.anim.breathe))
+        }
     }
 
     private fun styleTabButton(button: MaterialButton, selected: Boolean) {
@@ -1123,8 +1348,9 @@ class MainActivity : AppCompatActivity() {
         else
             window.decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
 
-        // Root + tab bar backgrounds
-        binding.root.setBackgroundColor(bg)
+        // Root background: keep the paper gradient on the light theme, solid wine for Cruella.
+        if (isCruella) binding.root.setBackgroundColor(bg)
+        else binding.root.background = ContextCompat.getDrawable(this, R.drawable.mobile_app_bg)
         binding.tabBar?.backgroundTintList = ColorStateList.valueOf(surfaceSoft)
 
         // Walk the view tree: cards + text (accentText is brighter than accent for legibility on dark bg)
@@ -1209,7 +1435,6 @@ class MainActivity : AppCompatActivity() {
         val chatTextDark     = ContextCompat.getColor(this, R.color.brand_text)
         binding.chatReplyText?.background  = roundRect(chatBubbleFill, chatBubbleBorder, 20f)
         binding.chatReplyText?.setTextColor(chatTextDark)
-        binding.scanWaitingText?.background          = roundRect(surfaceSoft, border, 22f)
         binding.recommendationsEmptyText?.background = roundRect(surfaceSoft, border, 22f)
         binding.resultImage?.background              = roundRect(surfaceSoft, border, 24f)
 
@@ -1237,23 +1462,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPersonaDialog() {
-        val options = arrayOf(
-            "Cruella — YOLO vision + LLM text + strict matching",
-            "Edna — FashionNet vision + custom text + flexible matching",
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.persona_dialog_title))
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_stylist_select, null)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
             .setCancelable(loadPersona().isNotBlank())
-            .setItems(options) { _, which ->
-                val persona = if (which == 0) "cruella" else "edna"
-                savePersona(persona)
-                applyPersona(persona)
-                publishPersona(persona)
-                viewModel.clearSession()
-                renderDetections()
-                renderRecommendations()
-            }
             .show()
+
+        val choose: (String) -> Unit = { persona ->
+            savePersona(persona)
+            applyPersona(persona)
+            publishPersona(persona)
+            viewModel.clearSession()
+            currentBodyAnalysis = null
+            renderDetections()
+            renderRecommendations()
+            renderChatThread()
+            renderBodyAnalysis(null)
+            dialog.dismiss()
+        }
+        dialogView.findViewById<View>(R.id.stylistCruellaCard).setOnClickListener { choose("cruella") }
+        dialogView.findViewById<View>(R.id.stylistEdnaCard).setOnClickListener { choose("edna") }
     }
 
     private fun mqttBrokerUri(): String {
@@ -1451,6 +1679,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleScanResult(payload: JSONObject) {
+        runOnUiThread { setScanStageAnalysing(true) }
         val sessionId = payload.optString("session_id").ifBlank { null }
         val persona = payload.optString("persona").ifBlank { null }
 
@@ -1479,6 +1708,7 @@ class MainActivity : AppCompatActivity() {
         val annotatedFrame = payload.optString("annotated_frame").ifBlank { null }
         val bodyAnnotatedFrame = payload.optString("body_annotated_frame").ifBlank { null }
         val bodyAnalysis = payload.optJSONObject("body_analysis")
+        currentBodyAnalysis = bodyAnalysis
         val bodyShape = bodyAnalysis?.optString("body_shape")
             ?.takeIf { it.isNotBlank() && it != "unknown" }
         val detectedColor = detArray?.optJSONObject(0)?.optString("color_name")?.trim().orEmpty()
@@ -1905,6 +2135,7 @@ class MainActivity : AppCompatActivity() {
         isAtEntrance = false
         isServingCustomer = false
         sessionHandler.removeCallbacks(sessionTimeoutRunnable)
+        typingHandler.removeCallbacks(typingRunnable)
         mqttReconnectHandler.removeCallbacks(mqttReconnectRunnable)
         stopHumanDetection()
         try { mqttClient?.disconnect() } catch (_: Exception) {}

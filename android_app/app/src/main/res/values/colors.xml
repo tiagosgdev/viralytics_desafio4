@@ -2,26 +2,34 @@
 <resources>
     <color name="black">#000000</color>
     <color name="white">#FFFFFF</color>
-    <color name="brand_bg">#F4F1EA</color>
-    <color name="brand_surface">#FFFDF8</color>
-    <color name="brand_surface_soft">#EFE8DC</color>
-    <color name="brand_text">#0D0D0D</color>
-    <color name="brand_accent">#9F7B49</color>
-    <color name="brand_accent_strong">#7E6037</color>
-    <color name="brand_muted">#1F1F1F</color>
-    <color name="brand_border">#D9CDBA</color>
+
+    <!-- FashionSense "paper + bordo" light theme (default / Edna).
+         Sampled from the HTML mockup :root (paper / bordo / gold / ink). -->
+    <color name="brand_bg">#EFE0D2</color>          <!-- paper base (gradient anchor) -->
+    <color name="brand_bg_top">#F7EDE1</color>      <!-- gradient highlight -->
+    <color name="brand_bg_bottom">#F9F1E8</color>  <!-- gradient lowlight -->
+    <color name="brand_surface">#FFF9F0</color>     <!-- paper-3 cards -->
+    <color name="brand_surface_soft">#EADACB</color><!-- paper-4 inset -->
+    <color name="brand_text">#4D0E1D</color>       <!-- bordo-3 ink (headings/body) -->
+    <color name="brand_accent">#7A1530</color>     <!-- bordo (primary) -->
+    <color name="brand_accent_strong">#9B2445</color><!-- bordo-2 (price/emphasis) -->
+    <color name="brand_muted">#8A5C66</color>      <!-- muted wine -->
+    <color name="brand_border">#D9BCC2</color>     <!-- soft bordo line -->
+    <color name="brand_rose">#C98596</color>       <!-- rose accent -->
+    <color name="brand_gold">#B78D58</color>       <!-- gold secondary -->
+    <!-- "MATCH" badge keeps the gold pair for legible, on-brand contrast -->
     <color name="brand_match_bg">#F1E4CF</color>
-    <color name="brand_match_border">#9F7B49</color>
+    <color name="brand_match_border">#B78D58</color>
     <color name="brand_green">#2D8A64</color>
     <color name="brand_red">#B14F44</color>
 
-    <!-- Cruella persona theme (mirrors web CSS body[data-persona='cruella']) -->
-    <color name="cruella_bg">#130B0D</color>
-    <color name="cruella_surface">#221316</color>
-    <color name="cruella_surface_soft">#301B20</color>
-    <color name="cruella_text">#F8ECE8</color>
-    <color name="cruella_muted">#D8BCB7</color>
-    <color name="cruella_accent">#C54242</color>
-    <color name="cruella_accent_strong">#FF9E9E</color>
-    <color name="cruella_border">#7A3040</color>
+    <!-- Cruella persona — dark wine variant of the same brand family -->
+    <color name="cruella_bg">#1E0710</color>
+    <color name="cruella_surface">#3A0E1A</color>
+    <color name="cruella_surface_soft">#4D0E1D</color>
+    <color name="cruella_text">#F7E9DD</color>
+    <color name="cruella_muted">#C99AA4</color>
+    <color name="cruella_accent">#9B2445</color>
+    <color name="cruella_accent_strong">#E0A9B4</color>
+    <color name="cruella_border">#7A1530</color>
 </resources>

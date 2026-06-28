@@ -3,15 +3,31 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/brand_bg"
+    android:background="@drawable/mobile_app_bg"
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- ── HEADER ─────────────────────────────────────────────── -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal">
+
+        <FrameLayout
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/mobile_brand_mark">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:layout_gravity="center"
+                android:contentDescription="@string/app_name"
+                android:src="@drawable/ic_checkroom"
+                app:tint="@color/brand_accent" />
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="0dp"
@@ -22,6 +38,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:fontFamily="serif"
                 android:text="@string/app_name"
                 android:textColor="@color/brand_text"
                 android:textSize="30sp"
@@ -30,10 +47,40 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/tagline"
-                android:textColor="@color/brand_muted"
-                android:textSize="13sp" />
+                android:layout_marginTop="2dp"
+                android:fontFamily="monospace"
+                android:tag="color_accent"
+                android:text="@string/brand_kicker"
+                android:textColor="@color/brand_accent"
+                android:textSize="10sp"
+                android:letterSpacing="0.20" />
+        </LinearLayout>
+
+        <!-- Status pill: dot + label -->
+        <LinearLayout
+            android:id="@+id/statusPill"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:gravity="center_vertical"
+            android:background="@drawable/mobile_status_pill"
+            android:paddingStart="12dp"
+            android:paddingEnd="16dp"
+            android:layout_marginEnd="10dp">
+
+            <View
+                android:id="@+id/statusDot"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:background="@drawable/mobile_status_dot" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/status_idle"
+                android:textColor="@color/brand_text"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <ImageButton
@@ -47,34 +94,83 @@
             android:tint="@color/brand_text" />
     </LinearLayout>
 
+    <!-- Persona chip + switch + session -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="8dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <TextView
-            android:id="@+id/statusText"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:id="@+id/personaRow"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/status_idle"
-            android:textColor="@color/brand_text"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/personaChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/mobile_persona_chip"
+                android:fontFamily="monospace"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="5dp"
+                android:textColor="@color/white"
+                android:textSize="10sp"
+                android:letterSpacing="0.10"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/switchPersonaButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/switch_stylist"
+                android:textColor="@color/brand_muted"
+                android:textSize="11sp"
+                app:rippleColor="@color/brand_surface_soft" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/sessionText"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="end"
             android:text="@string/session_waiting"
             android:textColor="@color/brand_muted" />
+
+        <TextView
+            android:id="@+id/modeIndicatorText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/mobile_status_pill"
+            android:fontFamily="monospace"
+            android:paddingStart="9dp"
+            android:paddingEnd="9dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:textColor="@color/brand_muted"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.10" />
     </LinearLayout>
 
+    <!-- ── TAB BAR ──────────────────────────────────────────────── -->
     <LinearLayout
+        android:id="@+id/tabBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
+        android:background="@drawable/mobile_tab_bar_bg"
+        android:padding="6dp"
         android:orientation="horizontal">
 
         <com.google.android.material.button.MaterialButton
@@ -84,8 +180,12 @@
             android:layout_weight="1"
             android:text="@string/tab_scan"
             android:textColor="@color/white"
-            app:backgroundTint="@color/brand_text"
-            app:cornerRadius="18dp" />
+            app:icon="@drawable/ic_camera"
+            app:iconGravity="start"
+            app:iconSize="18dp"
+            app:backgroundTint="@color/brand_accent"
+            app:cornerRadius="999dp"
+            app:elevation="0dp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/tabRefineButton"
@@ -96,7 +196,10 @@
             android:layout_weight="1"
             android:text="@string/tab_refine"
             android:textColor="@color/brand_text"
-            app:cornerRadius="18dp"
+            app:icon="@drawable/ic_chat"
+            app:iconGravity="start"
+            app:iconSize="18dp"
+            app:cornerRadius="999dp"
             app:strokeColor="@color/brand_border" />
     </LinearLayout>
 
@@ -108,11 +211,12 @@
         android:baselineAligned="false"
         android:orientation="horizontal">
 
+        <!-- LEFT COLUMN: scan stage + detections + profile -->
         <LinearLayout
             android:id="@+id/scanSection"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="1.05"
+            android:layout_weight="1.5"
             android:orientation="vertical">
 
             <com.google.android.material.card.MaterialCardView
@@ -134,18 +238,12 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/scan_title"
-                        android:textColor="@color/brand_text"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/scan_help"
+                        android:fontFamily="monospace"
+                        android:text="CAMERA SCAN"
                         android:textColor="@color/brand_muted"
-                        android:textSize="12sp" />
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.16" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/captureButton"
@@ -155,9 +253,13 @@
                         android:minHeight="52dp"
                         android:text="@string/capture_outfit"
                         android:textColor="@color/white"
-                        app:backgroundTint="@color/brand_text"
-                        app:cornerRadius="18dp" />
+                        app:icon="@drawable/ic_camera"
+                        app:iconGravity="start"
+                        app:iconSize="18dp"
+                        app:backgroundTint="@color/brand_accent"
+                        app:cornerRadius="999dp" />
 
+                    <!-- Camera stage -->
                     <FrameLayout
                         android:layout_width="match_parent"
                         android:layout_height="0dp"
@@ -174,12 +276,127 @@
                             android:padding="10dp"
                             android:scaleType="fitCenter" />
 
+                        <!-- Camera-stage decorations (hidden once a scan image is shown) -->
+                        <FrameLayout
+                            android:id="@+id/cameraStageDecor"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent">
+
+                            <View
+                                android:id="@+id/scanOval"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:layout_gravity="center"
+                                android:layout_marginStart="80dp"
+                                android:layout_marginEnd="80dp"
+                                android:layout_marginTop="18dp"
+                                android:layout_marginBottom="18dp"
+                                android:background="@drawable/mobile_scan_oval" />
+
+                            <ImageView
+                                android:layout_width="36dp"
+                                android:layout_height="36dp"
+                                android:layout_gravity="top|start"
+                                android:layout_margin="14dp"
+                                android:contentDescription="@null"
+                                android:src="@drawable/ic_corner_bracket" />
+
+                            <ImageView
+                                android:layout_width="36dp"
+                                android:layout_height="36dp"
+                                android:layout_gravity="bottom|end"
+                                android:layout_margin="14dp"
+                                android:contentDescription="@null"
+                                android:rotation="180"
+                                android:src="@drawable/ic_corner_bracket" />
+
+                            <View
+                                android:id="@+id/scanLine"
+                                android:layout_width="match_parent"
+                                android:layout_height="2dp"
+                                android:layout_gravity="top"
+                                android:layout_marginStart="20dp"
+                                android:layout_marginEnd="20dp"
+                                android:background="@drawable/mobile_scan_line" />
+
+                            <LinearLayout
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="center"
+                                android:layout_marginStart="92dp"
+                                android:layout_marginEnd="92dp"
+                                android:layout_marginTop="30dp"
+                                android:layout_marginBottom="30dp"
+                                android:gravity="center"
+                                android:orientation="vertical">
+
+                                <ImageView
+                                    android:layout_width="@dimen/camera_stage_icon_size"
+                                    android:layout_height="@dimen/camera_stage_icon_size"
+                                    android:contentDescription="@string/camera_stage_title"
+                                    android:src="@drawable/ic_accessibility" />
+
+                                <TextView
+                                    android:id="@+id/cameraStageTitleText"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="16dp"
+                                    android:fontFamily="serif"
+                                    android:gravity="center"
+                                    android:text="@string/camera_stage_title"
+                                    android:textColor="@color/brand_text"
+                                    android:textSize="@dimen/camera_stage_title_size" />
+
+                                <TextView
+                                    android:id="@+id/cameraStageHintText"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="10dp"
+                                    android:gravity="center"
+                                    android:tag="color_muted"
+                                    android:text="@string/camera_stage_hint"
+                                    android:textColor="@color/brand_muted"
+                                    android:textSize="13sp" />
+                            </LinearLayout>
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:id="@+id/cameraStatusChip"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="top|start"
+                            android:layout_margin="16dp"
+                            android:background="@android:color/transparent"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="12dp"
+                            android:paddingTop="6dp"
+                            android:paddingBottom="6dp">
+
+                            <View
+                                android:id="@+id/liveDot"
+                                android:layout_width="7dp"
+                                android:layout_height="7dp"
+                                android:background="@drawable/mobile_status_dot" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="7dp"
+                                android:fontFamily="monospace"
+                                android:text="@string/live_preview"
+                                android:textColor="@color/brand_text"
+                                android:textSize="9sp"
+                                android:letterSpacing="0.12" />
+                        </LinearLayout>
+
                         <TextView
                             android:id="@+id/bodyShapeLabel"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_gravity="top|end"
-                            android:layout_margin="12dp"
+                            android:layout_margin="16dp"
                             android:background="@drawable/mobile_body_shape_bg"
                             android:paddingStart="10dp"
                             android:paddingEnd="10dp"
@@ -194,47 +411,28 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <com.google.android.material.card.MaterialCardView
-                android:id="@+id/detectedClothingCard"
+        </LinearLayout>
+
+        <!-- RIGHT COLUMN: analysis panel (scrolls) -->
+        <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                app:cardBackgroundColor="@color/brand_surface"
-                app:cardCornerRadius="24dp"
-                app:cardElevation="0dp"
-                app:strokeColor="@color/brand_border"
-                app:strokeWidth="1dp">
+                android:orientation="vertical">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="18dp">
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/detected_title"
-                        android:textColor="@color/brand_text"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
-
-                    <com.google.android.material.chip.ChipGroup
-                        android:id="@+id/detectionsGroup"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        app:chipSpacingHorizontal="8dp"
-                        app:chipSpacingVertical="8dp"
-                        app:singleLine="false" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
+            <!-- Customer profile (compact) -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/customerProfileCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
                 app:cardBackgroundColor="@color/brand_surface"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
@@ -245,21 +443,22 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="12dp">
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
                         android:text="CUSTOMER PROFILE"
                         android:textColor="@color/brand_muted"
-                        android:textSize="11sp"
+                        android:textSize="10sp"
                         android:textStyle="bold"
-                        android:letterSpacing="0.12" />
+                        android:letterSpacing="0.16" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="6dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
@@ -269,7 +468,7 @@
                             android:layout_weight="1"
                             android:text="Gender"
                             android:textColor="@color/brand_text"
-                            android:textSize="13sp" />
+                            android:textSize="12sp" />
 
                         <com.google.android.material.chip.ChipGroup
                             android:id="@+id/genderChipGroup"
@@ -285,7 +484,7 @@
                                 android:layout_height="wrap_content"
                                 android:checkable="true"
                                 android:text="Male"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                             <com.google.android.material.chip.Chip
                                 android:id="@+id/chipFemale"
@@ -294,7 +493,7 @@
                                 android:layout_height="wrap_content"
                                 android:checkable="true"
                                 android:text="Female"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                             <com.google.android.material.chip.Chip
                                 android:id="@+id/chipOther"
@@ -303,7 +502,7 @@
                                 android:layout_height="wrap_content"
                                 android:checkable="true"
                                 android:text="Other"
-                                android:textSize="12sp" />
+                                android:textSize="11sp" />
 
                         </com.google.android.material.chip.ChipGroup>
                     </LinearLayout>
@@ -311,7 +510,7 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="6dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
@@ -321,12 +520,12 @@
                             android:layout_weight="1"
                             android:text="Height (cm)"
                             android:textColor="@color/brand_text"
-                            android:textSize="13sp" />
+                            android:textSize="12sp" />
 
                         <com.google.android.material.textfield.TextInputLayout
                             android:id="@+id/heightInputLayout"
                             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-                            android:layout_width="110dp"
+                            android:layout_width="100dp"
                             android:layout_height="wrap_content"
                             app:boxBackgroundColor="@color/brand_surface_soft"
                             app:boxCornerRadiusBottomEnd="12dp"
@@ -345,26 +544,229 @@
                                 android:maxLength="3"
                                 android:textColor="@color/brand_text"
                                 android:textColorHint="@color/brand_muted"
-                                android:textSize="14sp" />
+                                android:textSize="13sp" />
 
                         </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
-        </LinearLayout>
 
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="14dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
+            <!-- Detected clothing (moved to the right "Analysis" panel) -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/detectedClothingCard"
+                android:layout_marginTop="14dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardBackgroundColor="@color/brand_surface"
+                app:cardCornerRadius="24dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/brand_border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="DETECTED CLOTHING"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.16" />
+
+                    <com.google.android.material.chip.ChipGroup
+                        android:id="@+id/detectionsGroup"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        app:chipSpacingHorizontal="8dp"
+                        app:chipSpacingVertical="8dp"
+                        app:singleLine="false" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Body analysis (silhouette + measurements) -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/bodyAnalysisCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                app:cardBackgroundColor="@color/brand_surface"
+                app:cardCornerRadius="24dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/brand_border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="BODY ANALYSIS"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.16" />
+
+                    <LinearLayout
+                        android:id="@+id/bodyAnalysisContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="vertical" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/refineSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:visibility="gone"
+                app:cardBackgroundColor="@color/brand_surface"
+                app:cardCornerRadius="28dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/brand_border"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="STYLIST CHAT"
+                        android:textColor="@color/brand_muted"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:letterSpacing="0.16" />
+
+                    <ScrollView
+                        android:id="@+id/chatThreadScroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="260dp"
+                        android:layout_marginTop="12dp"
+                        android:fillViewport="true"
+                        android:overScrollMode="never"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/chatThreadContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </ScrollView>
+
+                    <LinearLayout
+                        android:id="@+id/chatTypingRow"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/mobile_chat_bubble_bot"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:paddingTop="10dp"
+                        android:paddingBottom="10dp"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/typingDots"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="•  ·  ·"
+                            android:textColor="@color/brand_muted"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/chatReplyText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/mobile_reply_surface"
+                        android:padding="14dp"
+                        android:text="@string/chat_empty"
+                        android:textColor="@color/brand_text"
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+
+                    <Switch
+                        android:id="@+id/replaceVisionSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="@string/replace_vision"
+                        android:textColor="@color/brand_text" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/chatInputLayout"
+                            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            app:boxBackgroundColor="@color/brand_surface_soft"
+                            app:boxCornerRadiusBottomEnd="999dp"
+                            app:boxCornerRadiusBottomStart="999dp"
+                            app:boxCornerRadiusTopEnd="999dp"
+                            app:boxCornerRadiusTopStart="999dp"
+                            app:boxStrokeColor="@color/brand_border"
+                            app:hintTextColor="@color/brand_muted">
+
+                            <com.google.android.material.textfield.TextInputEditText
+                                android:id="@+id/chatInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:hint="@string/chat_input_hint"
+                                android:inputType="text"
+                                android:maxLines="1"
+                                android:imeOptions="actionSend"
+                                android:textColor="@color/brand_text"
+                                android:textColorHint="@color/brand_muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <ImageButton
+                            android:id="@+id/sendChatButton"
+                            android:layout_width="52dp"
+                            android:layout_height="52dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@drawable/mobile_send_button"
+                            android:contentDescription="@string/send_refinement"
+                            android:padding="15dp"
+                            android:src="@drawable/ic_send"
+                            android:tint="@color/white" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/recommendationsSection"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
                 app:cardBackgroundColor="@color/brand_surface"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
@@ -387,10 +789,12 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/recommendations_title"
-                            android:textColor="@color/brand_text"
-                            android:textSize="16sp"
-                            android:textStyle="bold" />
+                            android:fontFamily="monospace"
+                            android:text="STORE RECOMMENDATIONS"
+                            android:textColor="@color/brand_muted"
+                            android:textSize="11sp"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.16" />
 
                         <ImageButton
                             android:id="@+id/recommendationsLeftButton"
@@ -442,95 +846,7 @@
                         android:textColor="@color/brand_muted" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
-
-            <ScrollView
-                android:id="@+id/refineSection"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_marginTop="14dp"
-                android:layout_weight="1"
-                android:fillViewport="true"
-                android:visibility="gone">
-
-                <com.google.android.material.card.MaterialCardView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    app:cardBackgroundColor="@color/brand_surface"
-                    app:cardCornerRadius="28dp"
-                    app:cardElevation="0dp"
-                    app:strokeColor="@color/brand_border"
-                    app:strokeWidth="1dp">
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="vertical"
-                        android:padding="18dp">
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/refine_title"
-                            android:textColor="@color/brand_text"
-                            android:textSize="16sp"
-                            android:textStyle="bold" />
-
-                        <Switch
-                            android:id="@+id/replaceVisionSwitch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="@string/replace_vision"
-                            android:textColor="@color/brand_text" />
-
-                        <com.google.android.material.textfield.TextInputLayout
-                            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="10dp"
-                            app:boxBackgroundColor="@color/brand_surface_soft"
-                            app:boxCornerRadiusBottomEnd="18dp"
-                            app:boxCornerRadiusBottomStart="18dp"
-                            app:boxCornerRadiusTopEnd="18dp"
-                            app:boxCornerRadiusTopStart="18dp"
-                            app:boxStrokeColor="@color/brand_border"
-                            app:hintTextColor="@color/brand_muted">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/chatInput"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:hint="@string/chat_hint"
-                                android:inputType="textMultiLine"
-                                android:minLines="4"
-                                android:textColor="@color/brand_text"
-                                android:textColorHint="@color/brand_muted" />
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/sendChatButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:minHeight="52dp"
-                            android:text="@string/send_refinement"
-                            android:textColor="@color/white"
-                            app:backgroundTint="@color/brand_text"
-                            app:cornerRadius="18dp" />
-
-                        <TextView
-                            android:id="@+id/chatReplyText"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:background="@drawable/mobile_reply_surface"
-                            android:padding="14dp"
-                            android:text="@string/chat_empty"
-                            android:textColor="@color/brand_text"
-                            android:textSize="14sp" />
-                    </LinearLayout>
-                </com.google.android.material.card.MaterialCardView>
-            </ScrollView>
-        </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 </LinearLayout>

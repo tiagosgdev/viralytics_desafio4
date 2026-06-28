@@ -38,7 +38,7 @@
         android:layout_height="wrap_content"
         android:text="Cancel"
         android:textColor="#FFFFFF"
-        android:backgroundTint="#80000000"
+        android:backgroundTint="#CC7A1530"
         android:layout_marginBottom="32dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"

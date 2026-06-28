@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Top-left L-shaped corner bracket (rotate 180° for bottom-right) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="40dp"
+    android:height="40dp"
+    android:viewportWidth="40"
+    android:viewportHeight="40">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/brand_accent"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M36,5 L13,5 C8.6,5 5,8.6 5,13 L5,36" />
+</vector>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paper gradient background (mockup: linear-gradient(135deg, #F7EDE1, #EFE0D2, #F9F1E8)) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="135"
+        android:startColor="@color/brand_bg_top"
+        android:centerColor="@color/brand_bg"
+        android:endColor="@color/brand_bg_bottom"
+        android:type="linear" />
+</shape>
