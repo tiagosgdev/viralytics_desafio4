@@ -186,18 +186,68 @@ def test_next_message_parses_valid_llm(monkeypatch):
     assert out == {"message": "show me red dresses", "stop": False}
 
 
-def test_final_review_falls_back_to_three(monkeypatch):
+def _recs(*ids):
+    """Build minimal final-rec dicts with (item_id, size) reward keys."""
+    return [{"item_id": i, "size": "M", "color": "red", "type": "dress"} for i in ids]
+
+
+def test_final_review_falls_back_to_neutral(monkeypatch):
+    # Garbage reply → no per-item ratings parsed → every shown item defaults to
+    # the neutral aggregate (3), and the aggregate is 3.
     monkeypatch.setattr(shopper, "_ollama_chat", lambda messages: "garbage")
-    out = shopper.final_review({"temperament": "picky"}, [], [])
-    assert out["rating"] == 3
+    recs = _recs(10, 11)
+    out = shopper.final_review({"temperament": "picky"}, [], recs)
+    assert out["aggregate"] == 3
+    assert out["ratings"] == {(10, "M"): 3, (11, "M"): 3}
     assert isinstance(out["reason"], str)
 
 
-def test_final_review_clamps_out_of_range(monkeypatch):
+def test_final_review_maps_per_item_ratings(monkeypatch):
     monkeypatch.setattr(
         shopper, "_ollama_chat",
-        lambda messages: '{"rating": 99, "reason": "loved everything"}',
+        lambda messages: (
+            '{"ratings": [{"rank": 1, "rating": 5}, {"rank": 2, "rating": 1}], '
+            '"reason": "first nailed it, second missed"}'
+        ),
     )
-    out = shopper.final_review({"temperament": "easygoing"}, [], [])
-    assert out["rating"] == 5
-    assert out["reason"] == "loved everything"
+    recs = _recs(10, 11)
+    out = shopper.final_review({"temperament": "easygoing"}, [], recs)
+    assert out["ratings"] == {(10, "M"): 5, (11, "M"): 1}
+    assert out["aggregate"] == 3        # rounded mean of {5, 1}
+    assert out["reason"] == "first nailed it, second missed"
+
+
+def test_final_review_partial_and_out_of_range(monkeypatch):
+    # Item 2 missing, item 1 out of range → clamp item 1 to 5, default the missing
+    # item to the aggregate of the supplied ratings (= 5).
+    monkeypatch.setattr(
+        shopper, "_ollama_chat",
+        lambda messages: '{"ratings": [{"rank": 1, "rating": 99}], "reason": "ok"}',
+    )
+    recs = _recs(10, 11)
+    out = shopper.final_review({"temperament": "easygoing"}, [], recs)
+    assert out["ratings"] == {(10, "M"): 5, (11, "M"): 5}
+    assert out["aggregate"] == 5
+
+
+def test_coerce_item_ratings_is_defensive():
+    recs = _recs(1, 2, 3)
+    # Non-list raw → all default to neutral aggregate 3.
+    ratings, agg = shopper._coerce_item_ratings(None, recs)
+    assert agg == 3
+    assert ratings == {(1, "M"): 3, (2, "M"): 3, (3, "M"): 3}
+
+    # Mixed: a good entry, a non-dict, a garbage rank, and an out-of-bounds rank.
+    raw = [
+        {"rank": 1, "rating": 4},
+        "not a dict",
+        {"rank": "x", "rating": 2},
+        {"rank": 99, "rating": 1},
+        {"rank": 3, "rating": "nope"},   # bad rating → coerced to neutral 3
+    ]
+    ratings, agg = shopper._coerce_item_ratings(raw, recs)
+    # Supplied & valid: rank1=4, rank3=3 → aggregate = round((4+3)/2) = 4 (round-half-even of 3.5).
+    assert ratings[(1, "M")] == 4
+    assert ratings[(3, "M")] == 3
+    assert ratings[(2, "M")] == agg     # rank 2 missing → defaults to aggregate
+    assert agg == 4

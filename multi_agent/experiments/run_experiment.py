@@ -204,29 +204,41 @@ async def _run_episode(
     if abandoned:
         rating = None
         reason = ""
+        item_ratings: dict[tuple[int, str], int] = {}
     else:
         loop = asyncio.get_event_loop()
         shopper_history = [{"shopper_msg": m} for m in shopper_msgs]
         review = await loop.run_in_executor(
             None, shopper.final_review, persona, shopper_history, last_recs
         )
-        rating = review.get("rating")
+        # The shopper now rates each final item individually. `item_ratings` maps
+        # (item_id, size) -> 1..5 for the per-item RL reward feed; `rating` is the
+        # backward-compatible episode-level aggregate (rounded mean) used for the
+        # episode metric / curve point.
+        item_ratings = review.get("ratings", {})
+        rating = review.get("aggregate")
         reason = review.get("reason", "")
 
     # ── Learning-curve feed (curve mode only) ──────────────────────────────────
-    # Push this episode's 1–5 review into the RL reward path: each of the final
-    # top-K items gets the rating's reward attributed to its transition, then any
-    # full rollout is drained for an explicit PPO update. A curve point ties the
-    # review to the policy's cumulative update_count.
+    # Push this episode's review into the RL reward path. Each of the final top-K
+    # items gets ITS OWN per-item rating (matching production's per-item feedback)
+    # attributed to its transition — this within-round contrast is what the prior
+    # uniform-rating feed lacked. Any item the shopper didn't score individually
+    # falls back to the episode aggregate. Then any full rollout is drained for an
+    # explicit PPO update. A curve point ties the aggregate review to the policy's
+    # cumulative update_count.
     if feed_review and not abandoned and rating is not None:
         rewards_landed = 0
         rewards_dropped = 0
         for item in last_recs[: config.TOP_K]:
+            item_id = int(item["item_id"])
+            size = str(item["size"])
+            item_rating = item_ratings.get((item_id, size), rating)
             res = system.submit_feedback(
                 round_id = last_round_id,
-                item_id  = int(item["item_id"]),
-                size     = str(item["size"]),
-                rating   = int(rating),
+                item_id  = item_id,
+                size     = size,
+                rating   = int(item_rating),
             )
             if res.get("ok"):
                 rewards_landed += 1
