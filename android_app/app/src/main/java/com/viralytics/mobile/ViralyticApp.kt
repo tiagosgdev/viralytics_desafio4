@@ -41,6 +41,6 @@ class ViralyticApp : Application() {
             .hostnameVerifier { _, _ -> true }
             .build()
         @Suppress("DEPRECATION")
-        Coil.setImageLoader(ImageLoader.Builder(this).okHttpClient(coilClient).build())
+        Coil.setImageLoader(ImageLoader.Builder(this).callFactory(coilClient).build())
     }
 }

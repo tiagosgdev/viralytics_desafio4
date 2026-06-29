@@ -24,7 +24,7 @@
             android:id="@+id/detailName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="serif"
+            android:typeface="serif"
             android:textColor="@color/brand_text"
             android:textSize="26sp"
             android:textStyle="bold" />
@@ -34,7 +34,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:fontFamily="monospace"
+            android:typeface="monospace"
             android:letterSpacing="0.12"
             android:textColor="@color/brand_muted"
             android:textSize="11sp"

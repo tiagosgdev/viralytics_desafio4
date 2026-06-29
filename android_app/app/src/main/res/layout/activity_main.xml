@@ -9,6 +9,8 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
         android:orientation="vertical"
         android:padding="@dimen/content_padding">
 
@@ -44,7 +46,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="serif"
+                    android:typeface="serif"
                     android:text="@string/app_name"
                     android:textColor="@color/brand_text"
                     android:textSize="@dimen/header_title_size"
@@ -53,7 +55,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
+                    android:typeface="monospace"
                     android:tag="color_accent"
                     android:text="@string/brand_kicker"
                     android:textColor="@color/brand_accent"
@@ -114,7 +116,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:background="@drawable/mobile_persona_chip"
-                android:fontFamily="monospace"
+                android:typeface="monospace"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
                 android:paddingTop="5dp"
@@ -154,7 +156,7 @@
             android:layout_marginTop="4dp"
             android:layout_marginBottom="12dp"
             android:background="@drawable/mobile_status_pill"
-            android:fontFamily="monospace"
+            android:typeface="monospace"
             android:paddingStart="9dp"
             android:paddingEnd="9dp"
             android:paddingTop="3dp"
@@ -234,7 +236,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
+                        android:typeface="monospace"
                         android:tag="color_muted"
                         android:text="CUSTOMER PROFILE"
                         android:textColor="@color/brand_muted"
@@ -361,7 +363,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
+                        android:typeface="monospace"
                         android:tag="color_muted"
                         android:text="SCAN CONTROLS"
                         android:textColor="@color/brand_muted"
@@ -471,7 +473,7 @@
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:layout_marginTop="12dp"
-                                    android:fontFamily="serif"
+                                    android:typeface="serif"
                                     android:gravity="center"
                                     android:text="@string/camera_stage_title"
                                     android:textColor="@color/brand_text"
@@ -515,7 +517,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="6dp"
-                                android:fontFamily="monospace"
+                                android:typeface="monospace"
                                 android:text="@string/live_preview"
                                 android:textColor="@color/brand_text"
                                 android:textSize="9sp"
@@ -563,7 +565,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
+                        android:typeface="monospace"
                         android:tag="color_muted"
                         android:text="DETECTED CLOTHING"
                         android:textColor="@color/brand_muted"
@@ -616,7 +618,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:fontFamily="monospace"
+                            android:typeface="monospace"
                             android:tag="color_muted"
                             android:text="STORE RECOMMENDATIONS"
                             android:textColor="@color/brand_muted"
@@ -703,7 +705,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
+                        android:typeface="monospace"
                         android:tag="color_muted"
                         android:text="STYLIST CHAT"
                         android:textColor="@color/brand_muted"

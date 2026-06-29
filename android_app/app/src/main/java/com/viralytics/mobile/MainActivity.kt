@@ -243,7 +243,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        try { Robot.initialize(applicationContext) } catch (_: Throwable) {}
         appMode = detectAppMode()
         setupUiForMode(appMode)
 
@@ -1549,14 +1548,7 @@ class MainActivity : AppCompatActivity() {
         dialogView.findViewById<View>(R.id.stylistEdnaCard).setOnClickListener { choose("edna") }
     }
 
-    private fun mqttBrokerUri(): String {
-        return try {
-            val host = java.net.URL(loadServerUrl().trim()).host.ifBlank { "192.168.1.80" }
-            "tcp://$host:1883"
-        } catch (_: Exception) {
-            "tcp://192.168.1.80:1883"
-        }
-    }
+    private fun mqttBrokerUri(): String = "ssl://test.mosquitto.org:8883"
 
     private fun startMqttListener() {
         Thread {
@@ -1566,10 +1558,21 @@ class MainActivity : AppCompatActivity() {
             try {
                 mqttClient = MqttClient(brokerUri, clientId, MemoryPersistence())
 
+                // TLS: test.mosquitto.org uses a custom CA that fails standard verification,
+                // so we trust all certs for wire encryption only (same as cruzr_bridge.py CERT_NONE).
+                val trustAll = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+                })
+                val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS")
+                sslCtx.init(null, trustAll, java.security.SecureRandom())
+
                 val options = MqttConnectOptions().apply {
                     isCleanSession = true
                     connectionTimeout = 10
                     isAutomaticReconnect = true
+                    socketFactory = sslCtx.socketFactory
                 }
 
                 mqttClient?.setCallback(object : MqttCallbackExtended {

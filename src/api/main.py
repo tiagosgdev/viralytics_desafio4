@@ -903,7 +903,6 @@ async def _multiagent_background_publish(result_dict: dict, persona: str, gender
     results, publish an updated scan_result to MQTT so the tablet refreshes.
     Called only when rec_system is ready; silently exits otherwise.
     """
-    from src.mqtt_scan import publish_scan_result as _publish
     detections = result_dict.get("detections") or []
     if not detections or rec_system is None:
         return
@@ -921,7 +920,11 @@ async def _multiagent_background_publish(result_dict: dict, persona: str, gender
     if ma_results:
         ma_results = await run_in_threadpool(_enrich_agent_results_with_db, ma_results)
         updated = {**result_dict, "recommendations": ma_results}
-        await run_in_threadpool(_publish, updated, persona)
+        if robot_bridge is not None:
+            await run_in_threadpool(robot_bridge.publish_scan_result, updated, persona)
+        else:
+            from src.mqtt_scan import publish_scan_result as _publish
+            await run_in_threadpool(_publish, updated, persona)
 
 
 @app.post("/api/mobile/scan", response_model=DetectionResponse)
@@ -939,8 +942,6 @@ async def mobile_scan(
     initial results, then runs the multi-agent round in the background and
     pushes updated recommendations when ready.
     """
-    from src.mqtt_scan import publish_scan_result
-
     user_profile = await run_in_threadpool(_get_user_profile, user_id)
     if user_profile:
         print(f"👤  Personalising mobile scan for user_id={user_id}")
@@ -953,8 +954,14 @@ async def mobile_scan(
         gender=gender,
     )
     result_dict = result.dict()
-    # Publish DB results immediately — tablet gets something fast
-    background_tasks.add_task(publish_scan_result, result_dict, persona)
+    # Publish DB results immediately — tablet gets something fast.
+    # Reuse the persistent robot_bridge connection (already TLS-connected to the
+    # broker) instead of opening a new TCP+TLS handshake per scan.
+    if robot_bridge is not None:
+        background_tasks.add_task(robot_bridge.publish_scan_result, result_dict, persona)
+    else:
+        from src.mqtt_scan import publish_scan_result
+        background_tasks.add_task(publish_scan_result, result_dict, persona)
     # Run multi-agent round; if it produces results, publish a follow-up update
     background_tasks.add_task(_multiagent_background_publish, result_dict, persona, gender)
     return result

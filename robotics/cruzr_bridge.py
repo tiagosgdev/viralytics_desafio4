@@ -58,8 +58,9 @@ logger = logging.getLogger(__name__)
 
 
 class CruzrBridge:
-    COMMANDS_TOPIC = "cruzr/commands"
-    STATUS_TOPIC   = "cruzr/status"
+    COMMANDS_TOPIC     = "cruzr/commands"
+    STATUS_TOPIC       = "cruzr/status"
+    SCAN_RESULT_TOPIC  = "cruzr/scan_result"
     _COORD_LIMIT   = 10_000.0  # metres — beyond this a coordinate is almost certainly a bug
 
     def __init__(
@@ -294,6 +295,33 @@ class CruzrBridge:
         metric_x = 5.1244 * px - 0.0895 * py - 638.7161
         metric_y = 0.0930 * px - 5.1845 * py + 1618.2753
         return float(metric_x), float(metric_y)
+
+    def publish_scan_result(self, result: dict, persona: str) -> bool:
+        """Push scan results to the robot tablet (cruzr/scan_result, QoS 1)."""
+        payload = {
+            "event": "scan_result",
+            "session_id": result.get("session_id"),
+            "persona": persona,
+            "detections": result.get("detections", []),
+            "recommendations": result.get("recommendations", []),
+            "annotated_frame": result.get("annotated_frame"),
+            "body_annotated_frame": result.get("body_annotated_frame"),
+            "body_analysis": result.get("body_analysis"),
+        }
+        if not self._connected:
+            logger.error("[CruzrBridge] Cannot publish scan result — not connected.")
+            return False
+        try:
+            msg = json.dumps(payload)
+            rc = self._client.publish(self.SCAN_RESULT_TOPIC, msg, qos=1)
+            if rc.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.error("[CruzrBridge] publish_scan_result rc=%d", rc.rc)
+                return False
+            logger.info("[CruzrBridge] → scan_result published (%d bytes)", len(msg))
+            return True
+        except Exception as exc:
+            logger.error("[CruzrBridge] publish_scan_result raised: %s", exc)
+            return False
 
     def _publish(self, payload: dict) -> bool:
         if not self._connected:

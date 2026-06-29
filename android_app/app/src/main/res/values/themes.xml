@@ -9,8 +9,7 @@
         <item name="android:windowBackground">@drawable/mobile_app_bg</item>
         <item name="android:textColor">@color/brand_text</item>
         <item name="android:navigationBarColor">@color/brand_bg</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="fontFamily">sans-serif</item>
+
         <item name="materialButtonStyle">@style/Widget.MaterialComponents.Button</item>
     </style>
 </resources>
