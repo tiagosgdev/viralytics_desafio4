@@ -427,6 +427,20 @@ async def startup():
         robot_bridge = CruzrBridge()
         if robot_bridge.connect(timeout=8.0):
             print("🤖  Cruzr robot bridge connected")
+
+            def _on_robot_status(evt: dict) -> None:
+                event = evt.get("event")
+                if event == "session_ended":
+                    coords = _load_robot_coords()
+                    if _ENTRANCE_LOCATION not in coords:
+                        print("🤖  session_ended — entrance not surveyed, skipping return")
+                        return
+                    loc = coords[_ENTRANCE_LOCATION]
+                    x, y, theta = loc["x"], loc["y"], loc.get("theta", 0.0)
+                    print(f"🤖  session_ended — returning robot to entrance ({x:.2f}, {y:.2f})")
+                    robot_bridge.greet(x, y, theta, _GREETING_TEXT, _GREETING_GESTURE)
+
+            robot_bridge.on_status(_on_robot_status)
         else:
             print("⚠️  Cruzr robot bridge could not connect — /api/robot/* endpoints will return 503")
             robot_bridge = None

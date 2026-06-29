@@ -193,7 +193,7 @@ class MainActivity : AppCompatActivity() {
             typingHandler.postDelayed(this, 400)
         }
     }
-    private val SESSION_TIMEOUT_MS  = 3 * 60 * 1000L   // 3 minutes
+    private val SESSION_TIMEOUT_MS  = 30 * 1000L        // 30 seconds
     private val LIDAR_WAIT_TIMEOUT_MS = 25 * 1000L      // 25 seconds — nobody showed up at entrance
     private val lidarWaitHandler = Handler(Looper.getMainLooper())
     private val lidarWaitTimeoutRunnable = Runnable {
@@ -1884,27 +1884,21 @@ class MainActivity : AppCompatActivity() {
                 .setRetryInterval(NAV_RETRY_INTERVAL)
                 .build()
 
-            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            })
-
-            Handler(Looper.getMainLooper()).postDelayed(Runnable {
-                nav.navigate(option)
-                    .done {
-                        isBusy = false
-                        publishStatus("navigation_arrived", JSONObject().put("target_type", "raw_coords"))
-                        runOnUiThread { setStatus("Arrived at coordinates!") }
-                    }
-                    .fail { error ->
-                        val errCode = error?.code ?: -1
-                        val errMsg = error?.message ?: "unknown"
-                        isBusy = false
-                        publishStatus("navigation_failed", JSONObject()
-                            .put("error_code", errCode)
-                            .put("error_message", errMsg))
-                        runOnUiThread { setStatus("Coord Navigation jammed: $errMsg") }
-                    }
-            }, 500L)
+            nav.navigate(option)
+                .done {
+                    isBusy = false
+                    publishStatus("navigation_arrived", JSONObject().put("target_type", "raw_coords"))
+                    runOnUiThread { setStatus("Arrived at coordinates!") }
+                }
+                .fail { error ->
+                    val errCode = error?.code ?: -1
+                    val errMsg = error?.message ?: "unknown"
+                    isBusy = false
+                    publishStatus("navigation_failed", JSONObject()
+                        .put("error_code", errCode)
+                        .put("error_message", errMsg))
+                    runOnUiThread { setStatus("Coord Navigation jammed: $errMsg") }
+                }
 
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "CRASH routing raw coords: ${e.message}")
@@ -1980,38 +1974,32 @@ class MainActivity : AppCompatActivity() {
                 .setRetryInterval(NAV_RETRY_INTERVAL)
                 .build()
 
-            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            })
-
-            Handler(Looper.getMainLooper()).postDelayed({
-                nav.navigate(option)
-                    .done {
-                        android.util.Log.d("CruzrNav", "Navigation DONE — arrived at ${entry.key}!")
-                        isBusy = false
-                        publishStatus("navigation_arrived", JSONObject().put("target", entry.key))
-                        runOnUiThread {
-                            setStatus("Arrived at ${entry.key}!")
-                            speakText("Aqui está o artigo que procurava!")
-                        }
-                        endCustomerSession("arrived_at_stand")
+            nav.navigate(option)
+                .done {
+                    android.util.Log.d("CruzrNav", "Navigation DONE — arrived at ${entry.key}!")
+                    isBusy = false
+                    publishStatus("navigation_arrived", JSONObject().put("target", entry.key))
+                    runOnUiThread {
+                        setStatus("Arrived at ${entry.key}!")
+                        speakText("Aqui está o artigo que procurava!")
                     }
-                    .progress { p ->
-                        android.util.Log.d("CruzrNav", "Nav progress: $p")
-                        publishStatus("navigation_progress", JSONObject().put("target", entry.key).put("data", p.toString()))
-                    }
-                    .fail { error ->
-                        val errCode = error?.code ?: -1
-                        val errMsg = error?.message ?: "unknown"
-                        android.util.Log.e("CruzrNav", "Navigation FAILED: $errMsg / code: $errCode")
-                        isBusy = false
-                        publishStatus("navigation_failed", JSONObject()
-                            .put("target", entry.key)
-                            .put("error_code", errCode)
-                            .put("error_message", errMsg))
-                        runOnUiThread { setStatus("Navigation failed: $errMsg (code $errCode)") }
-                    }
-            }, 500L)
+                    endCustomerSession("arrived_at_stand")
+                }
+                .progress { p ->
+                    android.util.Log.d("CruzrNav", "Nav progress: $p")
+                    publishStatus("navigation_progress", JSONObject().put("target", entry.key).put("data", p.toString()))
+                }
+                .fail { error ->
+                    val errCode = error?.code ?: -1
+                    val errMsg = error?.message ?: "unknown"
+                    android.util.Log.e("CruzrNav", "Navigation FAILED: $errMsg / code: $errCode")
+                    isBusy = false
+                    publishStatus("navigation_failed", JSONObject()
+                        .put("target", entry.key)
+                        .put("error_code", errCode)
+                        .put("error_message", errMsg))
+                    runOnUiThread { setStatus("Navigation failed: $errMsg (code $errCode)") }
+                }
 
         } catch (e: Exception) {
             isBusy = false
@@ -2058,27 +2046,21 @@ class MainActivity : AppCompatActivity() {
                 .setRetryInterval(NAV_RETRY_INTERVAL)
                 .build()
 
-            startActivity(Intent(this@MainActivity, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            })
-
-            Handler(Looper.getMainLooper()).postDelayed({
-                nav.navigate(option)
-                    .done {
-                        runOnUiThread { setStatus("At entrance — LIDAR watching for customer…") }
-                        publishStatus("greeting_at_entrance", null)
-                        isAtEntrance = true
-                        startHumanDetection()
-                    }
-                    .fail { error ->
-                        val errMsg = error?.message ?: "unknown"
-                        publishStatus("navigation_failed", JSONObject()
-                            .put("context", "greet")
-                            .put("error_message", errMsg))
-                        runOnUiThread { setStatus("Greeting nav failed: $errMsg") }
-                        isBusy = false
-                    }
-            }, 500L)
+            nav.navigate(option)
+                .done {
+                    runOnUiThread { setStatus("At entrance — LIDAR watching for customer…") }
+                    publishStatus("greeting_at_entrance", null)
+                    isAtEntrance = true
+                    startHumanDetection()
+                }
+                .fail { error ->
+                    val errMsg = error?.message ?: "unknown"
+                    publishStatus("navigation_failed", JSONObject()
+                        .put("context", "greet")
+                        .put("error_message", errMsg))
+                    runOnUiThread { setStatus("Greeting nav failed: $errMsg") }
+                    isBusy = false
+                }
 
         } catch (e: Exception) {
             android.util.Log.e("CruzrApp", "sendGreetCommand crash: ${e.message}")
@@ -2158,6 +2140,7 @@ class MainActivity : AppCompatActivity() {
         if (!isServingCustomer) return
         sessionHandler.removeCallbacks(sessionTimeoutRunnable)
         isServingCustomer = false
+        isBusy = false  // allow returnToEntrance even if a navigation was in progress
         publishStatus("session_ended", JSONObject().put("reason", reason))
         runOnUiThread { setStatus("Session ended ($reason) — returning to entrance") }
         returnToEntrance()
@@ -2173,41 +2156,74 @@ class MainActivity : AppCompatActivity() {
     private fun doGesture(gestureName: String) {
         val mm = motionManager ?: run {
             android.util.Log.w("CruzrApp", "MotionManager offline — gesture '$gestureName' skipped")
+            runOnUiThread { setStatus("Gesture SKIP: MotionManager null — '$gestureName'") }
             publishStatus("gesture_failed", JSONObject()
                 .put("gesture", gestureName).put("reason", "MotionManager offline"))
             return
         }
 
+        // Map friendly names to the CRUZR SDK built-in action IDs (confirmed present in v2.8.0).
+        // Status 5 "FAILED - jointmotion" means the action ID doesn't exist on this robot.
         val actionId = when (gestureName.lowercase().replace("-", "_")) {
-            "wave"        -> "swingarm"
-            "raise"       -> "zhanggao"
-            "handshake"   -> "shankhand"
-            "guide_left"  -> "guideleft"
-            "guide_right" -> "guideright"
+            "wave"        -> "swingarm"   // arm swing wave
+            "raise"       -> "zhanggao"   // raise both arms
+            "handshake"   -> "swingarm"   // no shankhand in base firmware; wave as fallback
+            "guide_left"  -> "searching"  // no guideleft in base firmware; searching as fallback
+            "guide_right" -> "searching"
             "applause"    -> "applause"
             "surprise"    -> "surprise"
             "goodbye"     -> "goodbye"
             "searching"   -> "searching"
-            "cute"        -> "cute"
+            "cute"        -> "applause"   // no "cute" in base firmware; applause as fallback
             "reset"       -> "RESET"
             else          -> gestureName
         }
 
-        try {
-            val uri    = Uri.parse("action://ubtrobot/$actionId")
-            val option = PerformingOption.Builder(uri).build()
-            mm.performAction(option)
-                .done {
-                    publishStatus("gesture_performed", JSONObject().put("gesture", gestureName))
-                }
-                .fail { error ->
-                    android.util.Log.e("CruzrApp", "Gesture '$gestureName' failed: ${error?.message}")
-                    publishStatus("gesture_failed", JSONObject()
-                        .put("gesture", gestureName)
-                        .put("error", error?.message ?: "unknown"))
-                }
-        } catch (e: Exception) {
-            android.util.Log.e("CruzrApp", "doGesture crash for '$gestureName': ${e.message}")
+        runOnUiThread { setStatus("Gesture → '$actionId' (from '$gestureName')") }
+        android.util.Log.d("CruzrApp", "doGesture: '$gestureName' → actionId='$actionId' uri=action://ubtrobot/$actionId")
+
+        // After navigation the arm joints are locked in transport mode. A RESET brings them
+        // to the default standing pose so the following action can actually move them.
+        // Skip the reset step when the action IS reset, to avoid an infinite loop.
+        fun playAction(id: String) {
+            try {
+                val uri    = Uri.parse("action://ubtrobot/$id")
+                val option = PerformingOption.Builder(uri).build()
+                mm.performAction(option)
+                    .done {
+                        android.util.Log.d("CruzrApp", "Gesture '$gestureName' ($id) performed OK")
+                        runOnUiThread { setStatus("Gesture done: '$gestureName'") }
+                        publishStatus("gesture_performed", JSONObject().put("gesture", gestureName))
+                    }
+                    .fail { error ->
+                        val code = error?.code ?: -1
+                        val msg  = error?.message ?: "unknown"
+                        android.util.Log.e("CruzrApp", "Gesture '$gestureName' ($id) FAILED: $msg (code=$code)")
+                        runOnUiThread { setStatus("Gesture FAIL '$gestureName': $msg (code=$code)") }
+                        publishStatus("gesture_failed", JSONObject()
+                            .put("gesture", gestureName)
+                            .put("action_id", id)
+                            .put("error_code", code)
+                            .put("error", msg))
+                    }
+            } catch (e: Exception) {
+                android.util.Log.e("CruzrApp", "doGesture crash '$gestureName' ($id): ${e.message}")
+                runOnUiThread { setStatus("Gesture CRASH '$gestureName': ${e.message}") }
+            }
+        }
+
+        if (actionId == "RESET") {
+            playAction("RESET")
+        } else {
+            // Reset arm joints first, then play the gesture after the reset finishes.
+            try {
+                val resetUri = Uri.parse("action://ubtrobot/RESET")
+                mm.performAction(PerformingOption.Builder(resetUri).build())
+                    .done { Handler(Looper.getMainLooper()).postDelayed({ playAction(actionId) }, 300L) }
+                    .fail  { playAction(actionId) } // if reset fails, try the action anyway
+            } catch (e: Exception) {
+                playAction(actionId) // reset unavailable, try directly
+            }
         }
     }
 
