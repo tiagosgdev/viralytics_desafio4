@@ -50,15 +50,48 @@ high-entropy evaluation of a realistic retail environment"):
 **Optional — Table IV "Primary Failure Mode" row** reads pro-veto ("Borda: Safe but redundant uniformity"). To match the
 reframe: Borda → *"Lower output variety"*; Veto-Batch → *"Lower satisfaction from high-entropy slate."*
 
-**Fresh per-item-era confirmation (Simulation A, exp #30).** A new 729-episode full-factorial **Borda** grid was run
-under the per-item review metric, and it **confirms the personality finding**: marginal mean reviews are purist 2.42,
-harmonizer 2.35, adventurous 2.33 (colour **spread 0.09**), and ≤ 0.09 for *every* agent dimension (body 0.05, clothing
-0.08, stock 0.09). Under Borda the agents are **not individually consequential** — consistent with the Δ ≤ 0.06 in
-Table III. Per-persona means: daniel 2.48 / maya 2.46 / sofia 2.16. You can add one sentence to IV-A to this effect, e.g.:
+### Agent personalities under Borda (Simulation A, exp #30) — add to IV-A
 
-> *A subsequent full-factorial Borda grid under per-item review (729 episodes) reproduces this result: every agent
-> dimension shows a marginal spread ≤ 0.09 across its personalities, confirming that personality variation does not
-> meaningfully steer the review under Borda.*
+**Framing:** Borda is still the better mechanism — it yields the higher satisfaction reviews — **but precisely because
+its retrieval is strict, the agent personalities have little impact.** The `colour ∧ type` hard filter produces a narrow,
+near-uniform candidate pool, so every personality of a given agent bids almost identically and swapping a strategy barely
+changes the final slate. This is the deliberate **relevance ↔ agent-expressiveness trade-off**: Borda buys satisfaction
+at the cost of making the agents' personalities consequential (the broad veto-batch pool is where they *do* matter — see
+the Borda↔Veto contrast above).
+
+A 729-episode full-factorial Borda grid (per-item review) quantifies it — every agent dimension's marginal spread is
+**≤ 0.09**, within noise:
+
+**TABLE III-b. AGENT-PERSONALITY MARGINAL REVIEW UNDER BORDA (per-item, exp #30), with veto spread for contrast**
+
+| Agent dimension | Personality marginal mean review (Borda, 1–5) | Borda spread | Veto spread† |
+| --------------- | --------------------------------------------- | :----------: | :----------: |
+| Colour          | purist 2.42 · harmonizer 2.35 · adventurous 2.33         |     0.09     |   **0.16**   |
+| Stock           | push 2.42 · overstock 2.36 · bestsellers 2.33            |     0.09     |     0.03     |
+| Clothing        | weighted-axes 2.40 · strict-type 2.38 · match-count 2.32 |     0.08     |     0.01     |
+| Body            | strict 2.40 · flattering 2.37 · lenient 2.34            |     0.05     |     0.07     |
+
+† Veto spread is from the prior **holistic-review** veto grid (a different metric epoch) — shown for the *spread*
+contrast only, not a like-for-like level comparison. **Colour** is the dimension where the broad veto pool clearly raises
+the agent's impact (0.16 vs 0.09, monotonic purist > harmonizer > adventurous); the others are muted under both
+mechanisms, so lead with the colour story.
+
+*(Per-persona means: daniel 2.48 / maya 2.46 / sofia 2.16. Directionally the most on-theme personality scores highest in
+each dimension — e.g. colour `purist` — but every spread is within noise.)*
+
+**Veto-batch contrast — colour agent (illustrative).** The same colour personalities behave very differently under the
+broad veto-batch retrieval: in the prior veto grid their marginal reviews spread **0.16** — nearly 2× the Borda spread —
+in a clean monotonic order (**purist 1.35 > harmonizer 1.29 > adventurous 1.19**, the more on-theme the higher). This is
+the crux of the trade-off: the broad pool lets the agent's strategy actually *decide* which items survive, whereas
+Borda's strict, near-uniform pool leaves it almost no leverage (colour spread **0.16** under veto vs **0.09** under
+Borda — see Table III-b).
+
+Suggested sentence for IV-A:
+
+> *A subsequent full-factorial Borda grid under per-item review (729 episodes, Table III-b) reproduces this: every agent
+> dimension's personalities differ by ≤ 0.09 in mean review. The strict intent-matched retrieval that gives Borda its
+> higher satisfaction is the very reason personality variation is muted — the narrow, uniform slate leaves little room
+> for a single agent's strategy to move the result.*
 
 ⚠️ **Keep Tables II–III at their current (prior-run) numbers — do not overwrite them with exp #30.** Tables II–III are an
 internally consistent **Borda-vs-Veto** pair from the same earlier run; exp #30 re-ran **Borda only**, under a
