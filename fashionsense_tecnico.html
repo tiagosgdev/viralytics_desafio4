@@ -382,7 +382,7 @@
             <h2 class="h2">Agente PPO <em>actor-critic</em></h2>
             <p class="lead">O RLRecommenderAgent é um quinto agente que aprende a pontuar candidatos com uma política neural treinada por Proximal Policy Optimisation.</p>
             <div class="cards four">
-              <div class="card"><small>Estado</small><br><span class="ms">schema</span><h3>9 features</h3><p>Bias, match de cor/tipo/género, estilo/ocasião, push_score, preço e stock.</p><a class="artifact-mini" href="multi_agent/rl/policy.py" target="_blank"><span class="ms">code</span>features</a></div>
+              <div class="card"><small>Estado</small><br><span class="ms">schema</span><h3>7 features</h3><p>Bias, match de cor/tipo/género, push_score, preço e stock.</p><a class="artifact-mini" href="multi_agent/rl/policy.py" target="_blank"><span class="ms">code</span>features</a></div>
               <div class="card"><small>Ação</small><br><span class="ms">linear_scale</span><h3>Score contínuo</h3><p>A política amostra um logit gaussiano e aplica sigmoid para gerar o score.</p><a class="artifact-mini" href="multi_agent/agents/rl_agent.py" target="_blank"><span class="ms">code</span>RL agent</a></div>
               <div class="card"><small>Reward</small><br><span class="ms">thumb_up</span><h3>Pass-rate + emoji</h3><p>Aprende com candidatos que chegam ao top final e feedback 1-5.</p><a class="artifact-mini" href="multi_agent/rl/store.py" target="_blank"><span class="ms">code</span>rewards</a></div>
               <div class="card"><small>Persistência</small><br><span class="ms">save</span><h3>Checkpoint</h3><p>Guarda rede e estado do otimizador para manter aprendizagem entre arranques.</p><a class="artifact-mini" href="multi_agent/config.py" target="_blank"><span class="ms">code</span>config</a></div>
@@ -498,17 +498,17 @@
           <div class="center stagger">
             <div class="kicker">Simulação A</div>
             <h2 class="h2">Personalidades dos <em>agentes</em></h2>
-            <p class="lead">Com o RL fixo, foram testadas 81 combinações de estratégias. O melhor resultado global veio do braço focado: média 1,57 em 729 avaliações.</p>
+            <p class="lead">Com o RL fixo, foram varridas as 81 combinações de personalidades. A amplitude entre estratégias é apenas 0,09 (≤ 0,09 em todas as dimensões) — dentro do ruído: sob Borda a personalidade não é determinante na avaliação. Média por persona: escritório 2,48 / casual 2,16 / festa 2,46.</p>
             <div class="study-layout">
               <div class="study-panel">
                 <div class="metrics-table">
                   <table>
-                    <thead><tr><th>Agente</th><th>Melhor estratégia marginal</th><th>Média</th></tr></thead>
+                    <thead><tr><th>Personalidade de cor</th><th>Avaliação média (1-5)</th></tr></thead>
                     <tbody>
-                      <tr><td><strong>Cor</strong></td><td>harmonizer</td><td>1,60</td></tr>
-                      <tr><td><strong>Body</strong></td><td>flattering_only</td><td>1,60</td></tr>
-                      <tr><td><strong>Clothing</strong></td><td>weighted_axes</td><td>1,60</td></tr>
-                      <tr><td><strong>Stock</strong></td><td>overstock_aggressive</td><td><strong>1,65</strong></td></tr>
+                      <tr><td>purista (no tema)</td><td>2,42</td></tr>
+                      <tr><td>harmonizador</td><td>2,35</td></tr>
+                      <tr><td>aventureiro (contraste)</td><td>2,33</td></tr>
+                      <tr><td><strong>amplitude</strong></td><td><strong>0,09</strong></td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -595,14 +595,11 @@ RL_WEIGHT = float(os.environ.get(<span class="s">"RL_WEIGHT"</span>, <span class
             <div class="kicker">Conclusões / trabalho futuro</div>
             <h2 class="h2">O que o estudo <em>mostra</em></h2>
             <p class="lead">O recomendador multiagente baseado em Borda corre de ponta a ponta e a recolha focada foi a melhor opção. O RL ainda precisa de um sinal mais direto para aprender de forma mensurável.</p>
-            <div class="conclusion-grid">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:28px;position:relative;z-index:12;text-align:left;align-items:stretch">
               <div class="conclusion-card"><small>Resultado principal</small><h3>Focada vence</h3><p>A recolha focada atinge maior satisfação média: 1,57 contra 1,28 na ampla+veto, mantendo a mesma agregação Borda.</p></div>
-              <div class="conclusion-card"><small>Personalidades</small><h3>Impacto moderado</h3><p>As estratégias dos agentes alteram as recomendações, mas as diferenças marginais são pequenas e devem ser lidas com cuidado.</p></div>
-              <div class="conclusion-card"><small>RL</small><h3>Sinal diluído</h3><p>O RL melhorou apenas +0,04 na avaliação. Como é só 15% do voto, a recompensa não reflete diretamente a sua decisão.</p></div>
-            </div>
-            <div class="study-panel pad" style="margin-top:18px;text-align:left">
-              <h3>Próximo passo técnico</h3>
-              <p>Promover o RL de simples votante para agregador orquestrador: receber as pontuações dos agentes, escolher o top-10 diretamente e treinar com feedback real de produção e catálogo mais coerente.</p>
+              <div class="conclusion-card"><small>RL</small><h3>Sinal diluído</h3><p>Em 300 episódios o RL melhorou apenas +0,04 na avaliação. O limite é o sinal: como é só 15% do voto, a recompensa premeia o consenso dos restantes agentes e não reflete diretamente a decisão do RL — e as avaliações têm pouca variância, deixando pouco para aprender.</p></div>
+              <div class="conclusion-card"><small>Personalidades</small><h3>Dentro do ruído</h3><p>Sob Borda, a variante de personalidade não altera a avaliação de forma mensurável (amplitude ≤ 0,09). É um trade-off: a recolha focada dá melhor avaliação mas as personalidades quase não pesam; a ampla+veto faz as personalidades pesarem mais, à custa de uma avaliação mais baixa.</p></div>
+              <div class="conclusion-card"><small>Próximo passo (RL)</small><h3>De votante a orquestrador</h3><p>Promover o RL de simples votante para agregador orquestrador: em vez de 15% do voto, passa a consumir as pontuações dos quatro agentes e a escolher o top-10 diretamente — assim a avaliação torna-se a consequência direta e atribuível da sua própria decisão. A par disto: treino com feedback real de produção e um catálogo mais coerente para alargar o sinal aprendível.</p></div>
             </div>
           </div>
         </article>
