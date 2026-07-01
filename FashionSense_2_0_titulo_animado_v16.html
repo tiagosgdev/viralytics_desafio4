@@ -161,7 +161,7 @@
 
     .tech-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;position:relative;z-index:10;margin-top:36px}.chip{border:2px solid rgba(118,21,46,.16);border-radius:26px;background:rgba(255,248,239,.50);padding:17px;display:flex;align-items:center;gap:14px;min-height:72px;color:var(--muted);font-size:14px}.chip .ms{color:var(--bordo)}
 
-    .team{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:36px}.member{height:250px;border:2px solid var(--line);border-radius:32px;background:rgba(255,248,239,.55);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px;box-shadow:0 18px 48px rgba(58,11,24,.08)}.avatar{width:92px;height:92px;border-radius:50%;border:2px dashed rgba(118,21,46,.28);background:radial-gradient(circle,rgba(118,21,46,.10),transparent 65%);display:grid;place-items:center;color:var(--bordo);margin-bottom:18px}.avatar .ms{font-size:42px}.member h3{font-size:19px;margin-bottom:6px}.member p{font-size:13px;color:var(--muted);line-height:1.4}
+  .team{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}.member{height:240px;border:2px solid var(--line);border-radius:28px;background:rgba(255,248,239,.55);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:20px 18px 16px;box-shadow:0 18px 48px rgba(58,11,24,.08);transition:.25s var(--ease)}.member:hover{transform:translateY(-6px);background:rgba(255,248,239,.80)}.avatar{width:112px;height:112px;border-radius:50%;border:3px solid rgba(118,21,46,.28);background:radial-gradient(circle,rgba(118,21,46,.10),transparent 65%);display:grid;place-items:center;color:var(--bordo);margin-bottom:12px;overflow:hidden;flex-shrink:0;box-shadow:0 8px 24px rgba(58,11,24,.14)}.avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;object-position:center top}.avatar .ms{font-size:34px}.member h3{font-size:18px;margin-bottom:5px}.member p{font-size:12px;color:var(--muted);line-height:1.35}
 
     .quote{place-self:center;text-align:center;max-width:1050px;position:relative;z-index:10}.quote .mark{font-family:"Cormorant Garamond";font-size:150px;line-height:.55;color:rgba(118,21,46,.18)}.quote p{font-family:"Cormorant Garamond";font-size:58px;font-style:italic;line-height:1.16;letter-spacing:-.055em;color:var(--bordo3)}.quote small{display:block;margin-top:30px;font-family:"DM Mono";font-size:12px;letter-spacing:.25em;text-transform:uppercase;color:rgba(118,21,46,.50)}
 
@@ -271,28 +271,49 @@
         <!-- 7. Equipa -->
         <article class="slide" data-title="Equipa">
           <div class="center stagger">
-            <div class="kicker">Equipa</div>
-            <h2 class="h2">Quem somos?</h2>
-            <p class="lead">Equipa multidisciplinar com competências em IA, desenvolvimento, integração e experiência de utilizador.</p>
+            <div class="kicker">Quem somos</div>
+            <h2 class="h2">A nossa <em>equipa</em></h2>
             <div class="team">
-              <div class="member"><div class="avatar"><span class="ms">person</span></div><h3>Membro 1</h3><p>IA / Sistemas inteligentes</p></div>
-              <div class="member"><div class="avatar"><span class="ms">person</span></div><h3>Membro 2</h3><p>Frontend / UX</p></div>
-              <div class="member"><div class="avatar"><span class="ms">person</span></div><h3>Membro 3</h3><p>Backend / Dados</p></div>
-              <div class="member"><div class="avatar"><span class="ms">person</span></div><h3>Membro 4</h3><p>Robótica / Integração</p></div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/filipe_soares.jpg" alt="Filipe Soares"></div>
+                <h3>Filipe Soares</h3>
+                <p>Computer Engineering · Software Development</p>
+              </div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/goncalo_mendes.png" alt="Gonçalo Mendes"></div>
+                <h3>Gonçalo Mendes</h3>
+                <p>Computer Engineering · Systems</p>
+              </div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/hugo_ribeiro.jpg" alt="Hugo Ribeiro"></div>
+                <h3>Hugo Ribeiro</h3>
+                <p>Computer Engineering, Software Development</p>
+              </div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/joao_serra.jpg" alt="João Serra"></div>
+                <h3>João Serra</h3>
+                <p>Computer Engineering · Project Coordination</p>
+              </div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/mariana_neves.jpg" alt="Mariana Neves"></div>
+                <h3>Mariana Neves</h3>
+                <p>Computer Engineering</p>
+              </div>
+              <div class="member">
+                <div class="avatar"><img src="presentation2/presentation_assets/tiago_gonçalves.jpg" alt="Tiago Gonçalves"></div>
+                <h3>Tiago Gonçalves</h3>
+                <p>Engineering · AI/ML &amp; Computer Vision</p>
+              </div>
             </div>
           </div>
         </article>
 
-        <!-- 8. Fecho -->
-        <article class="slide" data-title="Fecho">
-          <div class="quote stagger">
-            <div class="logos" style="justify-content:center;margin-bottom:28px">
-              <div class="logo-card big">Viralytics</div>
-              <div class="logo-card">MEIA</div>
-            </div>
-            <div class="mark">“</div>
-            <p>FashionSense leva a inteligência artificial para onde a decisão acontece: dentro da loja, ao lado do cliente.</p>
-            <small>Somos a equipa Viralytics · Blog: inserir link aqui</small>
+        <!-- 8. Questões -->
+        <article class="slide" data-title="Questões">
+          <div class="center stagger">
+            <div class="kicker">Obrigado</div>
+            <h2 class="h2"><em>Questões?</em></h2>
+            <img src="presentation2/presentation_assets/img.png" alt="Equipa Viralytics" style="margin-top:20px;max-width:92%;max-height:72vh;border-radius:16px;box-shadow:0 8px 40px rgba(58,11,24,.16);object-fit:cover;">
           </div>
         </article>
       </section>
